@@ -35,7 +35,7 @@ In this order, it:
 - Installs the current Visual C++ runtime when Windows has an older one: the builder's texture encoder crashes in the 2015 runtime.
 - Downloads the .NET 10 SDK 10.0.404 into `tools/external/dotnet10`.
 - Clones Rewind at commit `ea8e305` into `tools/external/rewind`, applies this repository's patches (`tools/rewind/patches/*.patch`, in name order, with `git apply`), and builds its command line with the .NET 10 SDK.
-  The 31 patches fix most of the issues in [rewind-issues.md](rewind-issues.md); `tools/rewind/patches/NOTICE.md` lists them, as Apache-2.0 asks for modified files. The build restores from nuget.org whatever the machine's NuGet configuration says. A change of the pinned commit or of the patches builds it again.
+  The 32 patches fix most of the issues in [rewind-issues.md](rewind-issues.md); `tools/rewind/patches/NOTICE.md` lists them, as Apache-2.0 asks for modified files. The build restores from nuget.org whatever the machine's NuGet configuration says. A change of the pinned commit or of the patches builds it again.
 - Downloads AssetRipper 2.0.0 into `tools/external/assetripper-2.0.0`, the .NET 8 SDK 8.0.425 into `tools/external/dotnet` (for the builder's TypeModelGen), and Mono.Cecil 0.10.0-beta6 from NuGet (for the rewriter).
 - Finds [the game](#the-game).
 - Finds or installs [the PS Vita SDK](#the-ps-vita-sdk).
@@ -249,11 +249,12 @@ The blockers met on the way, in order:
 | Lost stack argument | `BmpFont.drawScaled` (and `TitleText.draw` until patch 0028) | Rewind (issue 21) | `rules/MissingArgs.cs` |
 | BmpFont calls through slot invokers | `TextButton.draw` | repair | `rules/Invokers.cs` |
 | Element fields read untyped | `Menu.moveCursor`, `Button.drawLock` | repair | `rules/UntypedFields.cs` |
-| A virtual call and a dropped jump-table read | `Menu.cursorMoved`, `Button.setupEffect` | repair | `rules/Menus.cs` |
+| A virtual call and a dropped jump-table read | `Menu.cursorMoved`, `Button.setupEffect` | repair | `rules/Menus.cs` (`setupEffect`'s retired with patch 0032) |
 | The catch-all around the settings' Deserialize | `SaveSettings.loadSettings` | repair | `rules/Saves.cs` |
-| A switch through a byte-indexed jump table, case bodies lost | `Button.staticCallbacks` and five level methods | Rewind (issue 29) | open: needs a Rewind fix |
+| A switch through a byte-indexed jump table, case bodies lost | `Button.staticCallbacks` and five level methods | Rewind (issue 29) | Rewind patch 0032 |
+| r9 taken as clobbered by the write-barrier call | `Sprites.addFromJSON` (`FWElevator.type`, `FW3BossLift.type`) | Rewind (issue 30) | `rules/Barriers.cs` |
 
-With Rewind patches 0001 to 0031 and these rules the code stage leaves 69 gap methods with 405 marker sites; the rules for the main menu and Future War 1 (docs/repairs.md) take that to 50 methods with 319 sites.
+With Rewind patches 0001 to 0031 and these rules the code stage leaves 69 gap methods with 405 marker sites; the rules for the main menu and Future War 1 (docs/repairs.md) take that to 50 methods with 319 sites, and Rewind patch 0032 with the issue 30 rule to 43 methods with 301 sites.
 
 Measured on that console with `-t2d-heartbeat 5` (runs `work/runs/boot4`, `menu1`):
 

@@ -424,7 +424,10 @@ Checked again with all the patches:
 
 ## 29. A switch through a byte-indexed jump table loses its case bodies (new, found on the console)
 
-Status: open; no repro yet.
+Status: fixed by patch 0032; both repros (`Issue29_ByteTable`, `Issue29_ByteTableFrom400`) pass.
+`X64Cfg.TryReadJumpTable` took the `cmp` bound (the number of case values, 129 in `Button.staticCallbacks`) as the length of the table of targets (65 entries), read past it, found the count wrong and gave up, so the jump became an indirect tail call.
+The patch decodes the byte table and the table of targets and recovers a switch on the case value; the register the jump goes through is dead after it.
+Checked against the native code: all 33 byte tables in `GameAssembly.dll` (22 in methods) and all 292 one-level tables in methods give the native targets case by case.
 
 MSVC compiles a sparse `switch` (many cases sharing few bodies) as two tables: a byte per case value giving a body's index, then a table of 32-bit offsets from the image base:
 
@@ -440,6 +443,25 @@ A one-level table (`mov ecx, [rdx + rax*4 + table]`) is recovered as a `switch`.
 No repair rule can stand in for it, since the bodies are game code.
 
 Seen in a real game, 8 sites in 6 methods, all in play: `Button.staticCallbacks` (129 cases, every menu button's action), `Sprites.addFromJSON` (3 tables, the map objects' factory; the first gap the console run reached, as the attract demo loaded its map), `GameMap.solid`, `GameObject.move`, `Player.setGroundTile` and `Game.start`.
+
+## 30. The write-barrier helper is taken to clobber r9 (new)
+
+Status: open; no repro yet.
+
+MSVC with LTCG knows which registers a function of the same image leaves alone, and keeps a value in r9 across a call to the write-barrier helper, which doesn't touch it.
+Rewind treats every call as clobbering the volatile registers (rax, rcx, rdx, r8 to r11), so a store of r9 after the call reads an undefined value:
+
+```
+xor   r9d, r9d
+...
+call  <write barrier>       ; preserves r9
+mov   dword ptr [rbx + 0x..], r9d
+```
+
+comes out as `obj.field = __undefined();`.
+The register save sets of a callee in the same image are known from its code (or, for IL2CPP's helpers, from the signature library), so Rewind could keep r9 (and whatever else the callee doesn't write) live across such calls.
+
+Seen in a real game: `Sprites.addFromJSON`, the stores of `fW3BossLift.type` and `fWElevator.type` after a barrier at 0x1800a0270; native stores 0.
 
 ## Not Rewind's
 

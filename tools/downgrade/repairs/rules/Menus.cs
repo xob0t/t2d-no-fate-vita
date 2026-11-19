@@ -13,12 +13,4 @@ static partial class Rules
             il.Ldloc(0).Castclass("com.bitmapbureau.terminator.ui.Button").I4(0)
               .Callvirt("com.bitmapbureau.terminator.ui.Button::select(Boolean)"));
     }
-
-    // Button.setupEffect: the switch's jump-table entry, read and dropped (`conv.u8; ldc.i8 <image base>; add; pop`):
-    // Rewind recovered the switch itself after it, so the read goes with what consumes it.
-    static void ButtonSetupEffect(Engine e)
-    {
-        MethodRepair m = e.Method("com.bitmapbureau.terminator.ui.Button::setupEffect()", "ef0658bf");
-        m.Site("__load4(((t# * 4L) + 6445206976L))", "7c45f47a").Replace(0, 4, il => { });
-    }
 }

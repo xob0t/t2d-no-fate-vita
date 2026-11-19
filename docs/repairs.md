@@ -301,6 +301,16 @@ What the triage still lists in these tiers:
 - `SaveStats.saveStats`: 119 calls through the generic virtual invokers (BinaryWriter's Write(int), (bool), (double), (char) by slot), all on the Xbox and UWP binary-writer save modes (`SaveData.saveMethod()` 5 and 6). This build's save mode is `SAVE_MODE_UNITY_BINARY` (1), whose BinaryFormatter path has no marker, so they are never reached.
 - The issue 29 methods above.
 
+### After Rewind patch 0032
+
+Patch 0032 recovers the issue 29 switches, so the six methods are whole but for two stores in `Sprites.addFromJSON` (Rewind issue 30).
+
+- `Button.setupEffect` (`Menus.cs`) is retired: Rewind no longer leaves the dead jump-table read before the switch, and its IL is what the rule made of it.
+- `Sprites.addFromJSON` (`Barriers.cs`) is new: `GameObject.type` of the `FWElevator` and the `FW3BossLift` is 0. In the native code r9d is zeroed, the `stopPoint` store's barrier (0x1800A0270) is called, and r9d is stored; MSVC knows the barrier keeps r9, and Rewind takes it as clobbered.
+- No other rule drifted: every other hash still matches.
+
+With the 32 patches and these rules the code stage leaves 43 gap methods with 301 marker sites, no repair error and no unresolved reference.
+
 ## Prototype results
 
 ### On fixed60, the current rules
