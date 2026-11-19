@@ -94,3 +94,5 @@ All are in the class libraries; no engine internal is left.
 - IL2CPP's C++ conversion: passes (157 C++ files).
 - The C++ compile (psp2snc): stops in `Recovered.T2D`'s C++, on Rewind's typing rather than on API. Every one of the 20 `Bulk_Recovered.T2D_*.cpp` files fails, with at least 800 errors in all (psp2snc stops a file at 50 at `-O0`): integer arithmetic on a static field's address, the GC write barrier's card index (at least 395; at least 278 with the repair engine's barrier pattern), `RuntimeHelpers.InitializeArray` given an array held in an `int64` local (at least 250, the static initializers), and other object references held in `int64` locals.
 - In a checkout whose path is longer than about 73 characters (this worktree's is 75), IL2CPP's compile step fails first with `PathTooLongException`: the PS Vita player's longest libil2cpp header path is 186 characters under the repository.
+
+Since then (2026-11-19), Rewind patches 0023 to 0027 and the rewriter's `TypeGapValues` and `SplitLongMethods` passes clear the C++ compile, and the build links and packages; [docs/build.md](../../../docs/build.md#where-it-stands) has the steps.

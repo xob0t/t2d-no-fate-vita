@@ -6,7 +6,7 @@ Huntdown ships as a Mono build, so its code is already IL.
 This game ships only as IL2CPP, so its IL had to be recovered from native code first, with [Rewind](https://github.com/ratman-bit/Rewind-IL2CPP-Decompiler) (Apache-2.0).
 
 The short answer: the port looks realistic, and more so than at the first measurement.
-With this repository's signature library and 22 patches, Rewind recovers 91% of Assembly-CSharp whole, every reference resolves against Unity 2018.2, and the build gets as far as the C++ compile of the recovered code.
+With this repository's signature library and 27 patches, Rewind recovers 93% of Assembly-CSharp whole, every reference resolves against Unity 2018.2, and the build gets as far as the C++ compile of the recovered code.
 The remaining code-side work is about 8 to 16 person-weeks ([the estimate](#how-much-hand-work-the-code-side-needs)).
 The memory risks on the PS Vita are measured and have a plan each; the game's speed on the console is still unmeasured.
 
@@ -21,7 +21,7 @@ Nothing was ported then.
 As of 2026-11-19, later the same day:
 
 - A signature library for 6000.0.60f1, built without the Unity editor, ships in `tools/rewind/signatures`.
-- 22 patches to Rewind (`tools/rewind/patches`) fix most of the [draft issues](rewind-issues.md); each issue has a game-free repro. Whole game 78.2%, Assembly-CSharp 90.9%.
+- 27 patches to Rewind (`tools/rewind/patches`) fix most of the [draft issues](rewind-issues.md); issues 1 to 21 have a game-free repro. Whole game 78.9%, Assembly-CSharp 93.2%.
 - The pipeline ([build.md](build.md)) runs from the game folder through setup, recovery, AssetRipper, the code stage and the project, and the builder writes every data file of the PS Vita player. It stops in the C++ compile of the recovered code.
 - A repair engine fills Rewind's gaps with rules compiled at build time, without shipping game code ([repairs.md](repairs.md)).
 - The platform layer replaces InControl, takes out Steamworks, Epic and GOG, and keeps the saves ([platform.md](platform.md)). With the fold-back passes ([tools/downgrade/foldback/README.md](../tools/downgrade/foldback/README.md)), unresolved references go from 245 to 0.
@@ -33,7 +33,7 @@ As of 2026-11-19, later the same day:
 | Item | Version, source |
 | --- | --- |
 | Game | Steam release, app 1718460, build 24040403 (depot 1718464, manifest 503866610356912072), in `C:\Program Files (x86)\Steam\steamapps\common\Terminator 2D NO FATE`, read only |
-| Rewind | Built from source at commit `ea8e3050b2f8a0bb0fc64df0720b63998646eb58` (2026-11-18) in `tools/external/rewind`, with the 22 patches applied by `tools/setup.py`. Upstream main was still that commit on 2026-11-19. The release installers are unsigned, so they weren't used. |
+| Rewind | Built from source at commit `ea8e3050b2f8a0bb0fc64df0720b63998646eb58` (2026-11-18) in `tools/external/rewind`, with the 27 patches applied by `tools/setup.py`. Upstream main was still that commit on 2026-11-19. The release installers are unsigned, so they weren't used. |
 | Signature library | `tools/rewind/signatures/unity-6000.0.60f1-windows-x64.sig`, built here ([below](#signature-library)) |
 | .NET SDK | 10.0.404, a private copy in `tools/external/dotnet10`, installed with Microsoft's `dotnet-install.ps1`. The machine's NuGet config has no sources, so builds pass `--source https://api.nuget.org/v3/index.json`. |
 | Mono.Cecil | 0.11.6 for the measuring tool; 0.10.0-beta6 (huntdown's and butcher's) for the load check and the pipeline's rewriter |
@@ -99,16 +99,18 @@ Complete bodies, from the first measurement to what the pipeline uses now:
 | Upstream, 6000.0.60f1 built with MSVC 14.44 | 12,356 (62.7%) | 2,107 (71.0%) | 1,225 (65.4%) |
 | Upstream, 6000.0.60f1 built with MSVC 14.50 | 13,857 (70.4%) | 2,157 (72.7%) | 1,270 (67.8%) |
 | Upstream, the rebuilt 6000.0.60f1 library | 14,615 (74.2%) | 2,233 (75.2%) | 1,637 (87.4%) |
-| With the 22 patches, the rebuilt library | 15,404 (78.2%) | 2,697 (90.9%) | 1,664 (88.8%) |
+| With the first 22 patches, the rebuilt library | 15,404 (78.2%) | 2,697 (90.9%) | 1,664 (88.8%) |
+| With the 27 patches, the rebuilt library | 15,542 (78.9%) | 2,767 (93.2%) | 1,685 (89.9%) |
 
-Rewind's own log counts differently (with the patches, 15,372 of 18,368 native bodies complete); the tables here use RewindStats' counts.
+Rewind's own log counts differently (with the 27 patches, 15,501 of 18,368 native bodies complete); the tables here use RewindStats' counts.
 The port needs only Assembly-CSharp.
 InControl is replaced and Steamworks taken out by the platform layer, and mscorlib and the engine modules come from Unity 2018.2.
 
-### The 22 Rewind patches
+### The Rewind patches
 
 The patches were written on four branches of `ea8e305`, then combined: runtime (patches 0001 to 0006: helpers behind thunks, the library's array and object allocators, the static-field write barrier, the metadata initializer, floating-point arguments of unknown calls, array accessors), memory (0007 to 0011: wide stores over inherited fields, tail-merged virtual calls, invokers specialized for one slot, offset-0 field addresses, string indexing), markers (0012 to 0017: every unrecovered part marked, base constructor calls, inlined constructors, the inlined object hash, small structs, one reference per assembly) and numeric (0018 to 0021: FP negation, bits read as a double, 8-byte struct returns, narrowing of a 64-bit field read as 32 bits).
 Patch 0022 marks every changed file, as Apache-2.0 asks.
+Patches 0023 to 0027 came from the C++ compile of the recovered code: card markings in more shapes, long stack slots that held a reference, stored casts and struct addresses, merged statics pointers, and inlined compare-exchange on a reference field ([rewind-issues.md](rewind-issues.md), issues 22 to 27).
 `tools/rewind/patches/NOTICE.md` lists them; each has a `REWIND_NO_*` switch that turns it off.
 
 Complete bodies with the rebuilt library, upstream, each branch alone and all combined:
@@ -407,7 +409,7 @@ Next steps:
 
 ## Reproducing
 
-[build.md](build.md) has the setup and the pipeline: `uv run build.py` installs everything (Rewind with the 22 patches, the 60f1 library, Unity 2018.2's files) and runs the stages, and `pipeline.py recover` writes Rewind's assemblies to `work/recover/assemblies`.
+[build.md](build.md) has the setup and the pipeline: `uv run build.py` installs everything (Rewind with the 27 patches, the 60f1 library, Unity 2018.2's files) and runs the stages, and `pipeline.py recover` writes Rewind's assemblies to `work/recover/assemblies`.
 The commands below are the assessment's own measurements, for Git Bash on Windows, after setup and `recover`.
 Paths are relative to the repository; `work/` holds every output.
 

@@ -15,7 +15,7 @@ Any drift between a rule and Rewind's output fails the build.
 Everything here was measured on two Rewind outputs of the Steam build (24040403):
 `work/rewind-steam-60f1`, made with the 6000.0.60f1 signature library, and `work/rewind-fix/runtime/fixed60`, the same with Rewind's runtime-helper fixes.
 The prototypes now target fixed60, which is what the pipeline will use.
-The pipeline now runs Rewind with this repository's 22 patches (`tools/rewind/patches`), and the rules were checked against that output; see [After the patch series](#after-the-patch-series).
+The pipeline now runs Rewind with this repository's patches (`tools/rewind/patches`, 22 then, 27 now), and the rules were checked against that output; see [After the patch series](#after-the-patch-series).
 
 ## The four candidates
 
@@ -216,7 +216,7 @@ The rewriter's `TypeGapValues` pass (after the retargeting, before the gaps are 
 - An object where a class derived from its type is taken: `castclass` to that class, the check the native code made.
 
 A value with several consumers, or whose type isn't known, is left and logged as `GAP TYPING SKIPPED`; each change is logged as `GAP TYPED`.
-On the Steam release it types 122 sites in 64 methods, most of them the inlined boxes of the enemies' constructors (`new object[] { 0 }`), which the `box` repair pattern will turn into real values.
+On the Steam release it typed 122 sites in 64 methods before the family patterns, most of them the inlined boxes of the enemies' constructors (`new object[] { 0 }`); with the `box` pattern taking those, 41 sites in 24 methods are left (2026-11-19).
 Since it touches only what is still a gap, a repair that completes a method takes the method out of its reach.
 
 ## The family patterns

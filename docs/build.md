@@ -35,7 +35,7 @@ In this order, it:
 - Installs the current Visual C++ runtime when Windows has an older one: the builder's texture encoder crashes in the 2015 runtime.
 - Downloads the .NET 10 SDK 10.0.404 into `tools/external/dotnet10`.
 - Clones Rewind at commit `ea8e305` into `tools/external/rewind`, applies this repository's patches (`tools/rewind/patches/*.patch`, in name order, with `git apply`), and builds its command line with the .NET 10 SDK.
-  The 22 patches fix most of the issues in [rewind-issues.md](rewind-issues.md); `tools/rewind/patches/NOTICE.md` lists them, as Apache-2.0 asks for modified files. The build restores from nuget.org whatever the machine's NuGet configuration says. A change of the pinned commit or of the patches builds it again.
+  The 27 patches fix most of the issues in [rewind-issues.md](rewind-issues.md); `tools/rewind/patches/NOTICE.md` lists them, as Apache-2.0 asks for modified files. The build restores from nuget.org whatever the machine's NuGet configuration says. A change of the pinned commit or of the patches builds it again.
 - Downloads AssetRipper 2.0.0 into `tools/external/assetripper-2.0.0`, the .NET 8 SDK 8.0.425 into `tools/external/dotnet` (for the builder's TypeModelGen), and Mono.Cecil 0.10.0-beta6 from NuGet (for the rewriter).
 - Finds [the game](#the-game).
 - Finds or installs [the PS Vita SDK](#the-ps-vita-sdk).
@@ -190,40 +190,46 @@ The list is `BUILD_SWITCHES` in `tools/downgrade/common.py`:
 
 ## Where it stands
 
-As of 2026-11-19 on the Steam release:
+As of 2026-11-19 on the Steam release, `uv run build.py` makes a VPK: everything compiles and links.
+Whether it runs is the next question; every gap method still throws when it reaches a marker.
 
 | Stage | Time | Result |
 | --- | --- | --- |
 | Setup, from nothing | 12 min | Every doctor check passes. 2.8 GB in `tools/external`. A rerun with everything in place takes seconds. |
-| `recover` | 47 s | 44 assemblies, 16 MB. Rewind, with the 22 patches, identifies 59 kinds of runtime function with the 6000.0.60f1 library and recovers 15,372 of 18,368 native bodies completely (by its own count). |
-| `rip` | 29 s | 1,005 assets; the Mono-layout copy is 0.6 GB, the export 0.6 GB. |
-| `code` | 4 s | Runs through: 0 problems from the rewriter, no repair errors or warnings, 100 gap methods with 649 marker sites in `Recovered.T2D` (on the `recover` output of 2026-11-19 09:04; 188 and 1,241 without the family patterns and the sprite renderer). |
-| `project` | 7 s | `work/t2d-2018.2.19f1-vita`, 0.6 GB. |
-| `build` | 18 min, then stops | With `--anyway`, the builder writes every data file (`resources.assets` 54 MB in 12.5 min, most of it encoding the 930 sound clips to HEVAG; `resources.resource` 492 MB; `unity_builtin_extra` in 3 min), 0.6 GB in all. Then its code step stops in the C++ compile (below). Without `--anyway` the stage refuses at once while the code stage left unresolved references. |
-| `package` | 67 s | Works on a build folder (a 472 MB VPK, with the LiveArea art and the patched eboot), but refuses a build without its code module, so it makes no VPK today. |
+| `recover` | 31 s | 44 assemblies, 16 MB. Rewind, with the 27 patches, identifies 59 kinds of runtime function with the 6000.0.60f1 library and recovers 15,501 of 18,368 native bodies completely (by its own count). |
+| `rip` | 11 to 29 s | 1,005 assets; the Mono-layout copy is 0.6 GB, the export 0.6 GB. |
+| `code` | 4 s | Runs through: 0 problems from the rewriter, no repair errors or warnings, 100 gap methods with 649 marker sites in `Recovered.T2D`, 41 of them the well-typed stand-ins of `TypeGapValues` ([repairs](repairs.md#well-typed-stand-ins-for-what-is-left-rewritergaptypingcs)). |
+| `project` | 5 s | `work/t2d-2018.2.19f1-vita`, 0.6 GB. |
+| `build` | 4.6 min | The data step, then the code step: UnityLinker, IL2CPP's C++ conversion, psp2snc on every C++ file and psp2ld, in 99 s with psp2snc's object cache. `Media/Modules/il2CppAssemblies.suprx` is 27.7 MB. |
+| `package` | 33 s | `builds/t2d-2018.2.19f1-vita.vpk`, 334 MB, with the LiveArea art and the patched eboot. Not tried on the console yet. |
 
 Complete method bodies by RewindStats' count, upstream Rewind against the patched one, with the shipped 6000.0.60f1 library (the old library before it was rebuilt in brackets):
 
-| Bodies | Upstream `ea8e305` | With the 22 patches |
-| --- | --- | --- |
-| Whole game, 19,693 | 14,615 (13,857) | 15,404 |
-| Assembly-CSharp, 2,968 | 2,233 (2,157) | 2,697 |
-| InControl, 1,874 | 1,637 (1,270) | 1,664 |
+| Bodies | Upstream `ea8e305` | With patches 0001 to 0022 | With the 27 patches |
+| --- | --- | --- | --- |
+| Whole game, 19,693 | 14,615 (13,857) | 15,404 | 15,542 |
+| Assembly-CSharp, 2,968 | 2,233 (2,157) | 2,697 | 2,767 |
+| InControl, 1,874 | 1,637 (1,270) | 1,664 | 1,685 |
 
-The code stage resolves every reference since the fold-back passes ([tools/downgrade/foldback/README.md](../tools/downgrade/foldback/README.md)), and UnityLinker and IL2CPP's C++ conversion pass.
-`uv run tools/builder/il2cpp.py` runs the builder's code step alone, without the 18-minute data step; it needs the project, so run `pipeline.py project` first.
-The build now stops in the C++ compile (psp2snc), in `Recovered.T2D`'s C++, on Rewind's typing.
-With the Rewind patches, compiling each of the 20 `Bulk_Recovered.T2D_*.cpp` files with IL2CPP's own psp2snc arguments gives:
+The code stage resolves every reference since the fold-back passes ([tools/downgrade/foldback/README.md](../tools/downgrade/foldback/README.md)).
+`uv run tools/builder/il2cpp.py` runs the builder's code step alone, without the data step; it needs the project, so run `pipeline.py project` first.
 
-- 1 file compiles, and 1 compiles at `-O0` but makes psp2snc exit 1 with no message at the build's `-O3`.
-- 18 files fail, with 205 errors in all, in 80 methods; 76 of those methods have Rewind gaps.
-- 126 errors are the GC write barrier's card index (`address >> 12 & 0x1FFFFF`), in 53 methods: 107 on an address held in a local, 18 on a static field, 1 on an array element. All 53 methods have other gaps, and the repair engine's barrier pattern did not remove these barriers.
-- 67 are object references in `int64` locals (a `ColorTransform` passed to `Gfx.draw` or an invoker 35 times, `Action<T>` 12, `StringExt.indexOf`'s argument 9, and others), and 6 are `int32` values where an object is expected.
-- 6 are other typing errors: three missing downcasts (a `GameObject` stored into an `Elevator` or `Platform` field), a `Color` passed to `Matrix4x4.TRS` as a `Vector3` twice, and a return of the wrong type.
-- The 4 methods without gaps among the 80 are `ElevatorDoors.awake`, `FutureWar3.setupScene` (the downcasts), `UnityMain.OnRenderImage` (the `Color`) and `Cutscene.draw` (a `ColorTransform` in an `int64` local).
-- The `RuntimeHelpers.InitializeArray` errors on arrays held in `int64` locals (at least 250 without the patches) are gone, as are most of the barrier errors (at least 395).
+How the C++ compile was cleared, compiling each of the 20 `Bulk_Recovered.T2D_*.cpp` files with IL2CPP's own psp2snc arguments:
 
-Even once everything compiles, the game would not run: every one of the 100 gap methods in `Recovered.T2D` throws when it reaches a marker.
+| Step | Files failing | Errors | In methods |
+| --- | ---: | ---: | ---: |
+| Patches 0001 to 0022 | 18, and 1 that exits 1 at `-O3` with no message | 205 | 80 |
+| With patches 0023 to 0025 (barriers, long slots, casts, struct arguments) | 14, and the `-O3` one | 50 | 24 |
+| With 0026 (merged statics) | 10, and the `-O3` one | 43 | 18 |
+| With 0027 (compare-exchange) and `TypeGapValues` | the `-O3` one | 0 | 0 |
+| With `SplitLongMethods` | none | 0 | 0 |
+
+- Before the patches, 126 of the 205 errors were the write barrier's card index (`address >> 12 & 0x1FFFFF`) and 73 were numbers where an object is taken; [rewind-issues.md](rewind-issues.md), issues 22 to 27, has what each patch does about them.
+- The 4 gap-free methods with errors were Rewind's typing: `ElevatorDoors.awake` and `FutureWar3.setupScene` lost the cast of an inlined `castclass` (issue 24), `UnityMain.OnRenderImage` had a `Color` slot reused for a `Vector3` (issue 25), and `Cutscene.draw` handed a `long` stack slot on as a `ColorTransform` (issue 23).
+- `TypeGapValues` typed what was left, all in gap methods: inlined boxes (until the `box` pattern took most of them), long slots whose address is kept in a value (`HUD.draw`), and the last 3 card indexes.
+- The `-O3` failure: psp2snc exits 1 with no message on `AssetsStaticMap.staticInit1`, 66,888 lines of C++ that build a table of int arrays, one `InitializeArray` after another. Bisecting `Bulk_Recovered.T2D_2.cpp` by function found it. The file compiles in 10 s with only that function at `#pragma control %push O=0`, and functions of 12,000 lines compile at `-O3`; sharing its 6,456 temporaries doesn't help, so it is the length. The rewriter's last pass, `SplitLongMethods` (`rewriter/SplitMethods.cs`), cuts a straight-line method of more than 16,000 instructions at empty-stack points into static parts of at most 6,000, passing locals used by several parts by reference.
+
+The game is not expected to run yet: every one of the 100 gap methods in `Recovered.T2D` throws when it reaches a marker.
 
 Before the game can start, in order:
 
@@ -242,7 +248,7 @@ Fix it and run `build.py` again: it picks up where it stopped.
 - `recover`: Rewind's log is `artifacts/downgrade/rewind.log`.
 - `rip`: "AssetRipper did not start" or "AssetRipper export produced no project": check `tools/external/assetripper-2.0.0` and `artifacts/downgrade/assetripper.log`.
 - `code` and `project`: the rewriter's log is `artifacts/downgrade/rewrite-2018.2.19f1-vita.log`, its summary `artifacts/downgrade/code-report.txt`. "expected at least ... The export changed or the rule no longer matches it" means a rule matched less than on the export it was written for, usually another release of the game.
-- `build`: "The code stage left references that don't resolve" is today's state ([Where it stands](#where-it-stands)). Otherwise each step names what it is on, and a failure prints the step and the file; UnityLinker's log is `work/builder/il2cpp/unitylinker.log`.
+- `build`: "The code stage left references that don't resolve" means a rewriter rule no longer covers what Rewind wrote (`artifacts/downgrade/code-report.txt` lists them). Otherwise each step names what it is on, and a failure prints the step and the file; UnityLinker's log is `work/builder/il2cpp/unitylinker.log`.
 - Locks: "Held by another run" means another pipeline holds a build lock; `uv run tools/downgrade/lock.py status` shows who.
 
 ## Time and disk space
@@ -253,7 +259,7 @@ Fix it and run `build.py` again: it picks up where it stopped.
 | `recover` | 47 s |
 | `rip` | 29 s |
 | `code` and `project` | 10 s |
-| The builder's data step | 18 minutes, most of it the sound |
+| The builder's data and code steps | 4.6 minutes with psp2snc's object cache in place (the first compile of the C++ takes longer) |
 | A rerun of `build.py` with recover and rip current | seconds, up to where it stops |
 
 After a first run the repository holds 2.8 GB of tools in `tools/external` (Unity's files 1.1 GB, the two .NET SDKs 1.5 GB), 1.8 GB in `work/` (the Mono-layout copy of the game, the export and the project, 0.6 GB each) and 0.6 GB in `builds/`.
