@@ -183,7 +183,7 @@ In the project the stage writes, 619 clips are forced to mono and 81 stream.
 For the code side:
 
 - `Sound.createSoundFromFile`: the platform layer's rule (`compat/rewriter/PlatformPasses.cs`, `PlatformSoundLoader`) makes it `Resources.Load` only, through `T2DCompat.Sounds.Clip`. The audio check confirms it on the written assembly: Rewind's method has one `File.Exists` and ten `UnityWebRequest` references, the written one none, so the 835 `File.Exists` calls at start-up are gone. The game's only `File.Exists` calls left are in `SaveSettings.loadSettings` and `SaveStats.loadStats`.
-- `AssetsEmbed.staticInit`: rules A1 and A2 load the sounds in the background ([Start-up](#start-up)).
+- `AssetsEmbed.staticInit` and `Sound`: rules A1 to A3 load the sounds in the background, and only a play waits for its clip ([Start-up](#start-up)).
 - `AudioManager`: keep 32 real voices. The game asks for a 1024-sample DSP buffer; the PS Vita player kept its 512 when the test asked for 1024 (`AudioSettings.Reset`).
 
 ## The builder
@@ -245,23 +245,27 @@ The encoded bytes can differ between CPU families (`audio.one_blas_thread`), one
 ## Start-up
 
 As the game does it, loading the sound takes 15.75 s before the first frame.
-Two rewriter rules and a T2DCompat helper load it in the background instead:
+Three rewriter rules and a T2DCompat helper load it in the background instead:
 
 - A1 (`tools/downgrade/audio/rewriter/AudioPatches.cs`, `AudioStartupLoads`): in `AssetsEmbed.staticInit`, the loop's `call loadSound(i); pop` becomes `call t2dQueueSound(i); nop`, in place. `t2dQueueSound` is a method the rule adds to `AssetsEmbed`, with `loadSound`'s bounds check and name lookup (the `string[]` field whose element `loadSound` passes to `createSoundFromFile`): `if (i >= 0 && i < names.Length) SoundLoads.Queue(names[i])`.
 - A2 (`AudioClipLoads`): `Sound.createSoundFromFile`'s call of `T2DCompat.Sounds.Clip` goes to `SoundLoads.Clip`.
+- A3 (`AudioDeferredClips`): a `Sound` is made without its clip while the clip is still loading, and gets it when it is first played. `createSoundFromFile` starts with `if (SoundLoads.Defer(name)) { s = new Sound(null); s.clipname = name; return s; }`; `Sound`'s constructor leaves `snd` and `length` alone for a null clip. The rule adds `Sound.t2dClip(s)`, which, while `snd` is null, takes the clip from `SoundLoads.Clip(s.clipname)` and sets `snd` and `length` as the constructor does, and `Sound.t2dLength(s)`, which calls it and returns `length`. Every read of `snd` and `length` outside the constructor becomes, in place, a call of one of them: `Sound.playWrap` (2), `Sound.playScheduleWrap`, `Audio.playIntroLoopChannels` (the intro's length, for the loop's start), and `Audio.cueAudioFull`'s two reads of `length` (it drops a sound cued twice for the same time by comparing lengths, so a length of 0 would drop another sound).
 - `T2DCompat.SoundLoads` (`tools/downgrade/audio/compat/SoundLoads.cs`): `Queue` asks for the clip with `Resources.LoadAsync`, four at a time, UI sounds first, then music, then the rest; each request's `completed` event starts the next. `Clip` returns the loaded clip at once. A clip still loading is waited for (that request only), and a clip not started is loaded there and then with `Sounds.Clip`. So a sound the game plays is never silent; at worst it starts late.
 
-`loadSound` is otherwise as it was: the first time the game asks for a sound it makes the `Sound`, now from a clip that is usually loaded already.
+`loadSound` is otherwise as it was: the first time the game asks for a sound it makes the `Sound`.
+The game asks for most of them at start, not when it plays them: `Sounds.staticInit` makes a `Sound` for most of the clips one after another (652 of them before their clip had loaded, on the console).
+With A1 and A2 alone each of those waited for its clip, so the first frame came at 14.2 s, after 9.7 s of waits ([build.md](build.md#on-the-console)).
+With A3 they are made at once, and the wait moves to the first play of a sound whose clip hasn't loaded yet; a clip that has loaded by then costs a dictionary lookup.
 Every clip stays loaded for the whole game, as before.
 
 The rules find their sites by the shape of the IL, as the texture rules do, and throw on any other shape.
 A1 and the texture rule R3 both change `staticInit`, each only the instructions of its own pattern.
 `tools/downgrade/audio/check/check_rules.py` checks them with Mono.Cecil:
 
-- On Rewind's assembly, the texture rules and A1 in both orders give the same `staticInit` and `t2dQueueSound`, and their stacks balance. A1 run twice, A1 without the loop's call, and A2 without the platform pass's `Sounds.Clip` each throw.
-- On the code stage's written `Recovered.T2D`, `staticInit` queues the sounds, enters the splash's pages, and loads neither a sound nor a pack. `createSoundFromFile` takes its clip from `SoundLoads.Clip` and has no `File.Exists`, `UnityWebRequest` or `Sounds.Clip`. The two calls into `SoundLoads` resolve against `T2DCompat.dll`, and the stacks of `AssetsEmbed`'s and `Sound`'s 17 methods balance.
+- On Rewind's assembly, the texture rules and A1 in both orders give the same `staticInit` and `t2dQueueSound`, and their stacks balance. A1 run twice, A1 without the loop's call, A2 without the platform pass's `Sounds.Clip`, and A3 without A2 each throw.
+- On the code stage's written `Recovered.T2D`, `staticInit` queues the sounds, enters the splash's pages, and loads neither a sound nor a pack. `createSoundFromFile` starts with `SoundLoads.Defer`, takes its clip from `SoundLoads.Clip` otherwise, and has no `File.Exists`, `UnityWebRequest` or `Sounds.Clip`. Nothing reads `Sound.snd` or `Sound.length` but the constructor, `t2dClip` and `t2dLength`; the game's 4 reads of `snd` and 2 of `length` go through them, and `t2dClip` takes the clip from `SoundLoads.Clip`. So every play takes its clip from `SoundLoads.Clip`, which returns a clip or waits for it: no sound plays without its clip. A3 run again throws. The four calls into `SoundLoads` resolve against `T2DCompat.dll`, and the stacks of `AssetsEmbed`'s and `Sound`'s methods and of the four callers of the new methods, 21 in all, balance.
 
-The code stage reports `audio: AudioStartupLoads=2 AudioClipLoads=1` and nothing unresolved, with and without the repairs.
+The code stage reports `audio: AudioStartupLoads=2 AudioClipLoads=1 AudioDeferredClips=7` and nothing unresolved.
 `staticInit` still has Rewind's gaps around its arrays (the `soundMap` allocation among them), which the repairs must fill before it runs; the rules don't depend on them.
 
 On the console, the audio test's `rule` step builds in the real `SoundLoads.cs` and queues the 930 clips as the rewritten `staticInit` does.
@@ -279,11 +283,30 @@ Every 20 frames it asks for a sound effect that isn't loaded yet, and plays it (
 - Main memory afterwards: 34 MB, as with the game's own loading.
 - Not measured: a synchronous load during the background loads, such as a texture page at a scene change, may wait for the loads in flight.
 
-`SoundLoads` logs one line when every clip is loaded (`T2D sounds: 930 loaded in ...`), and each wait over 20 ms.
+`SoundLoads` logs one line when every clip is loaded (`T2D sounds: 930 loaded in ...`, with how many `Sound`s were made before their clip), and each wait over 20 ms.
+
+The game's own start on the console, with `-t2d-heartbeat 5`, Start pressed once the attract cutscene had begun (runs `aboot1` and `aboot2`, 2026-11-19), against the runs before A3 (`boot4`, `menu1`, [build.md](build.md#on-the-console)):
+
+| | A1 and A2 | With A3 |
+| --- | --- | --- |
+| First frame | 14.2 s, 14.3 s | 4.42 s, 4.42 s |
+| The attract cutscene begins | 20.8 s, 22.0 s | 11.2 s, 11.0 s |
+| Main menu | 26.7 s (Start pressed at about 26 s) | 15.2 s, 18.7 s (Start pressed after 11 s, when the script saw the attract in the log) |
+| Sounds made before their clip | 0 | 652 |
+| Plays that waited for their clip | 652 (the `Sound`s made at start) | 2, 1 |
+| Waited in all, longest | 9.8 s, 9.7 s; 56 ms, 55 ms | 383 ms, 331 ms; 336 ms, 331 ms |
+| All 930 loaded | 19.5 s, 17.9 s | 22.7 s, 19.7 s |
+| Splash frame time, p50 and p90 | 22.5 to 23.5 ms, 65 to 68 ms | 23.8 to 26.0 ms, 63 to 67 ms |
+
+- The 2.5 s left before the first frame (from 1.96 s, when `staticInit` enters the splash's pages, to 4.42 s) is the rest of the game's start, not sound: `Sounds.staticInit` makes its `Sound`s at once.
+- The splash, the logo and the attract run while the clips load, and their frames are as slow as before (p50 about 24 ms, p90 about 65 ms): the background loads cost the frames, as they did then. The main menu runs at 60 Hz once every clip is loaded (p50 16.7 ms, p90 17.1 ms from about 25 s); before that its frames are slower (p90 30 to 55 ms).
+- The one long wait is `audio/sfx/misc/metal_hit`, played in the attract at about 11.5 s, when about 355 of the 930 clips had loaded. Its load had not started, so `Clip` loaded it with `Resources.Load`, and that waited about 330 ms, for the four loads in flight and more. It is one dropped third of a second during the attract, not silence. The other wait was `audio/sfx/misc/introduction`, 48 ms.
+- Every clip loads later than before (19.7 to 22.7 s against 17.9 to 19.5 s), since the main thread now runs frames instead of waiting on the loads.
 
 ## Open problems
 
-- Start-up waits: a sound first played before its clip has loaded waits 10 to 80 ms on the main thread (above), during the first 20 s or so.
+- Start-up waits: a sound first played before its clip has loaded waits on the main thread, during the first 20 s or so. A clip whose load is in flight costs 10 to 80 ms (the audio test above); one not started yet is loaded with `Resources.Load`, which also waits for the loads in flight: 330 ms for `metal_hit` in the attract. Starting such a clip's async load at the head of the queue, and waiting for that, or loading the attract's and menus' sounds first, would shorten it.
+- Frames while the clips load: the splash, logo, attract and the menu's first seconds run at about 24 ms p50 until every clip is loaded (about 20 s). Fewer loads in flight, or a pause of the loads while a scene is on screen, was not tried.
 - Memory: 31 MiB stay resident for the whole game. Loading each level's effects when it starts (the effects are in per-level folders: `sfx/biker_bar`, `sfx/hospital`, …) and unloading them after would cut that to a few MiB, but needs a list of which level plays which clip.
 - Music starts: each stream's `Play` blocks the main thread for 16 to 78 ms, and an intro of 10 s or more starts with its loop (two opens), layered music with up to three. Most happen behind a transition; in-level changes (boss music, the pause music) will drop a few frames each time. Opening a stream ahead of `Play` (`AudioClip.LoadAudioData` on a streamed clip) was not tried; keeping the intros in memory would cost 12 MiB more.
 - Concurrency: the worst case (six streams, 25 voices) was measured with the test's own sources and clips, not in the game, and with the PS Vita's 512-sample DSP buffer, which the player keeps whatever the game asks.
@@ -299,7 +322,7 @@ python -I tools/downgrade/audio/audio_rules.py
 uv run tools/downgrade/audio/importer-reference/make.py
 uv run --with scipy tools/downgrade/audio/importer-reference/fit_resampler.py
 uv run tools/builder/check_audio.py --compare
-# The rules A1 and A2, after the code stage
+# The rules A1 to A3, after the code stage
 uv run tools/downgrade/pipeline.py code
 python -I tools/downgrade/audio/check/check_rules.py
 # The console test: build, check what the importer made, run inside the shared lock
