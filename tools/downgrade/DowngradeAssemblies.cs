@@ -103,7 +103,8 @@ partial class DowngradeAssemblies
     // show them by group, and a pass that changed nothing in any assembly fails the run.
     // Passes that may change nothing in every assembly: rules for native callbacks and reimplemented
     // interfaces cost nothing to keep, and ListRewindGaps finds nothing once every gap is repaired.
-    static readonly HashSet<string> OptionalPasses = new HashSet<string> { "MarkNativeCallbacks", "ReimplementedInterfaces", "ListRewindGaps" };
+    // AtlasDraws (R5) finds nothing once the sprite batch's R8 has taken both draw methods (docs/drawing.md).
+    static readonly HashSet<string> OptionalPasses = new HashSet<string> { "MarkNativeCallbacks", "ReimplementedInterfaces", "ListRewindGaps", "AtlasDraws" };
 
     static readonly Pass[] Passes =
     {
@@ -111,6 +112,11 @@ partial class DowngradeAssemblies
         new Pass("redirect", Scope.All, MarkNativeCallbacks),
         // Runtime.cs
         new Pass("runtime", Scope.All, ReimplementedInterfaces),
+        // spritebatch/rewriter/SpriteBatchPatches.cs: the batched sprite renderer (docs/drawing.md), R8, R7, R9.
+        // Before ListRewindGaps, as R7 and R8 replace bodies with gaps, and before the atlas passes (AtlasDraws skips R8's).
+        new Pass("spritebatch", Scope.Game, SpriteBatchDraws),
+        new Pass("spritebatch", Scope.Game, SpriteBatchMeshes),
+        new Pass("spritebatch", Scope.Game, SpriteBatchFlush),
         // RewindGaps.cs: counts, changes nothing.
         new Pass("rewind", Scope.All, ListRewindGaps),
         // atlas/rewriter/AtlasPatches.cs: the texture pages (docs/textures.md), R1 to R6.

@@ -387,12 +387,13 @@ COMPAT_FOLDER = HERE / 'compat'
 
 
 def compat_sources():
-    # atlas/compat: the texture pages' runtime (docs/textures.md).
+    # atlas/compat: the texture pages' runtime (docs/textures.md); spritebatch/compat: the sprite renderer (docs/drawing.md).
     return [
         HERE / 'Compat2018.cs',
         HERE / 'Unity6Shims.cs',
         *sorted(COMPAT_FOLDER.glob('*.cs')),
         *sorted((HERE / 'atlas' / 'compat').glob('*.cs')),
+        *sorted((HERE / 'spritebatch' / 'compat').glob('*.cs')),
     ]
 
 
@@ -412,6 +413,7 @@ REWRITER_SOURCES = [
     # The platform layer's pass and its rules (docs/platform.md); compat_sources() takes only compat/*.cs.
     *(COMPAT_FOLDER / 'rewriter' / f'{name}.cs' for name in ('PlatformRules', 'PlatformPasses')),
     HERE / 'atlas' / 'rewriter' / 'AtlasPatches.cs',  # the texture rules R1-R6 (docs/textures.md)
+    HERE / 'spritebatch' / 'rewriter' / 'SpriteBatchPatches.cs',  # the sprite renderer's rules R7-R9 (docs/drawing.md)
 ]
 
 
