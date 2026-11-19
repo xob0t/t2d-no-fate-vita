@@ -162,13 +162,32 @@ def clear_stale(name):
 FREE, KEPT, DELETED, BUSY = 'free', 'kept', 'deleted', 'busy'  # delete_judged's outcomes
 
 
-def delete_judged(name, judge):
+class FILE_STANDARD_INFO(ctypes.Structure):
+    _fields_ = [
+        ('AllocationSize', ctypes.c_longlong),
+        ('EndOfFile', ctypes.c_longlong),
+        ('NumberOfLinks', ctypes.c_uint32),
+        ('DeletePending', ctypes.c_ubyte),
+        ('Directory', ctypes.c_ubyte),
+    ]
+
+
+FILE_STANDARD_INFO_CLASS = 1  # FileStandardInfo
+
+
+def delete_judged(name, judge, attempts=1, pause=0.05):
     """(text, outcome): the lock file is opened, read and judged (judge(text)) through one handle, and if
     the judge says so deleted through a second one ReOpenFile makes from it: the same file, whatever the
     name has become meanwhile, so a lock taken by another job after the read is never the one deleted. The
     first handle shares everything, so a reader (holder_of) never fails on it; the second exists only for
-    a file to delete, and is refused while another job reads the file without delete sharing (BUSY: try
-    again). FREE when there is no lock file (or it is being deleted), KEPT when the judge said no."""
+    a file to delete, and is refused while another job reads the file without delete sharing (BUSY).
+    FREE when there is no lock file (or it is being deleted), KEPT when the judge said no.
+
+    attempts: how many times to try again after BUSY, every pause seconds, on the same handle. Before
+    (Nov 2026) release reopened the lock by name for each try and judged it by its owner's name only: if
+    the lock was released meanwhile (a second release of the same holder) and taken again under that
+    name, the retry deleted the new lock. Through the one handle a retry can only ever delete the file
+    judged first; once that file is gone (deleted by another job) the outcome is FREE."""
     kernel32 = ctypes.windll.kernel32
     kernel32.CreateFileW.restype = ctypes.c_void_p
     uint, pointer = ctypes.c_uint32, ctypes.c_void_p
@@ -177,27 +196,43 @@ def delete_judged(name, judge):
     kernel32.ReOpenFile.argtypes = [pointer, uint, uint, uint]
     kernel32.ReadFile.argtypes = [pointer, pointer, uint, pointer, pointer]
     kernel32.SetFileInformationByHandle.argtypes = [pointer, ctypes.c_int, pointer, uint]
+    kernel32.GetFileInformationByHandleEx.argtypes = [pointer, ctypes.c_int, pointer, uint]
+    kernel32.SetFilePointerEx.argtypes = [pointer, ctypes.c_longlong, pointer, uint]
     kernel32.CloseHandle.argtypes = [pointer]
     handle = kernel32.CreateFileW(str(path(name)), GENERIC_READ, SHARE_ALL, None, OPEN_EXISTING, 0, None)
     if handle in (None, INVALID_HANDLE):
         return None, FREE  # free, or being deleted
+
+    def gone():
+        info = FILE_STANDARD_INFO()
+        ok = kernel32.GetFileInformationByHandleEx(handle, FILE_STANDARD_INFO_CLASS, ctypes.byref(info), ctypes.sizeof(info))
+        return bool(ok) and (info.DeletePending or info.NumberOfLinks == 0)
+
     try:
-        buffer, size = ctypes.create_string_buffer(4096), ctypes.c_ulong()
-        if not kernel32.ReadFile(handle, buffer, len(buffer), ctypes.byref(size), None):
-            return None, BUSY
-        text = buffer.raw[: size.value].decode('utf-8', errors='replace').replace('\r\n', '\n')  # as read_text
-        if not judge(text):
-            return text, KEPT
-        deleting = kernel32.ReOpenFile(handle, GENERIC_READ | DELETE, SHARE_READ_DELETE, 0)
-        if deleting in (None, INVALID_HANDLE):
-            return text, BUSY
-        try:
-            delete = ctypes.c_ubyte(1)  # FILE_DISPOSITION_INFO.DeleteFile: the file goes when the handles close
-            if not kernel32.SetFileInformationByHandle(deleting, FILE_DISPOSITION_INFO, ctypes.byref(delete), 1):
-                return text, BUSY
-            return text, DELETED
-        finally:
-            kernel32.CloseHandle(deleting)
+        text = None
+        for attempt in range(attempts):
+            if attempt:
+                time.sleep(pause)
+            if gone():
+                return text, FREE  # another job deleted this very file meanwhile
+            if text is None:
+                buffer, size = ctypes.create_string_buffer(4096), ctypes.c_ulong()
+                kernel32.SetFilePointerEx(handle, 0, None, 0)
+                if not kernel32.ReadFile(handle, buffer, len(buffer), ctypes.byref(size), None):
+                    continue
+                text = buffer.raw[: size.value].decode('utf-8', errors='replace').replace('\r\n', '\n')  # as read_text
+                if not judge(text):
+                    return text, KEPT
+            deleting = kernel32.ReOpenFile(handle, GENERIC_READ | DELETE, SHARE_READ_DELETE, 0)
+            if deleting in (None, INVALID_HANDLE):
+                continue
+            try:
+                delete = ctypes.c_ubyte(1)  # FILE_DISPOSITION_INFO.DeleteFile: the file goes when the handles close
+                if kernel32.SetFileInformationByHandle(deleting, FILE_DISPOSITION_INFO, ctypes.byref(delete), 1):
+                    return text, DELETED
+            finally:
+                kernel32.CloseHandle(deleting)
+        return text, BUSY
     finally:
         kernel32.CloseHandle(handle)
 
@@ -254,6 +289,9 @@ def take(name, holder, wait, process=False, reader=False):
     own = f'pid {os.getpid()} {process_start(os.getpid())}\n' if process else ''
     own += f'{READER}\n' if reader else ''
     waiting = False
+    # A fresh clone has no work/ yet (build.py takes vita-build before setup makes it), and the shared
+    # vita-device lock's folder may not exist either: os.open would raise FileNotFoundError.
+    lock.parent.mkdir(parents=True, exist_ok=True)
     while True:
         for other in [name, *others]:
             clear_stale(other)
@@ -312,14 +350,12 @@ def release(name, holder):
     release of the same holder, say)."""
     # The whole name must match: "a" must not release "ab: ..." (or "" anyone's lock).
     mine = owner(holder)
-    for attempt in range(40):
-        text, outcome = delete_judged(name, lambda text: bool(mine) and owner(first_line(text) or '') == mine)
-        if outcome in (FREE, DELETED):
-            return 0
-        if outcome == KEPT:
-            print(f'{name} is held by someone else: {first_line(text)}')
-            return 1
-        time.sleep(0.05)  # BUSY: another job reads it for a moment
+    text, outcome = delete_judged(name, lambda text: bool(mine) and owner(first_line(text) or '') == mine, attempts=40)
+    if outcome in (FREE, DELETED):
+        return 0
+    if outcome == KEPT:
+        print(f'{name} is held by someone else: {first_line(text)}')
+        return 1
     print(f'{name}: could not remove the lock; another job kept it open')
     return 1
 
