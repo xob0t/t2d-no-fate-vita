@@ -139,7 +139,7 @@ R8 replaces the whole bodies of the two draw methods, so anything else that edit
 python -I tools/downgrade/spritebatch/check/check_rules.py --asm <Rewind out>/assemblies/Assembly-CSharp.dll --work <scratch dir>
 ```
 
-It compiles SpriteBatch.cs and Atlas.cs with Roslyn against Unity 2018.2's unityaot class libraries and CoreModule (`-nostdlib -langversion:5 -warnaserror+`).
+It compiles SpriteBatch.cs, Atlas.cs and Trace.cs with Roslyn against Unity 2018.2's unityaot class libraries and CoreModule (`-nostdlib -langversion:5 -warnaserror+`), with `check/ProbeStub.cs` for the probe tick `Flush` makes (the real probe needs the log, the flags and more of the platform layer).
 Then it compiles `check/SpriteCheck.cs` with SpriteBatchPatches.cs, AtlasPatches.cs and the rewriter's `Stack.cs`, using the .NET Framework's csc and Mono.Cecil 0.10 as the pipeline does.
 It runs R8, R7, R9 and the atlas passes in the pipeline's order and checks:
 
