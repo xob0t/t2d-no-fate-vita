@@ -16,13 +16,23 @@ using Mono.Cecil.Cil;
 //   ... the body, each `return x;` becoming `return TextMemo.KeepTime(x, ms);`
 //
 // so a time the table shows again is the same string, and nothing is made.
+//
+// M3, the rest of HighscoreTable.draw's strings. Each frame it draws every name a character at a time, each character
+// StringExt.substr(name, j, (object)1), a boxed int and a new one-character string; and every rank as
+// "(" + label + ")", two Concats. M3 changes, in HighscoreTable.draw only:
+//
+//   substr(s, j, box(len)) with s, j and len plain loads  ->  TextMemo.Char(s, j, len) ?? substr(s, j, box(len))
+//   String.Concat(a, b)                                   ->  TextMemo.Concat(a, b)
+//
+// TextMemo.Char answers only a one-character substring inside the string (a kept string per character) and leaves
+// every other case to substr; TextMemo.Concat keeps its results by the two strings' values, at most MaxConcats.
 partial class DowngradeAssemblies
 {
     const string UtilsType = "com.bitmapbureau.terminator.Utils";
 
     static Exception MenuStringsRule(string what)
     {
-        return new InvalidOperationException("menu rule M2: " + what);
+        return new InvalidOperationException("menu rule M2/M3: " + what);
     }
 
     // A static string field that only its own class's static initializer stores.
@@ -93,5 +103,72 @@ partial class DowngradeAssemblies
         il.InsertBefore(first, il.Create(OpCodes.Ret));
         il.InsertBefore(first, compute);
         return 1;
+    }
+
+    static bool PlainLoad(Instruction i)
+    {
+        Code c = i.OpCode.Code;
+        return (c >= Code.Ldloc_0 && c <= Code.Ldloc_3) || c == Code.Ldloc_S || c == Code.Ldloc || c == Code.Ldarg_0 ||
+               c == Code.Ldarg_1 || c == Code.Ldarg_S || c == Code.Ldarg || (c >= Code.Ldc_I4_M1 && c <= Code.Ldc_I4) ;
+    }
+
+    static int MenuHighscoreStrings(ModuleDefinition module)
+    {
+        TypeDefinition table = GameType(module, "com.bitmapbureau.terminator.apps.HighscoreTable");
+        if (table == null) return 0;
+        MethodDefinition[] found = table.Methods.Where(m => m.Name == "draw" && m.HasBody && m.Parameters.Count == 0).ToArray();
+        if (found.Length != 1) throw MenuStringsRule("HighscoreTable.draw(): " + found.Length + " methods, not 1");
+        MethodBody body = found[0].Body;
+        ILProcessor il = body.GetILProcessor();
+        MethodReference chr = CompatMethod(module, "TextMemo", "Char");
+        MethodReference concat = CompatMethod(module, "TextMemo", "Concat");
+        int substrs = 0, concats = 0;
+        foreach (Instruction call in body.Instructions.ToList())
+        {
+            var m = call.Operand as MethodReference;
+            if (call.OpCode != OpCodes.Call || m == null) continue;
+            if (m.DeclaringType.FullName == "System.String" && m.Name == "Concat" && m.Parameters.Count == 2 &&
+                m.Parameters.All(p => p.ParameterType.FullName == "System.String"))
+            {
+                call.Operand = concat;
+                concats++;
+                continue;
+            }
+            if (m.DeclaringType.FullName != "haxe.lang.StringExt" || m.Name != "substr") continue;
+            // ldX s; ldX j; ldX len; box Int32; call substr
+            Instruction box = call.Previous, len = box == null ? null : box.Previous, pos = len == null ? null : len.Previous,
+                        str = pos == null ? null : pos.Previous;
+            if (box == null || box.OpCode != OpCodes.Box || ((TypeReference)box.Operand).FullName != "System.Int32" ||
+                !PlainLoad(len) || !PlainLoad(pos) || !PlainLoad(str))
+                throw MenuStringsRule("HighscoreTable.draw: substr at " + call.Offset.ToString("X4") + " is not (load, load, box(load))");
+            if (body.Instructions.Any(i => i.Operand == pos || i.Operand == len || i.Operand == box || i.Operand == call ||
+                                           (i.Operand is Instruction[] && ((Instruction[])i.Operand).Any(t => t == pos || t == len || t == box || t == call))))
+                throw MenuStringsRule("HighscoreTable.draw: a branch goes into the substr call's arguments");
+            // s; j; len; call Char; dup; brtrue done; pop; s; j; len; box; call substr; done:
+            Instruction done = il.Create(OpCodes.Nop);
+            Instruction after = call.Next;
+            var code = new List<Instruction>
+            {
+                il.Create(OpCodes.Call, chr), il.Create(OpCodes.Dup), il.Create(OpCodes.Brtrue, done), il.Create(OpCodes.Pop),
+                Copy(str), Copy(pos), Copy(len), il.Create(OpCodes.Box, (TypeReference)box.Operand), il.Create(OpCodes.Call, m), done,
+            };
+            il.Remove(box);
+            il.Remove(call);
+            foreach (Instruction i in code) il.InsertBefore(after, i);
+            substrs++;
+        }
+        if (substrs != 1 || concats == 0)
+            throw MenuStringsRule("HighscoreTable.draw: " + substrs + " substr calls (1 expected), " + concats + " Concats");
+        Count("M3 substr", substrs);
+        Count("M3 Concat", concats);
+        return substrs + concats;
+    }
+
+    static Instruction Copy(Instruction i)
+    {
+        Instruction c = Instruction.Create(OpCodes.Nop);
+        c.OpCode = i.OpCode;
+        c.Operand = i.Operand;
+        return c;
     }
 }

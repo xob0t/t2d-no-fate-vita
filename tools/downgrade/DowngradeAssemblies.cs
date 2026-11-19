@@ -140,8 +140,9 @@ partial class DowngradeAssemblies
         // rewriter/MenuCursor.cs: Menu.moveCursor's grid search stops at its first hit (docs/drawing.md), M1. Before Trace,
         // which changes the bodies M1 pins by hash.
         new Pass("menus", Scope.Game, MenuCursorSearch),
-        // rewriter/MenuStrings.cs: Utils.getTimeString keeps its strings (the high score table), M2.
+        // rewriter/MenuStrings.cs: the high score table keeps its strings (Utils.getTimeString, M2; HighscoreTable.draw, M3).
         new Pass("menus", Scope.Game, MenuTimeStrings),
+        new Pass("menus", Scope.Game, MenuHighscoreStrings),
         // rewriter/Trace.cs: a diagnostic build's method trail (T2D_TRACE=1), after the passes that change bodies.
         new Pass("diagnostics", Scope.Game, TraceMethods, "T2D_TRACE"),
         // SplitMethods.cs: last, so every pass above sees whole methods; cuts what psp2snc -O3 can't compile.
