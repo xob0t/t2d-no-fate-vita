@@ -232,7 +232,7 @@ namespace T2DCompat
             return pages[page];
         }
 
-        static int waits, tiledGets;
+        static int waits, tiledGets, switches;
 
         // loadTexturePacks(n): the game's own preloads, by pack number; a page now, harmless.
         public static void Preload(int page)
@@ -456,7 +456,9 @@ namespace T2DCompat
                 {
                     bool own = InScenes(p, appScenes) || InScenes(p, levelScenes);
                     if (async && !own) later.Add(p);
-                    else if (async && AsyncSwitch)
+                    // Not the first (the splash's, at boot): its LoadAsync pages integrated while the clips loaded, in
+                    // one 0.7 to 2 s frame; Resources.Load costs nothing until a page is drawn.
+                    else if (async && AsyncSwitch && switches > 0)
                     {
                         Evict(PageBytes(p));
                         LoadAsync(p);
@@ -478,6 +480,7 @@ namespace T2DCompat
             background = later.Count;
             if (later.Count > 0) bgStartAt = Time.realtimeSinceStartup + (PrefetchInFlight > 0 ? PrefetchDelayMs / 1000f : 0f);
             RebuildWarm();
+            switches++;
             Note("switch " + key + " " + Ms(start));
             Debug.Log(string.Format(System.Globalization.CultureInfo.InvariantCulture,
                 "T2D atlas: {0} -> {1}: -{2} +{3} pages{8}, {4:0.0} MB resident ({5:0.0} not drawn yet), budget {6:0.0} MB, {7:0} ms",
@@ -633,6 +636,8 @@ namespace T2DCompat
                 // A prefetch's or the next App's pages keep their pace.
                 bool covered = cover && (InScenes(p, appScenes) || InScenes(p, levelScenes));
                 if (!covered && (paced || (WarmBigBytes > 0 && PageBytes(p) > WarmBigBytes))) continue;
+                // A page Resources.Load gave is read at its first draw (about 80 ms a MB): only under the cover.
+                if (!covered && pages[p] != null && !viaAsync[p]) continue;
                 if (pages[p] == null && (!covered || WaitFor(p) == null)) continue;
                 warmList.RemoveAt(i);
                 Drawn(p);
