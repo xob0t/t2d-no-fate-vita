@@ -317,6 +317,9 @@ partial class DowngradeAssemblies
     static string Rewrite(AssemblyDefinition assembly)
     {
         ModuleDefinition module = assembly.MainModule;
+        // The repair engine (repairs/RewriterHook.cs), first: its rules key Rewind's own names and hash the IL as
+        // Rewind wrote it, before the rename and every other pass.
+        string repaired = RepairRewindGaps(assembly);
         string newName;
         if (renamedAssemblies.TryGetValue(assembly.Name.Name, out newName))
         {
@@ -402,7 +405,7 @@ partial class DowngradeAssemblies
         return "platform=" + platform + " retargeted=" + retargeted + " shimTypes=" + shimmedTypes + " attributeTypes=" + attributeTypes +
                " strippedAttributes=" + stripped +
                " widenedBodies=" + widened + " (short branches out of range in " + outOfRange + ")" +
-               " removedReferences=" + removed + string.Concat(groups.Where(changed.Contains).Select(g => lines[g]));
+               " removedReferences=" + removed + repaired + string.Concat(groups.Where(changed.Contains).Select(g => lines[g]));
     }
 
     // [assembly: UnityAPICompatibilityVersion("<target>")] (T2D_API_VERSION, set by pipeline.py): the
