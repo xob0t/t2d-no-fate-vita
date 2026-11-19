@@ -714,6 +714,13 @@ def asset_overlay(exported: Path, platform: str, assemblies: list):
     overlay.update(lighting)
     excluded |= lighting_excluded
     overlay.update(shader_overlay(exported))
+    # The sound's import settings (docs/audio.md): by module name, as tools/builder has a module named audio.
+    sys.path.insert(0, str(HERE / 'audio'))
+    from audio_rules import audio_overlay
+
+    sounds = audio_overlay(exported)
+    log(f'Sound: import settings of {len(sounds)} clips (audio/audio_rules.py)')
+    overlay.update(sounds)
     # The texture pages in place of the twelve packs (docs/textures.md).
     from atlas.step import atlas_overlay
 
