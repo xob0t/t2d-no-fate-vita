@@ -1,0 +1,98 @@
+[project]
+name = "t2d-no-fate-vita"
+version = "0.1.0"
+description = "Build a PS Vita port of Terminator 2D: NO FATE from your copy of the game"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = [
+    # FFmpeg's decoders, for the game's VP8 videos (video_rules.py).
+    "av>=19.0.1",
+    "dnfile>=0.18.0",
+    "fonttools>=4.68.0",
+    "lz4>=4.4.5",
+    "numpy>=2.5.3",
+    "pillow>=12.3.0",
+    "pycryptodome>=3.24.0",
+    # vita.py crashes --pull reads the dump with vita-parse-core, which imports elftools.common.py3compat;
+    # later releases removed it.
+    "pyelftools==0.29",
+    "pyyaml>=6.0.3",
+    "quicktex>=0.3.1",
+    "rich>=15.0.0",
+    "soundfile>=0.14.0",
+    # Downloads check TLS with Windows' certificate store (common.py): a fresh Windows fetches root
+    # certificates on first use, so Python's own copy of the store lacks some (archive.org's).
+    "truststore>=0.10",
+    # The exported project's texture and atlas data; pinned to the version the rules were written against.
+    "unitypy==1.25.3",
+]
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+    "ruff>=0.16.10",
+]
+
+[tool.ruff]
+line-length = 120
+extend-exclude = ["work", "artifacts", "builds", "tools/external"]
+
+[tool.ruff.format]
+quote-style = "single"
+
+[tool.ruff.lint]
+select = [
+    "E", "W",  # pycodestyle
+    "F",       # pyflakes
+    "I",       # import order
+    "UP",      # pyupgrade: syntax for the target Python
+    "B",       # bugbear: likely bugs
+    "SIM",     # simplifications
+    "C4",      # comprehensions
+    "PIE",     # unnecessary code
+    "PERF",    # performance anti-patterns
+    "RUF",     # ruff's own rules
+    "A",       # shadowed builtins
+    "ARG",     # unused arguments
+    "BLE",     # blind except
+    "DTZ",     # naive datetimes
+    "ERA",     # commented-out code
+    "EXE",     # shebangs
+    "FLY",     # str.join that should be an f-string
+    "FURB",    # refurb: modern idioms
+    "G",       # logging format strings
+    "ICN",     # import conventions
+    "ISC",     # implicit string concatenation
+    "LOG",     # logging
+    "N",       # naming
+    "PGH",     # blanket noqa and type: ignore
+    "PL",      # pylint
+    "RET",     # return statements
+    "RSE",     # raise statements
+    "S",       # bandit: security
+    "SLF",     # private member access
+    "T10",     # debugger calls
+    "TID",     # tidy imports
+    "TRY",     # exception handling
+]
+ignore = [
+    "N818",     # exception names without an Error suffix (vita.Unreachable)
+    "PLC0415",  # imports inside functions: the tools import heavy modules only where they're used
+    "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR0917",  # function size limits
+    "PLR2004",  # magic values: byte offsets and formats compared to literals
+    "PLW0603",  # global statements: the tools' module-level state (the progress display, vita.py's keep-awake)
+    "S101",     # assert
+    "S310",     # urlopen: the downloads' URLs are the tools' own
+    "S321",     # ftplib: the console's FTP server has no TLS
+    "S303", "S324",  # md5 and sha1: used as cache keys, not for security
+    "S603", "S607",  # subprocess without a shell, by command name
+    "TRY003",   # messages in exception calls
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The builder's class builders and hooks share one signature, (build, file_name, guid, file_id, asset), and
+# use what they need of it; its caches (pickle) and YAML (BaseLoader, strings only) are its own files; its
+# check scripts count what UnityPy can't read instead of stopping.
+"tools/builder/*" = ["ARG001", "ARG002", "ARG005", "S301", "S314", "S506", "BLE001", "S112"]
