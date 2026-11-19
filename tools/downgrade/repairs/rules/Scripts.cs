@@ -1,3 +1,4 @@
+using Mono.Cecil.Cil;
 using Repairs;
 
 // The level script's pause and resume, and the end-of-level summary.
@@ -35,5 +36,16 @@ static partial class Rules
     {
         MethodRepair m = e.Method("com.bitmapbureau.terminator.cutscenes.CyberdyneHQOutro::draw()", "38ba54af");
         m.Site("__vtable()", "dcf66616").Replace(0, 4, il => { });
+    }
+
+    // Script.drawParallaxTiled (0x18042D320; Cyberdyne Factory, Future War 2 to 4, the attract demos): the inner loop's
+    // j + 1 (ebx). MSVC increments it on both paths, before the draw (0x18042D4E1) and on the culled path
+    // (0x18042D576, which falls into the loop test); Rewind keeps the first as V10 = V3 + 1 and loses the second, so
+    // a culled tile tests a stale V10 and the loop never ends (the level's first frame froze for good). The culled
+    // path's nop at IL_0106, the target of the four culling branches, gets V10 = V3 + 1 (rewind-issues.md, issue 31).
+    static void DrawParallaxTiled(Engine e)
+    {
+        MethodRepair m = e.Method("com.bitmapbureau.terminator.scripts.Script::drawParallaxTiled(BitmapData,Int32,ColorTransform)", "730069ec");
+        m.Anchor(new[] { "nop" }, 11, "4d7e2a55").With(il => il.Ldloc(3).I4(1).Op(OpCodes.Add).Stloc(10));
     }
 }

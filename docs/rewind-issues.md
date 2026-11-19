@@ -465,6 +465,32 @@ The same holds for xmm1, a volatile register the helper doesn't touch either.
 
 Seen in a real game: `Sprites.addFromJSON`, the stores of `fW3BossLift.type` and `fWElevator.type` after a barrier at 0x1800a0270 (r9d, 0); `Platform.doPlatformCheck`, `other.y = top - 1.0` with top in xmm1 across the barrier.
 
+## 31. An instruction MSVC duplicated into a block that falls into a join is lost there (new, found on the console)
+
+Status: open; worked around by a repair rule (`rules/Scripts.cs`, `DrawParallaxTiled`). No repro yet.
+
+MSVC sinks a loop's `j++` into both paths of an `if` inside the loop body: the taken path increments before its call, and the other path is one instruction that falls through into the loop test.
+
+```
+  comisd xmm6, xmm8
+  jae    culled            ; four culling tests branch here
+  ...
+  inc    ebx               ; j + 1 on the drawing path
+  ...
+  call   Gfx::draw
+  jmp    test
+culled:
+  inc    ebx               ; j + 1 on the culled path
+test:
+  cmp    ebx, 4
+  jl     loop
+```
+
+Rewind gives the drawing path's `inc ebx` its own local (`V10 = V3 + 1`) and tests that local at `test:`, but leaves the culled block empty (a `nop`), so on the culled path the test reads the V10 of the last drawn tile, or its initial 0, and the loop never ends.
+The value at a join should be a phi of both paths' definitions of ebx; the one-instruction block that falls through into the join seems to be dropped as empty.
+
+Seen in a real game: `Script.drawParallaxTiled` (0x18042D320), which Cyberdyne Factory, Future War 2 to 4 and the attract demos call: on the console the first frame with a tile off the screen never ended.
+
 ## Not Rewind's
 
 ILVerify 10.0.15 crashes with an InvalidCastException on `callvirt Object::MemberwiseClone()` over arrays (an inlined `Array.Clone`).
