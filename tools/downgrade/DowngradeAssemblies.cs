@@ -108,7 +108,7 @@ partial class DowngradeAssemblies
     // Passes that may change nothing in every assembly: rules for native callbacks and reimplemented
     // interfaces cost nothing to keep, and ListRewindGaps finds nothing once every gap is repaired.
     // AtlasDraws (R5) finds nothing once the sprite batch's R8 has taken both draw methods (docs/drawing.md).
-    static readonly HashSet<string> OptionalPasses = new HashSet<string> { "MarkNativeCallbacks", "ReimplementedInterfaces", "ListRewindGaps", "TypeGapValues", "AtlasDraws" };
+    static readonly HashSet<string> OptionalPasses = new HashSet<string> { "MarkNativeCallbacks", "ReimplementedInterfaces", "ListRewindGaps", "TypeGapValues", "AtlasDraws", "SplitLongMethods" };
 
     static readonly Pass[] Passes =
     {
@@ -135,6 +135,8 @@ partial class DowngradeAssemblies
         // audio/rewriter/AudioPatches.cs: the sounds load in the background (docs/audio.md), A1 and A2.
         new Pass("audio", Scope.Game, AudioStartupLoads),
         new Pass("audio", Scope.Game, AudioClipLoads),
+        // SplitMethods.cs: last, so every pass above sees whole methods; cuts what psp2snc -O3 can't compile.
+        new Pass("size", Scope.Game, SplitLongMethods),
     };
 
     // Sites changed per rule (a pass, a row of a rule table, a game type a pass looks for),
