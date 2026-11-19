@@ -69,4 +69,14 @@ static partial class Rules
             il.Ldsfld("com.bitmapbureau.terminator.Utils::rand").I4(60).I4(240)
               .Callvirt("System.Random::Next(Int32,Int32)").Op(OpCodes.Conv_I8));
     }
+
+    // FreewayChase.update: a hazard's half width as it scrolls off, as in TruckChase.update: ((GameObject)
+    // this.hazards.__a[V16]).width (+520, 0x208).
+    static void FreewayChaseUpdate(Engine e)
+    {
+        MethodRepair m = e.Method("com.bitmapbureau.terminator.scripts.FreewayChase::update()", "1802d144");
+        m.Site("__load4(__address(__reference_arithmetic((this.hazards.__a[m#] + 520L))))", "7da822f0").With(il =>
+            il.This().Ldfld("com.bitmapbureau.terminator.scripts.Script::hazards").Ldfld("haxe.root.Array::__a").Ldloc(16)
+              .Op(OpCodes.Ldelem_Ref).Castclass(GameObjectType).Ldfld(GameObjectType + "::width"));
+    }
 }

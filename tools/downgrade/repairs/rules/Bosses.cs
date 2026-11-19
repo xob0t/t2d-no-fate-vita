@@ -21,12 +21,12 @@ static partial class Rules
         {
             int local = i;
             m.Site("__load8(__address(__reference_arithmetic((conv.u8(m#) + this))))", 0, sites[i])
-             .Replace(1, 3, il => { JumpField(il, local, value); il.Ldloc(14 + local).Ldloc(value); });
+             .Replace(1, 3, il => { JumpField(il, DesertBossType, local, value); il.Ldloc(14 + local).Ldloc(value); });
         }
     }
 
     // value = this.<the field at offset V<local>> among the jump bounds.
-    static void JumpField(IL il, int local, VariableDefinition value)
+    static void JumpField(IL il, string type, int local, VariableDefinition value)
     {
         string[] fields = { "jumpLeft", "jumpRight", "jumpTop", "jumpBottom" };
         Instruction done = il.NewLabel();
@@ -34,9 +34,9 @@ static partial class Rules
         {
             Instruction next = il.NewLabel();
             il.Ldloc(local).I4(976 + 8 * f).Op(OpCodes.Ceq).Brfalse(next)
-              .This().Ldfld(DesertBossType + "::" + fields[f]).Stloc(value).Br(done).Place(next);
+              .This().Ldfld(type + "::" + fields[f]).Stloc(value).Br(done).Place(next);
         }
-        il.This().Ldfld(DesertBossType + "::" + fields[3]).Stloc(value).Place(done);
+        il.This().Ldfld(type + "::" + fields[3]).Stloc(value).Place(done);
     }
 
     // Biker..ctor: NUM_FRAMES_PER_ANIM = new int[n] { ... } per biker (name 573 to 576), four initializers whose
@@ -69,5 +69,62 @@ static partial class Rules
             "A8998E92D1256D83DBF33404053858F2E1D92D06AE2662767397308EE493B47C", // int[3], vo 33
             "AF7B923C5FFB0F9F02CAB6317346322D51FC24FEE404C7782776523D7A5D1666", // int[3], vo 32
         }, 16, 2, "2884273c");
+    }
+
+    // TerminatorBob.changeState: the jump point's x and y from the jump bounds as in DesertBoss.changeState, the same
+    // fields at the same offsets (976 jumpLeft to 1000 jumpBottom); the offset per site in V3, V1, V4, V5. The point
+    // is this.jumpPoint, loaded just before each marker; it is loaded again after the choice.
+    static void TerminatorBobChangeState(Engine e)
+    {
+        const string bob = "com.bitmapbureau.terminator.sprites.enemies.TerminatorBob";
+        MethodRepair m = e.Method(bob + "::changeState(Int32)", "7af1153e");
+        VariableDefinition value = m.Method == null ? null : m.NewLocal("System.Double");
+        int[] locals = { 3, 1, 4, 5 };
+        string[] sites = { "2a8f34d5", "63ef13e0", "b532fc28", "50cf9dc1" };
+        for (int i = 0; i < 4; i++)
+        {
+            int local = locals[i];
+            m.Site("__load8(__address(__reference_arithmetic((conv.u8(m#) + this))))", 0, sites[i])
+             .Replace(2, 3, il => { JumpField(il, bob, local, value); il.This().Ldfld(bob + "::jumpPoint").Ldloc(value); });
+        }
+    }
+
+    // FW3Boss.update: the front leg's hp, ((GameObject)this.legs.__a[0]).hp (+148, 0x94), twice; the method casts the
+    // legs to GameObject for the same test just before.
+    static void FW3BossUpdate(Engine e)
+    {
+        MethodRepair m = e.Method("com.bitmapbureau.terminator.sprites.enemies.FW3Boss::update()", "1706dd3d");
+        foreach (Site s in m.Sites("__load4(__address(__reference_arithmetic((this.legs.__a[0] + 148L))))", 2, "ab37ba1f c9b99af9"))
+            s.With(il => il.This().Ldfld("com.bitmapbureau.terminator.sprites.enemies.FW3Boss::legs").Ldfld("haxe.root.Array::__a")
+                           .I4(0).Op(OpCodes.Ldelem_Ref).Castclass(GameObjectType).Ldfld(GameObjectType + "::hp"));
+    }
+
+    // FW3Boss2ndPhase.update: a platform's y, ((GameObject)this.platforms.__a[V6]).y (+312, 0x138) as its bits, the
+    // element cast as the method casts it for its x just before.
+    static void FW3Boss2ndPhaseUpdate(Engine e)
+    {
+        MethodRepair m = e.Method("com.bitmapbureau.terminator.sprites.enemies.FW3Boss2ndPhase::update()", "c4fe21cc");
+        m.Site("__load8(__address(__reference_arithmetic((this.platforms.__a[m#] + 312L))))", "f0ad66bf").With(il =>
+            il.This().Ldfld("com.bitmapbureau.terminator.sprites.enemies.FW3Boss2ndPhase::platforms").Ldfld("haxe.root.Array::__a")
+              .Ldloc(6).Op(OpCodes.Ldelem_Ref).Castclass(GameObjectType).Ldfld(GameObjectType + "::y").DoubleToBits());
+    }
+
+    // PoliceHelicopter.start: the targets chained, ((HeliTarget)targets[i] (V4)).nextTarget (+968, 0x3C8) =
+    // targets[i + 1] (V6, which Rewind typed HeliTarget).
+    static void PoliceHelicopterStart(Engine e)
+    {
+        MethodRepair m = e.Method("com.bitmapbureau.terminator.sprites.enemies.PoliceHelicopter::start()", "8c289455");
+        m.Site("__store8(__address(__reference_arithmetic((m# + 968L))), m#)", "b2215064").With(il =>
+            il.Ldloc(4).Castclass("com.bitmapbureau.terminator.sprites.enemies.HeliTarget").Ldloc(6)
+              .Stfld("com.bitmapbureau.terminator.sprites.enemies.HeliTarget::nextTarget"));
+    }
+
+    // T1000SteelMill.update: two virtual calls on this through the generic virtual invoker 0x180002B50 (slot in cx,
+    // the receiver in rdx, one int argument): slot 8 changeImage(41), slot 14 changeState(59) (the il2cpp dump's slots).
+    static void T1000SteelMillUpdate(Engine e)
+    {
+        MethodRepair m = e.Method("com.bitmapbureau.terminator.sprites.enemies.T1000SteelMill::update()", "39378706");
+        m.Site("__native_0x180002B50(8L, this,", "b4731e98").With(il => il.This().I4(41).Callvirt(GameObjectType + "::changeImage(Int32)"));
+        m.Site("__native_0x180002B50(14L, this,", "97408cb6").With(il => il.This().I4(59).Callvirt(GameObjectType + "::changeState(Int32)"));
     }
 }

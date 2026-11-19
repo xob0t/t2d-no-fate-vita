@@ -21,4 +21,14 @@ static partial class Rules
         MethodRepair m = e.Method("com.bitmapbureau.terminator.AssetsEmbed::loadBytes(Int32)", "5c928f80");
         m.Site("__load4(", "c07e9ee0").SkipBarrier();
     }
+
+    // SarahVan.update: the barrier after `interactionButtons = null`, the GC flag (0x1810CD090) read into V5 before the
+    // store and tested after it; the card is marked with an atomic OR (a compare-exchange loop on the card table),
+    // which neither the barrier family nor Rewind's patches take. The barrier goes, its card loop with it.
+    static void SarahVanUpdate(Engine e)
+    {
+        MethodRepair m = e.Method("com.bitmapbureau.terminator.sprites.heroes.SarahVan::update()", "525c729b");
+        m.Site("__load4(", "2d63e4df").SkipBarrier();
+        m.MayRemove("__load8(", "__atomic_compare_exchange(");
+    }
 }
