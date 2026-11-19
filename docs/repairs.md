@@ -308,6 +308,8 @@ Patch 0032 recovers the issue 29 switches, so the six methods are whole but for 
 - `Button.setupEffect` (`Menus.cs`) is retired: Rewind no longer leaves the dead jump-table read before the switch, and its IL is what the rule made of it.
 - `Sprites.addFromJSON` (`Barriers.cs`) is new: `GameObject.type` of the `FWElevator` and the `FW3BossLift` is 0. In the native code r9d is zeroed, the `stopPoint` store's barrier (0x1800A0270) is called, and r9d is stored; MSVC knows the barrier keeps r9, and Rewind takes it as clobbered.
 - No other rule drifted: every other hash still matches.
+- The menu and Future War 1 rules had been checked with the code stage only; the first C++ compile of their methods failed in four, now whole and so out of `TypeGapValues`' reach, where Rewind hands a long stack slot holding 0 to a reference parameter. Each got an anchor in its rule, with the null the native code passes: `HUD.draw` (`Invokers.cs`, the `ct` of 7 `Gfx.draw` calls, V66, a slot that elsewhere holds `drawTime`'s bool in its low byte), `Game.draw` (`Calls.cs`, `drawNumber`'s last `Object`, V31) and `MissionBriefing.draw` (`Inlined.cs`, the background's `unityDraw` `ct`, V30).
+- `Game.start` (`Calls.cs`), newly whole, stored `Sprites.findByName(220, -1, -1)` into its `Elevator` local uncast (issue 24's shape, into a local): the rule puts the `castclass` back.
 
 With the 32 patches and these rules the code stage leaves 43 gap methods with 301 marker sites, no repair error and no unresolved reference.
 

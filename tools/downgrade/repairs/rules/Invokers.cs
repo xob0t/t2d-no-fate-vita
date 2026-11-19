@@ -189,11 +189,19 @@ static partial class Rules
 // string family.
 static partial class Rules
 {
+    const string GfxDraw = "com.bitmapbureau.terminator.Gfx::draw(BitmapData,BitmapData,Double,Double,Int32,Int32,Int32,Int32,ColorTransform,Boolean,Boolean,Boolean)";
     const string DrawNumber = FontType + "::drawNumber(BitmapData,Int32,Double,Double,Int32,ColorTransform,Boolean,Double,Double,Object)";
 
     static void HUDDraw(Engine e)
     {
         MethodRepair m = e.Method("com.bitmapbureau.terminator.game.HUD::draw()", "e67ba160");
+        // Gfx.draw's ct is Rewind's V66, a long stack slot that holds 0 before each of these calls (r13, null) and,
+        // elsewhere, drawTime's bool in its low byte: psp2snc rejects the long where a ColorTransform is taken.
+        string[] gfxDraw = { "ldloc.s V_66", "ldc.i4.0", "ldc.i4.0", "ldc.i4.0", "call com.bitmapbureau.terminator.Gfx::draw" };
+        string[] ctHashes = { "771bb4af", "2dc7ac8c", "36956b55", "cb64db93", "de0ac886", "5c456b63", "a44966ea" };
+        var cts = new Site[7];
+        for (int i = 0; i < 7; i++) cts[i] = m.Anchor(gfxDraw, i, ctHashes[i]);
+        foreach (Site s in cts) s.With(il => il.Null().I4(0).I4(0).I4(0).Call(GfxDraw));
         System.Action<IL> skynet = il => il.Ldsfld("com.bitmapbureau.terminator.ui.Fonts::bmpFontSmallWhite")
             .Ldsfld("com.bitmapbureau.terminator.Main::CANVAS_BD").I4(535).R8(199.0).Ldloc(68).I4(17).Null()
             .Callvirt(FontType + "::draw(BitmapData,Int32,Double,Double,Int32,ColorTransform)");

@@ -26,6 +26,21 @@ static partial class Rules
         m.Site("__vtable()", 0, "d42bb3ad").With(il => il.I8(0));
         m.Site("__vtable()", 0, "7544e5ec").With(il => il.I8(0));
         m.Site("__undefined()", "45b728b4").With(il => il.I4(1));
+        // drawNumber's last argument (Object) is V31, a long stack slot that holds 0 there, narrowed: null.
+        m.Anchor(new[] { "ldloc.s V_31", "conv.i4", "callvirt com.bitmapbureau.terminator.ui.BmpFont::drawNumber" }, 0, "300586d8")
+         .With(il => il.Null().Callvirt(FontType + "::drawNumber(BitmapData,Int32,Double,Double,Int32,ColorTransform,Boolean,Double,Double,Object)"));
+    }
+}
+
+// Game.start: player.elevator = cast(Sprites.findByName(220, -1, -1), Elevator), the cast taken out with the native
+// class check (rewind-issues.md, issue 24, into a local here): V6 is typed Elevator and gets the GameObject V31.
+static partial class Rules
+{
+    static void GameStart(Engine e)
+    {
+        MethodRepair m = e.Method("com.bitmapbureau.terminator.game.Game::start()", "f582855f");
+        m.Anchor(new[] { "ldloc.s V_31", "stloc.s V_6" }, 0, "601ade75")
+         .With(il => il.Ldloc(31).Castclass("com.bitmapbureau.terminator.sprites.objects.Elevator").Stloc(6));
     }
 }
 

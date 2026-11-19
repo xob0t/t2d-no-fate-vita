@@ -20,6 +20,8 @@ static partial class Rules
         Instruction after = m.Method == null ? null : StoreThenBranch(m, 17);
         m.Site("__undefined()", 0, "45c5aaee").Replace(0, 5, il => il.Ldloc(71).Op(OpCodes.Ldlen).Op(OpCodes.Conv_I4).Stloc(17).Br(after));
         m.MayRemove("__undefined()", "__load4(", "__load8(", "__native_0x1800B8380(", "__native_0x1800B73D0(", "__noreturn()");
+        // The background's unityDraw takes as ct V30, a long stack slot that holds 0 there (null), which psp2snc rejects.
+        m.Anchor(new[] { "ldc.i4.s 9", "ldloc.s V_30" }, 0, "dd65e65f").With(il => il.I4(9).Null());
     }
 
     // The target of the first `stloc V<local>; br <target>` in the method.
