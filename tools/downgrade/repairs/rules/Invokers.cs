@@ -323,4 +323,18 @@ static partial class Rules
           .R8(up).Op(OpCodes.Sub).I4(20).Null()
           .Callvirt(FontType + "::drawString(BitmapData,String,Double,Double,Int32,ColorTransform)");
     }
+
+    // MusicPlayer.draw (0x18050F7A0), a locked track's name in the list through the slot invoker 0x180002E30
+    // (drawString) at 0x18050FD30: font r14, V6 (bmpFontSmallWhite, or bmpFontSmallBlack on the selected row).drawString(
+    // CANVAS_BD (V24), getTrackName(track) (V25), x xmm12 = 32.0, y ebp = row * 16 + 92 (row r15d, V4; computed again,
+    // since V17 isn't set on the selected row's path), alignment 40, this.textCt (V26)).
+    static void MusicPlayerDraw(Engine e)
+    {
+        MethodRepair m = e.Method("com.bitmapbureau.terminator.apps.MusicPlayer::draw()", "bb18a14b");
+        m.Site("__native_0x180002E30(t97, m51, t95, t96)", "2d47b6fc").With(il =>
+        {
+            il.Ldloc(6).Ldloc(24).Ldloc(25).R8(32.0).Ldloc(4).I4(4).Op(OpCodes.Shl).I4(92).Op(OpCodes.Add).Op(OpCodes.Conv_R8)
+              .I4(40).Ldloc(26).Callvirt(FontType + "::drawString(BitmapData,String,Double,Double,Int32,ColorTransform)");
+        });
+    }
 }

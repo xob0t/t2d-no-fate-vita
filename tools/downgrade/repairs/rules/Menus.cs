@@ -46,4 +46,27 @@ static partial class Rules
         InlinedToDouble(m.Site("__InterfaceInvoker()", 0, "0247193f"), m, 1, 10);
         InlinedToDouble(m.Site("__InterfaceInvoker()", 0, "6ee8d559"), m, 4, 13);
     }
+
+    // Database.start: this.changeEnemy(0), a virtual call through the generic virtual invoker 0x180002B50 (slot 25 in
+    // cx, the receiver in rdx, r8d = 0; the il2cpp dump's slot 25 of Database is changeEnemy(int)); the class read
+    // Rewind keeps for it in V32 (__objklass) is used by nothing else and becomes 0.
+    static void DatabaseStart(Engine e)
+    {
+        MethodRepair m = e.Method("com.bitmapbureau.terminator.apps.Database::start()", "3c1a0c4b");
+        m.Site("__native_0x180002B50(25L, this, 0L,", "8156f9ec").With(il =>
+            il.This().I4(0).Callvirt("com.bitmapbureau.terminator.apps.Database::changeEnemy(Int32)"));
+        m.Site("__objklass()", "8aa6edaf").With(il => il.I8(0));
+    }
+
+    // InifiniteOrBossRushSummary.draw (after infinite mode and boss rush): three fonts' vtable reads for virtual
+    // drawString calls Rewind recovered, kept in V26, which nothing reads after them: 0 in their place; the inlined
+    // string compares by the family.
+    static void InfiniteOrBossRushSummaryDraw(Engine e)
+    {
+        MethodRepair m = e.Method("com.bitmapbureau.terminator.apps.InifiniteOrBossRushSummary::draw()", "acf513dc");
+        m.Site("__vtable()", 0, "0239767c").With(il => il.I8(0));
+        m.Site("__vtable()", 0, "4f171a6a").With(il => il.I8(0));
+        m.Site("__vtable()", 0, "61154600").With(il => il.I8(0));
+        m.Families();
+    }
 }
