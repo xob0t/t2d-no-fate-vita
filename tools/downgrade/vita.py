@@ -15,7 +15,8 @@ must have been installed once from the VPK (install, or the VPK in VitaShell); a
                         uploading, so the next sync sends only differences
   install [--build dir] package the build as a VPK and stream it to the installer (also
                         what applies param.sfo changes such as the memory expansion)
-  launch / quit         start the game, or quit all apps
+  launch / quit         start the game, or quit it (only when perf says it is the running app;
+                        exit code 1 when perf can't tell)
   run                   quit, sync, launch
   do "<chain>"          run a vitacompanion command chain, e.g. synthetic input:
                         do "press up; wait 100ms; release up"
@@ -367,13 +368,7 @@ def reading(build: Path, wait=BUILD_WAIT_SECONDS):
 def sync(build: Path, build_wait=BUILD_WAIT_SECONDS):
     """Uploads the build's app files whose content changed since the last sync."""
     with reading(build, build_wait):
-        # Files replaced under a running game crash it (27 Oct: a sync while the game ran, started by
-        # hand to keep the console awake), so the game is quit first, also when perf can't tell.
-        running = game_running()
-        if running is not False:
-            state = 'the game is running' if running else "perf can't tell whether the game runs"
-            print(f'sync: {state}; quitting it first')
-            print(quit_game())
+        quit_before_writing('sync')
         sync_files(build)
 
 
@@ -804,8 +799,34 @@ def check_lock(name):
     )
 
 
-def quit_game():
+def quit_all():
+    """vitacompanion's only quit: it ends whatever app the console shows, this game or another (another
+    port's, VitaShell)."""
     return command(f'{KEEP_AWAKE}; quit all; wait 2s')
+
+
+def quit_game():
+    """(quit, message): quits the game only when perf says it is the running app; another app is never
+    quit (vitacompanion's quit is `quit all`). quit is None when perf can't tell (the released
+    vitacompanion has none, or the command server didn't answer): nothing is quit then; `vita.py do
+    "quit all"` quits whatever runs. The app can change between the question and the quit, which no
+    vitacompanion command closes."""
+    running = game_running()
+    if running is None:
+        return None, f"quit: perf can't tell which app runs, so nothing was quit (do \"quit all\" quits any app)"
+    if not running:
+        return False, f'quit: {pipeline.VITA_TITLE_ID} is not the running app; nothing was quit'
+    return True, quit_all()
+
+
+def quit_before_writing(name):
+    """Files replaced under a running game crash it (27 Oct: a sync while the game ran, started by hand to
+    keep the console awake), so the game is quit first, also when perf can't tell (quit all then)."""
+    running = game_running()
+    if running is not False:
+        state = 'the game is running' if running else "perf can't tell whether the game runs"
+        print(f'{name}: {state}; quitting it first')
+        print(quit_all())
 
 
 def launch_game():
@@ -874,6 +895,7 @@ def run_command():
     parser.add_argument(
         '--prev', type=int, nargs='?', const=1, default=0, metavar='N', help='log: the log of the run N before (1 or 2)'
     )
+    parser.add_argument('--missing-ok', action='store_true', help='log: no log file prints nothing, exit code 0')
     parser.add_argument('--dump', type=Path, help='crashes: symbolize this local dump instead (no console needed)')
     parser.add_argument('--show', action='store_true', help='args: print the flags of the next launch, change nothing')
     parser.add_argument(
@@ -905,12 +927,15 @@ def run_command():
     build = args.build or build_folder('vita')
 
     if args.command == 'quit':
-        print(quit_game())
+        quit, message = quit_game()
+        print(message)
+        if quit is None:
+            sys.exit(1)
     if args.command == 'run':
         # The build lock before the quit: before (21 Oct) run quit the game, then waited for a build
         # holding vita-build and could give up after --build-wait, leaving the console on its home screen.
         with reading(build, args.build_wait):
-            print(quit_game())
+            quit_before_writing('run')
             sync_files(build)
     if args.command == 'seed':
         with reading(build, args.build_wait):
@@ -935,7 +960,14 @@ def run_command():
         # display's idle timeout paused (see wake).
         nudge()
         name = 'log.txt' if not args.prev else 'log.prev.txt' if args.prev == 1 else f'log.prev{args.prev}.txt'
-        lines = read(f'{REMOTE}/{name}').decode(errors='replace').splitlines()
+        try:
+            lines = read(f'{REMOTE}/{name}').decode(errors='replace').splitlines()
+        except ftplib.error_perm as error:
+            # --missing-ok: no log yet (a first run on this console) prints nothing and exits 0; any other
+            # failure (the FTP server down, say) still exits non-zero.
+            if not (args.missing_ok and str(error).startswith('550')):
+                raise
+            lines = []
         # As UTF-8 whatever the console's code page: print() on a Russian Windows (cp1251) stopped with
         # UnicodeEncodeError at the first character it lacks (26 Oct, the crashed run's log).
         sys.stdout.flush()

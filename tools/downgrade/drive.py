@@ -13,7 +13,9 @@ the log). There is no step that leaves a button held.
 
 Safety, as on butcher-vita's: the flags are one launch's (the player renames args.txt as it reads it, and the session
 clears them when it ends before a launch reads them); every press is released, also when the session stops part way;
-the game is quit at the end; a launch that wrote no log of its own is reported.
+the game is quit at the end (only when it is the running app: another app is never quit), also after a launch whose
+reply was lost. Each step of the end runs whatever the others did, and the session exits non-zero when one failed,
+when the launch wasn't confirmed or when the launch wrote no log of its own.
 """
 
 import ftplib
@@ -89,6 +91,32 @@ def fetch_shots(flags, out: Path):
     print(f'fetched {count} shots into {out}', flush=True)
 
 
+def release(button):
+    """Release a button, tried three times; whether vita.py did it."""
+    for _ in range(3):
+        try:
+            vita('do', f'release {button}', quiet=True)
+        except Failed as error:
+            last = error
+            time.sleep(1)
+        else:
+            print(f'drive: released {button}', flush=True)
+            return True
+    print(f'drive: WARNING {button} may still be held: {last}', flush=True)
+    return False
+
+
+def cleanup(name, failures, action):
+    """One step of the session's end: run on its own, so a failed step (a log file that can't be written, a
+    console that doesn't answer) doesn't skip the ones after it; a failure is recorded in failures."""
+    try:
+        if action() is False:
+            failures.append(name)
+    except (Failed, OSError, EOFError, ftplib.Error) as error:
+        print(f'drive: {name} failed: {error}', flush=True)
+        failures.append(name)
+
+
 def main():
     tag, flags, steps = sys.argv[1], sys.argv[2], sys.argv[3]
     out = ROOT / 'work' / 'runs' / tag
@@ -99,16 +127,22 @@ def main():
         if '--sync' in sys.argv:
             vita('sync')  # a failed sync would run the build before
         vita('args', '--', *flags.split())
-        before = vita('log', quiet=True)  # the run before's whole log: a new run's differs
+        # The run before's whole log: a new run's differs. None on this console yet (a first run) is ''.
+        before = vita('log', '--missing-ok', quiet=True)
     except Failed as error:
         vita('args', '--', quiet=True, check=False)  # flags set before the failure aren't left for the next launch
         sys.exit(f'drive: {error}; nothing was launched')
     held = None
-    launched = stale = False
+    # Set before the launch is asked for: a launch whose "Launched" reply was lost (a timeout) may still have
+    # started the game, which the session's end then quits (only if it is the running app: vita.py quit).
+    tried = False
+    stale = False
+    failures = []
     try:
+        tried = True
         if 'Launched' not in vita('launch', check=False):
-            sys.exit('drive: the launch failed (is the console busy with another app?)')
-        launched = True
+            failures.append('launch')
+            sys.exit('drive: the launch was not confirmed (is the console busy with another app?)')
         started = time.time()
         for step in [s.strip() for s in steps.split(';') if s.strip()]:
             word, *rest = step.split()
@@ -139,36 +173,36 @@ def main():
                 sys.exit(f'unknown step {step!r}')
         time.sleep(2)
     except Failed as error:
-        sys.exit(f'drive: {error}; the session stopped there')
+        failures.append('session')
+        print(f'drive: {error}; the session stopped there', flush=True)
     finally:
         if held is not None:
-            vita('do', f'release {held}', quiet=True, check=False)
-            print(f'drive: released {held}', flush=True)
-        if launched:
-            try:
+            cleanup(f'release {held}', failures, lambda: release(held))
+        if tried:
+
+            def collect():
+                nonlocal stale
                 text = vita('log', quiet=True)
-            except Failed as error:
-                text = None
-                print(f'drive: WARNING the log was not read: {error}', flush=True)
-            # The same text as before the launch: the player wrote no log of its own (it rotates log.txt as it
-            # starts), so this is the previous run's, kept apart rather than recorded as this one's.
-            stale = text is not None and text == before
-            if text is not None:
+                # The same text as before the launch: the player wrote no log of its own (it rotates log.txt as
+                # it starts), so this is the previous run's, kept apart rather than recorded as this one's.
+                stale = text == before
                 (out / ('log.stale.txt' if stale else 'log.txt')).write_text(text, encoding='utf-8')
-            if stale:
-                print("drive: WARNING the log is the previous run's; this launch wrote none (log.stale.txt)", flush=True)
-            # Only the game this session launched: `quit all` would end whatever app the console shows.
-            vita('quit', check=False)
-        # The flags are one launch's: if the launch never read them, they go now.
-        if vita('args', '--show', quiet=True, check=False).strip() not in ('', 'args.txt: (empty)'):
-            vita('args', '--', check=False)
-        if launched:
-            try:
-                fetch_shots(flags, out)
-            except (OSError, EOFError, ftplib.Error) as error:
-                print(f'drive: shots not fetched: {error}', flush=True)
-    if stale:
-        sys.exit(1)
+                if stale:
+                    print("drive: WARNING the log is the previous run's; this launch wrote none (log.stale.txt)", flush=True)
+
+            cleanup('reading the log', failures, collect)
+            # Only this game: vita.py quit asks perf which app runs first and never quits another one.
+            cleanup('quit', failures, lambda: vita('quit') and None)
+
+        def clear_flags():  # the flags are one launch's: if the launch never read them, they go now
+            if vita('args', '--show', quiet=True).strip() not in ('', 'args.txt: (empty)'):
+                vita('args', '--')
+
+        cleanup('clearing the flags', failures, clear_flags)
+        if tried:
+            cleanup('fetching the shots', failures, lambda: fetch_shots(flags, out))
+    if failures or stale:
+        sys.exit(f'drive: {", ".join(failures + (["no log of its own"] if stale else []))} failed')
 
 
 main()
