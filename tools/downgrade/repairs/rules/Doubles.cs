@@ -6,12 +6,13 @@ using Repairs;
 static partial class Rules
 {
     // ContinueScreen.update: colorTransform.setAlphaMultiplier(min(alpha + 0.01, 1)) at 0x1804D1A50..6E,
-    // whose halves Rewind keeps in V8/V9; and SaveStats.setStoryBossSpawnPointY's argument, the halves
-    // of bossSpawnPoint.y or zeros on the other path (V10/V11).
+    // whose halves Rewind keeps in V8/V9 (m28, m29); and SaveStats.setStoryBossSpawnPointY's argument,
+    // the halves of bossSpawnPoint.y or zeros on the other path (V10/V11, m30, m31). The markers' own
+    // text, __bits_to_double((conv.u8(conv.u4(m28)) | (conv.u8(conv.u4(m29)) << 32))), is the repair.
     static void ContinueScreenUpdate(Engine e)
     {
         MethodRepair m = e.Method("com.bitmapbureau.terminator.apps.ContinueScreen::update()", "da5efe50");
-        m.Site("__bits_to_double(", 0, "17f98874").With(il => il.HalvesToDouble(8, 9));
-        m.Site("__bits_to_double(", 0, "7e0421f9").With(il => il.HalvesToDouble(10, 11));
+        m.Bind("m28", 8).Bind("m29", 9).Bind("m30", 10).Bind("m31", 11);
+        m.CompileAll("__bits_to_double(", 2, "17f98874 7e0421f9");
     }
 }

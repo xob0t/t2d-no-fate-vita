@@ -270,13 +270,7 @@ namespace Repairs
 
         public static Engine Run(ModuleDefinition module, Mode mode, Func<string, bool> only, bool patterns)
         {
-            return Run(module, mode, only, patterns, null);
-        }
-
-        public static Engine Run(ModuleDefinition module, Mode mode, Func<string, bool> only, bool patterns, NativeFacts facts)
-        {
             var engine = new Engine(module, mode);
-            engine.Facts = facts;
             foreach (System.Reflection.MethodInfo rule in typeof(Rules).GetMethods(System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic)
                          .Where(m => m.GetParameters().Length == 1 && m.GetParameters()[0].ParameterType == typeof(Engine)).OrderBy(m => m.Name))
             {
@@ -313,11 +307,8 @@ namespace Repairs
 
         public int PatternsKept, PatternsDropped;
 
-        // native/array_facts.py's facts, for the generated repairs (Generated.cs).
-        public NativeFacts Facts;
-
-        // A generated repair's method: its body hash must match exactly (an error, not a warning),
-        // since its sites are checked by the native facts and not by a hash each.
+        // A method whose sites are checked by their shape (a table of methods sharing one recipe), not
+        // by a hash each: its body hash must match exactly (an error, not a warning).
         public MethodRepair GeneratedMethod(string key, string hash)
         {
             int before = Warnings.Count;

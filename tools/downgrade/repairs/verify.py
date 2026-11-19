@@ -34,7 +34,7 @@ def ilverify(exe, dll, refs, names):
 
 def markers(exe, dll, name):
     out = subprocess.run([exe, 'markers', dll, name.split('(')[0]], capture_output=True, text=True).stdout
-    return [l for l in out.splitlines() if l.split('\t')[1:2] != ['-'] and l.startswith(name.split('(')[0])]
+    return [l for l in out.splitlines() if l.split('\t')[1:2] != ['-'] and l.split('\t')[0] == name]
 
 
 def main():
