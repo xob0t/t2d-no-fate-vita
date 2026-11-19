@@ -5,26 +5,43 @@ That pipeline exports the game with AssetRipper 2.0.0, downgrades it to Unity 20
 Huntdown ships as a Mono build, so its code is already IL.
 This game ships only as IL2CPP, so its IL had to be recovered from native code first, with [Rewind](https://github.com/ratman-bit/Rewind-IL2CPP-Decompiler) (Apache-2.0).
 
-The short answer: the port looks realistic, but it is not a pipeline run like Huntdown's.
-The code side needs about 15 to 30 person-weeks if Rewind is improved first, and about 18 to 32 without that ([the estimate](#how-much-hand-work-the-code-side-needs)).
-The biggest risks outside the code are texture memory and speed on the PS Vita.
+The short answer: the port looks realistic, and more so than at the first measurement.
+With this repository's signature library and 22 patches, Rewind recovers 91% of Assembly-CSharp whole, every reference resolves against Unity 2018.2, and the build gets as far as the C++ compile of the recovered code.
+The remaining code-side work is about 8 to 16 person-weeks ([the estimate](#how-much-hand-work-the-code-side-needs)).
+The memory risks on the PS Vita are measured and have a plan each; the game's speed on the console is still unmeasured.
 
-Nothing here was ported or started; this is measurement only.
 There are no game files in this repository.
 Everything under `work/` (Rewind's output, exports, logs) is ignored by git.
+Prose here is one sentence per line.
+
+## Since the first assessment
+
+The first version of this page, from 2026-11-19, measured upstream Rewind (commit `ea8e305`) with the nearest signature library it ships, 6000.0.85f2: 63.0% of the game's method bodies and 71.2% of Assembly-CSharp came back complete.
+Nothing was ported then.
+As of 2026-11-19, later the same day:
+
+- A signature library for 6000.0.60f1, built without the Unity editor, ships in `tools/rewind/signatures`.
+- 22 patches to Rewind (`tools/rewind/patches`) fix most of the [draft issues](rewind-issues.md); each issue has a game-free repro. Whole game 78.2%, Assembly-CSharp 90.9%.
+- The pipeline ([build.md](build.md)) runs from the game folder through setup, recovery, AssetRipper, the code stage and the project, and the builder writes every data file of the PS Vita player. It stops in the C++ compile of the recovered code.
+- A repair engine fills Rewind's gaps with rules compiled at build time, without shipping game code ([repairs.md](repairs.md)).
+- The platform layer replaces InControl, takes out Steamworks, Epic and GOG, and keeps the saves ([platform.md](platform.md)). With the fold-back passes ([tools/downgrade/foldback/README.md](../tools/downgrade/foldback/README.md)), unresolved references go from 245 to 0.
+- On the console: texture memory and the repack to small pages ([textures.md](textures.md)), the game's per-frame meshes and draw path ([mesh-test.md](mesh-test.md)), sound ([audio.md](audio.md)) and shaders ([shaders.md](shaders.md)).
+- Rewind's C# was compiled against Unity 2018.2 and run as a Windows player, to compare a C# route with the IL route ([The route](#the-route-il-with-rule-based-repairs)).
 
 ## Setup
 
 | Item | Version, source |
 | --- | --- |
 | Game | Steam release, app 1718460, build 24040403 (depot 1718464, manifest 503866610356912072), in `C:\Program Files (x86)\Steam\steamapps\common\Terminator 2D NO FATE`, read only |
-| Rewind | Built from source at commit `ea8e3050b2f8a0bb0fc64df0720b63998646eb58` (2026-11-18) in `tools/external/rewind`. The release installers are unsigned, so they weren't used. |
+| Rewind | Built from source at commit `ea8e3050b2f8a0bb0fc64df0720b63998646eb58` (2026-11-18) in `tools/external/rewind`, with the 22 patches applied by `tools/setup.py`. Upstream main was still that commit on 2026-11-19. The release installers are unsigned, so they weren't used. |
+| Signature library | `tools/rewind/signatures/unity-6000.0.60f1-windows-x64.sig`, built here ([below](#signature-library)) |
 | .NET SDK | 10.0.404, a private copy in `tools/external/dotnet10`, installed with Microsoft's `dotnet-install.ps1`. The machine's NuGet config has no sources, so builds pass `--source https://api.nuget.org/v3/index.json`. |
-| Mono.Cecil | 0.11.6 for the measuring tool; 0.10.0-beta6 (huntdown's) for the load check |
+| Mono.Cecil | 0.11.6 for the measuring tool; 0.10.0-beta6 (huntdown's and butcher's) for the load check and the pipeline's rewriter |
 | ILVerify | `dotnet-ilverify` 10.0.15 |
 | Ghidra | 12.1.4, headless |
 | AssetRipper | 2.0.0, as huntdown-vita runs it |
-| Unity 2018.2.19f1 | The editor's engine modules and `unityaot` class libraries, as the target for the API check |
+| Unity 2018.2.19f1 | The editor's engine modules, `unityaot` class libraries, IL2CPP and PS Vita player, extracted by setup into `tools/external/unity-2018.2.19f1` |
+| Unity 6000.0.60f1, MSVC 14.50 | Extracted into `tools/external/unity-6000.0.60f1` and `tools/external/msvc-14.50`, for the signature library's test builds and the Rewind repros; no editor install, license or sign-in |
 
 ## The game
 
@@ -48,93 +65,112 @@ So there is no Mono build of this game to start from.
 ### Signature library
 
 Rewind names IL2CPP's runtime functions with a signature library per Unity version.
-It has none for 6000.0.60f1, so it took the nearest, `unity-6000.0.85f2-windows-x64.sig`.
-The decompile log reports 47 kinds of support function: 45 from the library at 113 addresses, plus the object allocator (`0x1800E3E10`) and the internal-call resolver, found by their use.
-`rewind-lab sig-apply` with that library identifies 45 of 68 kinds.
-The 23 it leaves unidentified are GenericInterfaceInvoker, ConstrainedInvoker, GenericVirtualInvoker, ResolvePInvoke, InterfaceInvokeDataSlow, MetadataInit, MetadataInitInline, WouldBoxToNonNull, ObjectNew, GetArgumentException, GetOverflowException, GetNotSupportedException, GetArrayTypeMismatchException, GetInvalidCastException, RuntimeConstrainedCall, GenArrayNew, MethodIsStatic, UnboxNullable, GetGenericVirtualMethod, StoreLastError, MethodIsGenericInstance, MethodIsInterface and ResolveICall.
+It ships none for 6000.0.60f1, so the first measurement used the nearest, `unity-6000.0.85f2-windows-x64.sig`.
+That library identified 45 of 68 kinds of support function at 113 addresses.
+It named the `SZArrayNew` thunk but not `Array::NewSpecific` behind it, which game code calls directly 828 times from Assembly-CSharp, so `new T[n]` became a gap in 184 Assembly-CSharp methods and 428 InControl methods.
 
-The one that costs most is not in that list.
-The library does name `SZArrayNew`, but that is a two-instruction thunk at `0x1800A0D60` that jumps to `0x1800E2FD0`, which is `Array::NewSpecific`.
-Game code calls `0x1800E2FD0` directly 828 times in Assembly-CSharp, and Rewind leaves it unidentified, so `new T[n]` becomes a gap in 184 Assembly-CSharp methods and 428 InControl methods.
+This repository now has a library for 6000.0.60f1, built without the Unity editor or a license.
+`tools/assess/sigtest` compiles a test project with Unity 6000.0.60f1's Roslyn, UnityLinker and il2cpp, in four configurations (Master, Release, Master for size, Master without incremental GC).
+The game was built with MSVC 14.50 (from `GameAssembly.dll`'s Rich header), so `replay_msvc.py` recompiles and relinks every C++ step of those builds with a portable MSVC 14.50.
+`pdbsyms.py` dumps each build's PDB symbols, and `rewind-lab sig-build` makes the library from them.
+Checked against the test builds' symbols, the library makes no wrong identification, on each build and on each build left out of the library.
+
+The compiler matters as much as the Unity version.
+A library built from the same test project with MSVC 14.44, the toolset installed on this machine, matched no better than 85f2: 62.7% of the game complete, against 63.0%.
+Built with MSVC 14.50 it names 244 runtime functions (85f2: 113), and complete bodies go from 63.0% to 70.4%.
+Rebuilt with patch 0002's helper rules, it also names `Array::NewSpecific`, `Object::New` and `Object::NewAllocSpecific`, and upstream Rewind reaches 74.2%.
+That is the library in `tools/rewind/signatures`; with the patches, Rewind identifies 59 kinds of runtime function with it.
 
 ### Build type: Master
 
 The game was built with IL2CPP's Master configuration, which turns on link-time code generation across modules.
 Two things show it.
 libil2cpp's internals are inlined into game methods: the incremental GC's card-marking write barrier (a check of the GC flag, then `lock cmpxchg` on the card table) appears inside methods such as `haxe.root.Array.push`, which only cross-module link-time code generation can do.
-And the whole game comes out 63.0% complete, inside the 61.0% to 63.7% Rewind's README reports for Master builds, far from the 94% it gets on Release builds.
+And the whole game came out 63.0% complete at the first measurement, inside the 61.0% to 63.7% Rewind's README reports for Master builds, far from the 94% it gets on Release builds.
 
 ### Coverage
 
 RewindStats reads Rewind's assemblies and counts a body as complete when its IL has no `__Rewind.Opaque` or `__Rewind.Effect` marker.
+Complete bodies, from the first measurement to what the pipeline uses now:
 
-| Assembly | Bodies | Complete | With gaps | Placeholder | Marker sites |
+| Rewind, library | Whole game, 19,693 | Assembly-CSharp, 2,968 | InControl, 1,874 |
+| --- | --- | --- | --- |
+| Upstream, 6000.0.85f2 (the first measurement) | 12,403 (63.0%) | 2,114 (71.2%) | 1,225 (65.4%) |
+| Upstream, 6000.0.60f1 built with MSVC 14.44 | 12,356 (62.7%) | 2,107 (71.0%) | 1,225 (65.4%) |
+| Upstream, 6000.0.60f1 built with MSVC 14.50 | 13,857 (70.4%) | 2,157 (72.7%) | 1,270 (67.8%) |
+| Upstream, the rebuilt 6000.0.60f1 library | 14,615 (74.2%) | 2,233 (75.2%) | 1,637 (87.4%) |
+| With the 22 patches, the rebuilt library | 15,404 (78.2%) | 2,697 (90.9%) | 1,664 (88.8%) |
+
+Rewind's own log counts differently (with the patches, 15,372 of 18,368 native bodies complete); the tables here use RewindStats' counts.
+The port needs only Assembly-CSharp.
+InControl is replaced and Steamworks taken out by the platform layer, and mscorlib and the engine modules come from Unity 2018.2.
+
+### The 22 Rewind patches
+
+The patches were written on four branches of `ea8e305`, then combined: runtime (patches 0001 to 0006: helpers behind thunks, the library's array and object allocators, the static-field write barrier, the metadata initializer, floating-point arguments of unknown calls, array accessors), memory (0007 to 0011: wide stores over inherited fields, tail-merged virtual calls, invokers specialized for one slot, offset-0 field addresses, string indexing), markers (0012 to 0017: every unrecovered part marked, base constructor calls, inlined constructors, the inlined object hash, small structs, one reference per assembly) and numeric (0018 to 0021: FP negation, bits read as a double, 8-byte struct returns, narrowing of a 64-bit field read as 32 bits).
+Patch 0022 marks every changed file, as Apache-2.0 asks.
+`tools/rewind/patches/NOTICE.md` lists them; each has a `REWIND_NO_*` switch that turns it off.
+
+Complete bodies with the rebuilt library, upstream, each branch alone and all combined:
+
+| Bodies | Upstream | runtime | memory | markers | numeric | Combined |
+| --- | --- | --- | --- | --- | --- | --- |
+| Whole game, 19,693 | 14,615 | 15,078 | 14,748 | 14,556 | 14,849 | 15,404 |
+| Assembly-CSharp, 2,968 | 2,233 | 2,375 | 2,347 | 2,232 | 2,399 | 2,697 |
+| InControl, 1,874 | 1,637 | 1,655 | 1,641 | 1,634 | 1,644 | 1,664 |
+
+Assembly-CSharp's marker sites go from 5,287 to 1,778, and its gap methods from 735 to 271.
+The markers branch alone lowers the counts, on purpose: it marks parts that upstream left out silently.
+A regression check compared every method of the 44 assemblies across the five outputs.
+86 methods complete upstream or on one branch carry markers in the combination, none of them in Assembly-CSharp (24 in mscorlib, 18 in PropertiesModule, 14 each in CoreModule and UIElementsModule, 3 each in InControl and Steamworks, and a few in other engine modules).
+They count as losses, but the ones checked are marked instead of silently wrong: the InControl and Steamworks ones are the inlined `typeof(T)` of issue 6 (such as `Steamworks.Packsize::Test`), invalid IL upstream.
+The engine and class library ones weren't checked one by one; the port uses 2018.2's own.
+392 methods were changed by two or more branches into IL that neither gives alone; the combined output was checked by the coverage above, ILVerify and the repros, not method by method.
+
+ILVerify, upstream against the patches, both with the rebuilt library:
+
+| Assembly | Upstream errors | With the patches | In gap methods | In complete methods | In noted-only methods |
 | --- | --- | --- | --- | --- | --- |
-| Assembly-CSharp | 2,968 | 2,114 (71.2%) | 854 | 0 | 13,997 |
-| InControl | 1,874 | 1,225 (65.4%) | 649 | 0 | 23,973 |
-| Steamworks | 185 | 113 (61.1%) | 72 | 0 | 549 |
-| mscorlib | 8,181 | 4,335 (53.0%) | 3,842 | 4 | 32,771 |
-| Whole game, 44 assemblies | 19,693 | 12,403 (63.0%) | 7,285 | 5 | |
+| Assembly-CSharp | 931 | 1,080 | 526 in 222 | 444 in 260 | 110 in 70 |
+| InControl | 4,012 | 626 | 456 in 182 | 168 in 58 | 2 in 2 |
+| Steamworks | 138 | 107 | 75 in 40 | | |
 
-Rewind's own log counts differently (18,368 bodies with native code, 12,397 complete, plus 1,320 shared generic definitions); the tables here use RewindStats' counts.
-The port only needs Assembly-CSharp and, unless it is replaced, InControl.
-Steamworks gets stubbed, and mscorlib and the engine modules come from Unity 2018.2.
+In Assembly-CSharp's methods without markers, the constructor errors (`ThisUninitReturn` 74, `CallCtor` 47) are gone.
+Unexpected stack types went from 131 to 381.
+Most of the rise is patch 0019's way of reading bits as a double, `ldloca` of an int64 local then `ldobj System.Double` (352 errors of the form "found Long, expected Double" across the assembly): it gives the right value and runs under IL2CPP, but ILVerify doesn't accept it.
+InControl's private field accesses (2,495) fell to 121 with the markers branch.
+The pipeline builds with UnityLinker and IL2CPP and has no Mono loadcheck stage, so what matters now is what the C++ compiler accepts ([below](#how-much-hand-work-the-code-side-needs)).
 
-An earlier build of the game (its `GameAssembly.dll` is dated 2025-10-21, same Unity version) came out within a point of this one: Assembly-CSharp 71.7% complete, InControl 65.6%.
-There the library identified 48 kinds, ObjectNew and GenericVirtualInvoker among them, but not SzArrayNew.
+`tools/assess/rewind-repros` holds a repro per issue: `Repros.cs`, written from scratch, built editor-free as a Master build with MSVC 14.50, and `check_repros.py`, which decompiles it with a given Rewind and prints PASS or FAIL per issue.
+On upstream main only the controls and issue 1 pass (issue 1 through the library).
+With the patches, issues 1, 7, 8, 9, 11, 16 and 17 pass in full, and 6 and 10 in part.
+Issues 2, 13 and 19 fail their checks only on form: the values are right and nothing is marked, but a merged double or struct is still built from its bits.
+3 and 18 fail on a marked gap that remains, and 4, 21, half of 6 and inlined constructors kept in a local are open.
 
-### The gaps in Assembly-CSharp
+### The gaps left in Assembly-CSharp
 
-A gap method can have several reasons.
-The most common, by number of methods:
+After the patches, 271 Assembly-CSharp methods have gaps, with 1,778 marker sites.
+The asset-table initializers, which held 6,436 of the first measurement's 13,997 sites, are complete: the library names the `double[]` store helper and the array allocator.
+The most common reasons now, by number of methods:
 
 | Methods | Reason |
 | --- | --- |
-| 357 | call to an unidentified native function |
-| 301 | load from an address without a typed base |
-| 256 | bits reinterpreted as double (the stripped mscorlib has no `BitConverter.Int64BitsToDouble`) |
-| 247 | class pointer used as data (the class argument of an array allocation, mostly) |
-| 227 | load from an absolute address (220 of them the GC flag at `0x1810CD090`) |
-| 180 | `atomic_compare_exchange` (the static-field write barrier) |
-| 58 | indirect call |
-| 57 | statics pointer used as data |
-| 54 | 2-byte store across two fields |
-| 42 | object's class pointer used as data (tail-merged virtual calls) |
-| 34 | indexed access into a string, runtime helper `IsInst` not translated |
+| 82 | load from an address without a typed base |
+| 51 | load from an absolute address (the GC flag) |
+| 48 | `atomic_compare_exchange` |
+| 39 | frame value used as data |
+| 39 | memory access through an int value |
+| 39 | `Memcpy` not translated |
+| 35 | a reference used as a number (marked by patch 0015) |
+| 29 | statics pointer used as data |
+| 26 | indexed access into a string |
+| 20 | call to an unidentified native function |
+| 17 | call argument not captured (issue 21) |
+| 17 | indirect call |
 
-RewindStats groups the reasons into four causes.
-"Runtime" is IL2CPP runtime code the library didn't name or that link-time optimization inlined: metadata init, write barriers, array allocation.
-"Double" is a double moved through an integer register.
-"Layout" is a memory access Rewind couldn't map to a field or element.
-"Other" is indirect calls, lost arguments, virtual slots, delegates and exceptions.
-
-| Cause | Methods with it | Methods with only it |
-| --- | --- | --- |
-| runtime | 613 | 426 |
-| double | 257 | 152 |
-| layout | 137 | 61 |
-| other | 77 | 8 |
-
-The other combinations are double with runtime (58), other with runtime (47), layout with runtime (46), and 26 methods with three or more causes.
-
-Most gap methods have few marker sites: 203 have one, 315 at most 2, 581 at most 5, 692 at most 10, and 808 at most 50.
-The largest are the asset-table initializers, generated code that fills tables of asset data: `AssetsStaticMap.staticInit1` (1,503 sites), `Assets.staticInit15` (931), `AssetsPack.staticInit6` to `staticInit9` (609 each), `Assets.staticInit12` (273), `FontsPack.staticInit` (197).
-The 30 initializer methods hold 6,436 of the 13,997 sites.
-After them come `Game..cctor` (390), `FreewayChase..cctor` (181), `ControlsExplanation.setupScene` (180) and `SaveStats.saveStats` (168).
-Many initializer sites are one pattern: 2,438 calls to `0x1800026F0`, a bounds-checked store into a `double[]` whose value Rewind drops, and 1,503 metadata-init calls (`0x1800A0BA0`) left as dead `if (1 == 0)` blocks.
-
-The unidentified functions game methods call most:
-
-| Address | Assembly-CSharp methods | InControl methods | What it is |
-| --- | --- | --- | --- |
-| `0x1800E2FD0` | 184 | 428 | `Array::NewSpecific`, `new T[n]` |
-| `0x180002D50` | 83 | | not identified |
-| `0x1800E3F30` | 30 | | not identified |
-| `0x1800A1160` | 19 | 2 | probably the array-type-mismatch exception getter (546 sites) |
-| `0x1800A0BC0` | 18 | 23 | not identified |
-| `0x180002EB0` | 14 | | not identified |
-
-InControl's gaps are 88% "runtime" (570 of 649 methods), mostly array allocation (428 methods) and array stores (256); its largest methods are device-profile tables.
+The first three are mostly the write barrier on an object Rewind couldn't type, which the static-field fix doesn't cover.
+In the pipeline, the repair engine's one remaining rule and its write-barrier pattern take Assembly-CSharp to 265 gap methods, and the platform layer replaces or rewrites more, so `Recovered.T2D` keeps 253 gap methods with 1,640 marker sites after the code stage.
+Every one of them throws `NotSupportedException` when it reaches a marker.
 
 ## Quality of what Rewind recovers
 
@@ -143,42 +179,43 @@ The methods: an InControl iterator's `MoveNext`, `Player.jumpUpdate`, `moveUpdat
 
 Where Rewind claims to have recovered something, it matched the native code: control flow, field offsets, constants, call targets, signedness, loop bounds and exception edges.
 The field offsets were also checked wholesale: the binary's own field-offset table matches Rewind's dump for 295 of the 296 Assembly-CSharp types that have fields; the other is a thread-static field the dump lists without an offset.
+Writing the repair rules later found two details the first reading got wrong: `ExplosiveBarrel.hit` negates on both paths (the vy for `Game.mode == 8` is -5.0), and the invoker in `Player.changeState` calls `setupImpact` on `this` ([repairs.md](repairs.md)).
 
-There are four problems a porter has to know about.
+The first measurement found four problems; the patches fix the silent ones.
 
-1. A silent bug turns floating-point negation into a wrong integer value inside methods reported Complete. Negation by `xorps` with a sign mask is lifted as an XOR on the high half, and the int low half is passed on. Confirmed in `ExplosiveBarrel.hit`, `Furniture.hit` and `Player.shoot`, where the spread shot's vertical speed is the low half of `Math.Sin`'s bits instead of `-Math.Sin(a)`. Rewind's C# carries 14 "Expected F8, but got I4" comments in 11 Assembly-CSharp files, which is a place to start looking for more.
-2. Complete doesn't always mean compilable. An 8-byte struct returned in a register comes out as an integer: `UnityMain.BetterAnalog` returns `(Vector2)(ulong)…` built from `SingleToInt32Bits`.
-3. Gap markers usually hide real game logic: array allocations, negations, virtual and interface calls, array stores, a `Dispose` in a `finally`. Only the write barriers and the metadata init are pure plumbing that can be deleted.
-4. 13 methods carry a `__Rewind.Note` saying parts weren't recovered, but have no marker (8 in Assembly-CSharp, 3 in InControl, 2 in Steamworks). In 8 of them the unrecovered part is invalid IL that ILVerify flags. In the other 5 ILVerify finds nothing: `Main.update(Boolean)` says 5 parts weren't recovered, and nothing in its IL shows where they were.
+1. Floating-point negation lifted as an XOR on the high half, with the int low half passed on, in methods reported complete (`ExplosiveBarrel.hit`, `Furniture.hit`, `Player.shoot`). Fixed by patches 0018 and 0019: those methods are complete and negate the double. Where the negated double is merged from two branches it is still built from two halves, with the right value.
+2. 8-byte struct returns as integers (`UnityMain.BetterAnalog`). Patch 0020 rebuilds two of its three return paths as `Vector2`; the third fills a field through a reinterpreting load, which is valid IL and the right value.
+3. Gap markers hiding real game logic. They still do, but every unrecovered part is now marked (patch 0012), and the array allocations, static-field barriers, bool-pair stores, tail-merged virtual calls and specialized invokers are recovered.
+4. Methods noted as incomplete without a marker, some with invalid IL and five with nothing to show where. Patch 0012 marks unrecovered address computations, which covers the `typeof(T)` cases with invalid IL; the variant with nothing to show (`Main.update`) wasn't reproduced. A new kind takes their place: 70 Assembly-CSharp methods carry only a `__Rewind.Note`, mostly where a base class's constructor runs on a raw allocation (patch 0014), which runs as the original did but isn't verifiable IL.
 
-The verdict: Rewind's output is faithful where it says it recovered the code.
-It has a few known patterns of silent error, which a porter must grep for, check with ILVerify and catch in play-testing.
-Its gaps need someone who reads x64 to fill them, method by method, unless the tool is fixed.
+The other silent errors found while writing the repros are fixed too: the offset-0 field address (issue 7), the untruncated `UInt64.GetHashCode` (8), the object hash done on a reference (9), small structs as integers (10, marked where not rebuilt), constructors without a base call (11) and the double AssemblyRef rows (12).
+
+What remains:
+
+- Merged doubles and structs built from their halves (issues 2, 13, 19): right values, harder to read, and the reinterpreting loads ILVerify rejects.
+- Calls with many arguments lose their stack arguments (issue 21, 17 methods), marked as `__missing_argument()`.
+- The write barrier on an untyped object, `Memcpy`, string indexing in some shapes and the double-returning interface invoker, all marked.
+- Int64 where the original had a native int (42 such stack errors in Assembly-CSharp), an x64 artifact that matters on the PS Vita's 32-bit ARM, and object references held in int64 locals, which the C++ compile rejects.
+- Silent errors nobody has found yet. The 19 methods read by hand found one kind in 3 of them; play-testing is the last check.
+
+The verdict: Rewind's output is faithful where it says it recovered the code, and with the patches the known silent errors are gone or marked.
+The gaps left need someone who reads x64, or another patch per pattern.
 
 ## Loading into huntdown's pipeline
 
 Assembly-CSharp, InControl and Steamworks load with 0 unresolved references and 0 body read errors in Mono.Cecil 0.11.6, and in 0.10.0-beta6, huntdown's version, built and run the way huntdown runs its rewriter (C# 5, .NET Framework).
-All three write back and re-read with the same instruction counts (678,097 in Assembly-CSharp).
-Each assembly references mscorlib twice, once with the signed identity and once unsigned, and every type reference uses the unsigned one; Cecil doesn't mind.
+All three write back and re-read with the same instruction counts (678,097 in Assembly-CSharp at the first measurement).
+At the first measurement each assembly referenced mscorlib twice, once with the signed identity and once unsigned; patch 0017 leaves one reference per assembly.
 
-ILVerify finds errors even in methods without markers, which matters because huntdown's `loadcheck` compiles every method under the 2018 Mono:
-
-| Assembly | Errors | In gap methods | In methods without markers | In noted-only methods |
-| --- | --- | --- | --- | --- |
-| Assembly-CSharp | 1,583 | 1,323 in 511 methods | 256 in 183 methods | 4 in 3 methods |
-| InControl | 1,436 | 1,306 in 598 | 125 in 64 | 5 in 3 |
-| Steamworks | 180 | 150 in 47 | 28 in 28 | 2 in 2 |
-
-In Assembly-CSharp's marker-free methods the errors are unexpected stack types (119), constructors that return without calling a base constructor (70) or call one wrongly (44), and access to private members of other types (23), where IL2CPP inlined a private accessor.
-125 constructors have no base `.ctor` call at all (74 in Assembly-CSharp, 46 in InControl, 5 in Steamworks).
-Four Assembly-CSharp methods were left out of the check because ILVerify itself crashes on them (`SaveStats.loadStats`, `saveStats`, `TiledData.copy2DInt`, `getGeometry`).
-Some marker-free methods also carry int64 where the original had a native int, an x64 artifact that would break on the PS Vita's 32-bit ARM.
+The pipeline's rewriter is butcher's port of huntdown's, on Cecil 0.10.0-beta6, and runs on the patched output without problems.
+The first measurement's ILVerify table (1,583 errors in Assembly-CSharp with the 85f2 library) is superseded by the one above.
+Four Assembly-CSharp methods crash ILVerify itself (`SaveStats.loadStats`, `saveStats`, `TiledData.copy2DInt`, `getGeometry`), on an inlined `Array.Clone`; that is ILVerify's bug.
 
 ## API gaps against Unity 2018.2
 
 RewindStats' `apigap` lists every type and member the game's assemblies name that Unity 2018.2's engine modules and `unityaot` class libraries lack, or don't make public.
 `apigap_categories.py` groups them.
-Items are counted once even when two assemblies use them; sites and methods are summed over Assembly-CSharp, InControl and Steamworks.
+At the first measurement, over Assembly-CSharp, InControl and Steamworks:
 
 | Category | Items | Sites | Game methods | Of them with gaps |
 | --- | --- | --- | --- | --- |
@@ -192,29 +229,16 @@ Items are counted once even when two assemblies use them; sites and methods are 
 | B2 BCL internals present but non-public in 2018.2, inlined | 54 | 296 | 119 | 115 |
 | B3 public BCL API missing (.NET Standard 2.1) | 2 | 103 | 10 | 9 |
 
-The public API the game uses that 2018.2 lacks is small: 17 items, about nine rules.
+All of it is handled now, by rules that name no game method.
+In the code stage, 245 references didn't resolve.
 
-- `Mesh.RecalculateNormals(MeshUpdateFlags)` and `MeshUpdateFlags`: the overload without flags.
-- `Object.FindObjectsByType` with `FindObjectsInactive` and `FindObjectsSortMode` (InControl): `FindObjectsOfType`.
-- `Resolution.refreshRateRatio` and `RefreshRate`: `refreshRate`.
-- `UnityWebRequest.Result`: `isNetworkError` and `isHttpError`.
-- `RenderTextureDescriptor`'s graphics-format constructor, `graphicsFormat`, `depthStencilFormat` and `mipCount`, all in `UnityMain.OnPreRender`: hand work with 2018.2's `colorFormat` and `depthBufferBits`.
-- `MipmapLimitDescriptor` in a `Texture2D` constructor (`BitmapData`): an older constructor.
-- `InspectorNameAttribute` (InControl): drop it.
-- `BitConverter.SingleToInt32Bits`: a shim. Its 102 sites are nearly all Rewind's way of packing 8-byte struct returns, so they go away when that is fixed.
-- `Convert.ToBase64String(ReadOnlySpan<byte>, …)` (InControl's `PlayerActionSet.Save`): the array overload.
+- `Unity6Shims.cs` covers the small public API gap: `Mesh.RecalculateNormals(MeshUpdateFlags)`, `Object.FindObjectsByType`, `Resolution.refreshRateRatio`, the `Texture2D` constructor with a `MipmapLimitDescriptor`, `BitConverter.SingleToInt32Bits`. Attributes 2018.2 lacks are dropped, and `Input` and `Touch` move from `InputLegacyModule` to `CoreModule`.
+- The platform layer leaves InControl and Steamworks out and replaces `UnityMain.OnPreRender`'s `RenderTextureDescriptor` code and the `UnityWebRequest` sound loading: 245 to 61.
+- The fold-back passes turn the inlined binding calls, native-pointer handles and class library internals back into 2018.2's public API, with a few T2DCompat stand-ins: 61 to 0. A shape they don't know fails the whole method, so no half-folded body reaches the build.
 
-`Input`, `Touch`, `TouchPhase` and `TouchType` live in `InputLegacyModule` in Unity 6 and in `CoreModule` in 2018.2, so InControl's references to them only need retargeting.
-
-The larger category is new to this kind of port: engine and BCL internals that IL2CPP inlined into game methods, and that Rewind recovered as they were.
-That is 178 items at 916 sites: the native-pointer plumbing and `*_Injected` binding calls behind public Unity properties (`Object.GetCachedPtr`, `Camera.get_pixelWidth_Injected`, `AudioSource.Play_Injected` …), `String._firstChar`, and private fields of `Dictionary`, `List`, `Delegate` and `Span` helpers.
-217 of the 234 methods that use them (93%) already have Rewind gaps, so they get hand work anyway; what remains is a pass that folds binding calls back into the public API they came from.
-
-The check ran against the editor's engine modules; the PS Vita player's own `Managed` folder may differ slightly.
-
-For scale, huntdown's rewriter is about 1,650 lines (`tools/downgrade/rewriter`), with 16 game-specific passes in `Patches.cs`, and its API shims are 225 lines with 22 types (`compat/ApiShims.cs`).
-For this game the rules look like about 35 trivial redirects, about 22 small shims, one new pass of 200 to 400 lines that folds the inlined binding calls back, and hand work in `UnityMain.OnPreRender`, `Sound.createSoundFromFile` (UnityWebRequest audio loading) and the inlined Span, Delegate and Thread code.
-Those rule counts are an estimate from the item list, not something a tool counted.
+Six non-public class library members are left (`String.m_firstChar`, `Decimal.flags` and `hi`, `Array.IndexOfImpl<T>`, `RuntimeFieldHandle.value`, `Exception.Init()`, an internal `CultureInfo` constructor); UnityLinker and IL2CPP accept them.
+With 0 unresolved references, UnityLinker passes and IL2CPP's C++ conversion writes 157 C++ files.
+The build then stops in the C++ compile ([below](#the-c-compile-wall)).
 
 ## AssetRipper
 
@@ -227,186 +251,238 @@ It does accept Rewind's assemblies from a fake Mono-layout game folder: the game
 The export then keeps the bodies; Assembly-CSharp's disassembly is identical apart from method and data RVAs.
 InControl changes on the way: AssetRipper renames 4 auto-property backing fields (`<UserData>k__BackingField` to `UserData`) and drops their `CompilerGenerated` attribute.
 The `.meta` GUIDs aren't stable between exports from different input folders: 986 of 1,001 differ between the two exports, so a pipeline must always export from the same layout.
+The pipeline's `rip` stage does this, from a fixed `work/rip-input`.
 
-What the downgrade will have to handle:
+What the downgrade has to handle, and the pipeline's `asset_rules.py` now does:
 
 - `ProjectSettings.asset` is serializedVersion 28, with 121 top-level keys that huntdown's 2018.2 project doesn't have.
 - `MultiplayerManager.asset` is new in Unity 6.
 - The scene's `LightingDataAsset` is serializedVersion 4.
 - `Assets/Plugins` holds 10 engine modules 2018.2 doesn't have (AndroidJNI, HierarchyCore, InputForUI, InputLegacy, Properties, Subsystems, TextCoreFontEngine, TextCoreTextEngine, UnityAnalyticsCommon, VFX), plus `System.Runtime.CompilerServices.Unsafe.dll` and `__Generated.dll`, to drop.
 
+## The route: IL with rule-based repairs
+
+Two ways to turn Rewind's output into a 2018.2 build were tried.
+
+The C# route compiles Rewind's C# against Unity 2018.2.
+`tools/assess/compile2018` did that with upstream Rewind and the 85f2 library, writing C# 7.3.
+Assembly-CSharp had 9,713 compile errors as it came out, and 213 errors in 88 methods after mechanical text fixes and a compat shim (InControl 327, Steamworks 96).
+Of the 2,100 Assembly-CSharp methods without markers that compiled, Roslyn's IL matched Rewind's in 1,734, matched but reordered in 143, and differed in 223.
+`tools/assess/bringup` then took the same route with the first 6000.0.60f1 library, through compile2018's fixes, to a Unity 2018.2 Windows Mono player, with a `__Rewind` stand-in that throws at each gap.
+In 20 build-and-run cycles, with 28 hand edits and source rules for array allocation, inlined events and class library internals, it got as far as `Main.init`: the player ran at 61 fps and drew nothing, stopped by an unidentified `new T[n]` in `FontsPack.staticInit`, which the rebuilt library now names.
+Each cycle found one blocker on the start path.
+
+The IL route keeps Rewind's IL and edits it with Cecil, as huntdown's rewriter does, and fills gaps with the repair engine (`tools/downgrade/repairs`, [repairs.md](repairs.md)).
+The pipeline took the IL route, for these reasons:
+
+- The repository can't ship the game's code, recovered or rewritten. A repair rule holds a method's name, a marker's kind and a short prefix of Rewind's text, hashes of the IL around it, and the IL for the one value or statement the marker hides. A C# replacement body restates the method, whoever typed it.
+- Where the marker's text already says what was lost, the rule gives only bindings ("t0 is local 0, a `double[]`"), and `Expr.cs` compiles Rewind's own marker text at build time. The game's arithmetic comes from the user's Rewind output, not from the repository.
+- Drift fails loudly. Each rule pins hashes of the IL around each site and of the method; if Rewind's output changes there, a marker the rule names is gone, or a new one appears, the build stops with a `REPAIR ERROR`. When Rewind recovers a method on its own, the rule fails with "Rewind recovers it now". This happened for real: the patches retired five of six rules, each checked against the native code before deletion.
+- The C# route adds a second translation, with its own errors (the 223 methods), to IL that is faithful where Rewind recovered it, and syntax-keyed edits drift with every change in how Rewind prints C#.
+
+The bring-up probe stays useful as a quick way to find the order in which the start path hits gaps.
+
 ## Risks outside the code
 
-Graphics.
-All the game's graphics are 12 PNG atlases of 4096×4096 RGBA, stored as TextAssets (`.bytes`) and decoded by the game at run time, plus one small 398×896 image.
-Each decoded atlas is 64 MB, 768 MB for all 12.
-The PS Vita has 512 MB of main memory, of which a game gets less, and 128 MB of video memory.
-So the game's texture loader must change: compressed and probably downscaled textures, made at build time, and a check of how many atlases are live at once.
-Decoding a 4096×4096 PNG on the Vita's CPU would also be slow, so the loader shouldn't decode at run time anyway.
-The CRT shader's default output size is 398×224, which suggests a low internal resolution; that helps the GPU side.
+These were guesses at the first measurement; each is now measured on the user's PS Vita.
 
-Audio.
-930 clips, 496 MiB as exported (the game's `resources.resource` is 517 MB): 835 16-bit 44.1 kHz WAV and 95 Ogg Vorbis, all set to Streaming.
-They need re-encoding and other load settings for the Vita, as huntdown's builder does.
+Texture memory.
+The game decodes twelve 4096×4096 PNG atlases into 64 MB textures at start and keeps all twelve, 768 MB.
+The console has about 240 MB for the whole game (160 MB of main memory and 80 MB of video memory), decoding one pack there takes about 5 seconds, and every scene draws from all twelve, so loading packs per scene saves nothing.
+The pipeline repacks the frames at build time into 1024×1024 RGBA 4444 pages grouped by the scenes that use them, plus 22 power-of-two textures for frames too big for a page, and an Atlas class loads each scene's pages when it starts ([textures.md](textures.md)).
+RGBA 4444 looked lossless on the console, where DXT5 showed artifacts.
+The worst level is the Cyberdyne Factory at about 108 MB, 72 MB of it three oversize layers; the four attract demos together, an upper bound, are 190 MB.
+The builder imports the pages as RGBA 4444 byte for byte like the editor, but no build of the port with these pages has run on the console yet.
+
+Meshes and the draw path.
+The game bakes four meshes per sprite frame at start, over 150,000 Mesh objects with fonts.
+On the console that takes about 2.5 minutes (145 to 152 s) of blocking startup and leaves 73 MB of main memory, and 14 MB once each mesh has been drawn ([mesh-test.md](mesh-test.md)).
+The game's draw path, one `Graphics.DrawMesh` per sprite, costs 14 to 41 µs per sprite, so a 60 fps frame holds about 390 sprites before any game logic.
+A batched path, one dynamic mesh filled each frame, draws 2,000 sprites in 11 ms.
+So the draw path is being replaced: rules R7 to R9 drop the per-frame meshes and send `unityDraw` to a `SpriteBatch` (on a branch, not merged yet).
+How many sprites the game draws per frame isn't measured.
+
+Sound.
+930 clips, 496 MiB as exported.
+The audio rule ([audio.md](audio.md)) streams music and ambience, keeps effects and voices in memory as HEVAG, mono and 32 kHz where that loses little: 317 MiB in the VPK and 31 MiB in main memory for the whole game.
+The game loads all 930 clips in its first frame, 15.75 s on the console before anything is on screen; a rule that loads them with `Resources.LoadAsync` behind the logo and menus, at 60 fps, is in progress.
 
 Shaders.
-Three small custom unlit shaders (`Unlit/CRTShader`, `Unlit/NormalShader`, `Unlit/ColorTransformShader`), compiled for D3D11 only.
-They have to be rewritten for the Vita; they are short.
+The three D3D11-only shaders are rewritten for 2018.2 from the game's compiled programs and match the originals on the console ([shaders.md](shaders.md)).
+The faithful `Unlit/CRTShader` takes 15.69 ms per frame at 960×544, nearly a whole 60 fps frame, and a cheaper variant 6 ms; but the game's CRT option doesn't use that shader, it draws two NormalShader passes, about 3 ms.
 
 Speed.
-Unknown, and the hardest to predict.
-Haxe-generated code uses doubles and dynamic calls throughout, and the Vita has a 4-core ARM Cortex-A9.
-Huntdown, a game written for Unity, needed several targeted rewriter passes and compat code to hold 60 fps.
+Still unknown, and the hardest to predict.
+Haxe-generated code uses doubles and dynamic calls throughout, and the Vita has a 4-core ARM Cortex-A9 at 444 MHz.
+None of the game's own code has run on the console yet.
 
 Platform services and input.
-Steamworks would be stubbed as huntdown does, and the Epic and GOG managers with it.
-InControl could be repaired or replaced; only five Assembly-CSharp files use it (`PlayerActions`, `Controls`, `MainMenu`, `Platform`, `UnityMain`), so a small input layer for the Vita looks cheaper than repairing its 649 gap methods.
+Done in the platform layer, not tested in a player: InControl's 19 types the game uses become T2DCompat's own over Unity's Input, the stores are offline, the game starts without Steam, and the saves stay BinaryFormatter files with a binder for the renamed assembly ([platform.md](platform.md)).
 
 ## How much hand work the code side needs
 
-This covers getting the game's code to build and play correctly as a Unity 2018.2 Windows test player, as huntdown checks its own: recovery, repair, API rules, Steamworks and input, verification.
-It doesn't cover the Vita-specific work in the previous section.
+This covers getting the game's code to build and play correctly on the PS Vita: recovery, repair, API rules, the C++ compile, the Vita code rules in progress, bring-up and verification.
+The first estimate, 15 to 30 person-weeks with Rewind improved first, covered the same minus the Vita-specific work.
+The work since then took one day of sessions; the estimate below is still in person-weeks of someone doing the remaining work by hand.
 
-### Stage 1: tool work first
+### Done
 
-1. A signature library for 6000.0.60f1: install that Unity with its Windows IL2CPP module, make a Master build (and a Release one) of a test project, dump `GameAssembly.pdb`'s public symbols and run `rewind-lab sig-build`. Rewind's `pdbsyms.py` for the symbol dump isn't in its repository, so that needs writing. 2 to 4 days.
-2. Patches to Rewind for the high-value issues in [rewind-issues.md](rewind-issues.md): direct calls to `Array::NewSpecific` (issues 1 and 15), bits to double (2), the static-field write barrier (3), FP negation (13), `double[]` stores (14), 2-byte bool stores (16), tail-merged virtual calls (17) and 8-byte struct returns (19). 1 to 2 weeks for someone new to Rewind's code.
-3. Re-measure, and repeat the spot-check on the methods that changed. 2 days.
+- Stage 1 of the first estimate: the 6000.0.60f1 library and the Rewind patches, 1.5 to 3 weeks there.
+- The asset-table initializers: complete after the library and patches, so the generator built for them (commit `cf99d96`) was dropped.
+- The API rules: the shims, the platform layer and the fold-back passes, 0 unresolved references.
+- InControl replaced, Steamworks, Epic and GOG offline, saves.
+- The repair engine, its tools and drift checks; one rule and one pattern are left after the patches.
+- The texture repack, the Atlas runtime and rules R1 to R6, RGBA 4444 in the builder, the shaders and the audio rule.
 
-That is 1.5 to 3 weeks.
-From Rewind's recovery report, 243 of Assembly-CSharp's 854 gap methods have no reasons besides the ones these fixes address.
-Counting "address without a typed base" as part of the static-field barrier, as it is in the examples looked at, the figure is 429.
-Which of the two holds wasn't checked, so 410 to 585 gap methods would be left outside the initializers, against 824 now.
-The fixes would also remove the FP negation error and most of the `SingleToInt32Bits` sites.
+### The C++ compile wall
 
-### Stage 2: hand repair and the rest
+IL2CPP compiles `Recovered.T2D`'s C++ in 20 `Bulk_Recovered.T2D_*.cpp` files with psp2snc.
+With the patches, compiling each with IL2CPP's own arguments: 1 file compiles, 1 compiles at `-O0` but makes psp2snc exit 1 at `-O3`, and 18 fail with 205 errors in 80 methods ([build.md](build.md#where-it-stands)).
 
-Assumed time per gap method, by its marker sites: 20 minutes for 1 to 5 sites, 1 hour for 6 to 20, 2 hours for 21 to 50, 4 hours above 50.
-That covers reading the native code in Ghidra, writing the fix and checking it.
-The site counts include sites stage 1 would fix, so the figures after stage 1 lean high.
+- 126 are the write barrier's card index (`address >> 12 & 0x1FFFFF`) in 53 methods, which the repair engine's barrier pattern didn't remove.
+- 67 are object references in `int64` locals and 6 are `int32` values where an object is expected.
+- 6 are other typing errors: three missing downcasts, a `Color` passed as a `Vector3` twice, a wrong return type.
+- 76 of the 80 methods have Rewind gaps anyway; the 4 without are `ElevatorDoors.awake`, `FutureWar3.setupScene`, `UnityMain.OnRenderImage` and `Cutscene.draw`.
 
-| Gap methods outside the initializers | Now | After stage 1, low | After stage 1, high |
-| --- | --- | --- | --- |
-| 1 to 5 sites | 573 | 237 | 343 |
-| 6 to 20 | 170 | 115 | 161 |
-| 21 to 50 | 54 | 40 | 54 |
-| over 50 | 27 | 18 | 27 |
-| Total | 824 | 410 | 585 |
-| Hours at the rates above | 577 | 346 | 491 |
+Before the patches there were at least 800 errors, with every file failing.
 
-| Work | Without stage 1 | With stage 1 |
+### The gap methods
+
+`Recovered.T2D` keeps 253 gap methods with 1,640 marker sites after the code stage (`artifacts/downgrade/code-report.txt`).
+[repairs.md](repairs.md) measured the repairs it prototyped at about 2 to 5 minutes for a mechanical site and 15 minutes for an invoker call or a silent error, and proposed 10 minutes, 30 minutes, 1 hour and 2 hours per method by its sites.
+The first assessment's rates were twice that.
+Nine methods is a small sample, chosen with native listings already made, so both are given:
+
+| Gap methods by marker sites | Methods | Sites | At 10 min, 30 min, 1 h, 2 h | At 20 min, 1 h, 2 h, 4 h |
+| --- | --- | --- | --- | --- |
+| 1 to 5 | 156 | 395 | 26 h | 52 h |
+| 6 to 20 | 84 | 674 | 42 h | 84 h |
+| 21 to 50 | 8 | 226 | 8 h | 16 h |
+| over 50 | 5 | 345 | 10 h | 20 h |
+| Total | 253 | 1,640 | 86 h | 172 h |
+
+The largest are `SaveStats.saveStats` (119 sites), `FreewayChase..cctor` (60), `ControlsExplanation.setupScene` (58), `GameObject..ctor` (57) and `Biker..ctor` (51).
+Re-checks after each Rewind change add a little: the first cost 5 minutes for one rule out of eight.
+
+### The estimate
+
+| Work | State | Person-weeks left |
 | --- | --- | --- |
-| Stage 1 | | 1.5 to 3 |
-| Gap methods, at the rates above give or take 30% | 10 to 19 | 6 to 16 |
-| Asset-table initializers, by a generator that reads the native code's constants, not by hand | 1 to 2 | 0.5 |
-| API rules: redirects, shims, the binding fold-back pass, `OnPreRender` and the sound loader | 1.5 to 2.5 | 1.5 to 2.5 |
-| Invalid IL in marker-free methods: a base-constructor pass, private access, int64 for native int, greps for the silent-error patterns | 1 | 1 |
-| InControl replaced by a small input layer | 1 to 2 | 1 to 2 |
-| Steamworks, Epic and GOG stubs | 0.5 | 0.5 |
-| Verification: ILVerify clean, a Windows 2018.2 player, a play-through of every level against the original, fixing what it finds | 3 to 5 | 3 to 5 |
-| Total, person-weeks | 18 to 32 | 15 to 30 |
+| The C++ compile wall: the barrier on locals, object references in int64 locals, the 4 methods without gaps | next | 0.5 to 1.5 |
+| 253 gap methods, 1,640 sites, at the two rates above | engine built | 2 to 4.5 |
+| 70 noted-only methods, unverifiable IL, int64 for native int | open | 0.5 to 1 |
+| Vita code rules: SpriteBatch (R7 to R9), async sound loading, the texture rules on the console | in progress | 1 to 2 |
+| Bring-up on the console: the platform layer, the start path, crashes | not started | 1 to 2 |
+| Verification: a play-through of every level against the original, fixing what it finds | not started | 3 to 5 |
+| Total | | about 8 to 16 |
 
-On paper stage 1 saves 2 to 3 weeks, and its upper bound overlaps the other route's.
-It is still the better order: a fix in the tool is applied the same way everywhere, where every hand repair carries its own risk of a mistake, and it finds the FP negation errors, which hand repair of gap methods wouldn't.
+Without the Vita code rules and the console bring-up, the part the first estimate covered is about 6 to 12 person-weeks, against its 15 to 30.
 
-What would change the estimate:
+What the range depends on:
 
-- How far stage 1 goes. The remaining gaps cluster too: `0x180002D50` in 83 methods, indirect calls in 58, string indexing and `IsInst` in 34 each, `Memcpy` in 7 more. Each pattern Rewind learns turns many methods complete at once, and that is cheaper than repairing them one by one.
-- The rate per method. It's the largest unknown, and nobody has repaired a method here yet.
-- Whether Rewind's C# compiles. If Assembly-CSharp's C# (Rewind can write it for an older C# version with `--csharp`) compiles against 2018.2 after the fixes, the port can keep Assembly-CSharp as source and repair it in C#, which is faster than patching IL. That wasn't tried.
-- How many silent errors play-testing turns up. The FP negation bug was found in 3 of the 19 methods checked by hand.
-- An upstream Rewind release with these fixes, or a 6000.0.60f1 library, would remove most of stage 1.
-- On the Vita side, if texture memory forces changes to how the game draws and not just how it loads, the code work grows.
+- The repair rate. It is measured on nine methods only; the high end assumes the first assessment's rates.
+- More Rewind patches. The gaps still cluster: the barrier on untyped objects (about 80 methods), `Memcpy` (39), references used as numbers (35), string indexing (26), lost stack arguments (17). Each pattern Rewind learns completes many methods at once and also clears C++ errors.
+- Whether the C++ wall falls to a pattern or patch for the barrier and one for int64 object locals, or needs method by method work.
+- How many silent errors play-testing turns up.
+- The game's speed on the console, which nothing has measured. If the Haxe code itself is too slow, rewriter passes for hot paths are extra work this range doesn't include.
+- How many sprites the game draws per frame, for the batched path.
 
 ## Is the port realistic?
 
-Yes, with that much work.
-Nothing found is a blocker: the code comes back faithful where Rewind recovers it, it loads in huntdown's Cecil, the assets export cleanly, the engine-facing code is one MonoBehaviour, and the public API gap is small.
-The work is in the gaps, which a Master build makes large, and in proving the recovered code right.
-The Vita-side risks, texture memory and speed, are the ones that could still stop it, and they can be measured before most of the code work is done.
+Yes, with more measured behind it than at the first assessment.
+Rewind recovers 91% of Assembly-CSharp whole and its known silent errors are fixed or marked, every reference resolves against 2018.2, UnityLinker and IL2CPP's conversion pass, and the pipeline builds every data file of the player.
+On the console, the texture plan fits the worst level in about 108 MB of the roughly 240 MB a game gets, sound takes 31 MiB, and the mesh problem has a measured replacement.
+What could still stop it is speed: the game's own code hasn't run on the console, and Haxe's doubles and dynamic calls on a Cortex-A9 are the open question.
+The work left is in the gaps, the C++ compile, and proving the recovered code right in play.
 
-The first steps, not started:
+Next steps:
 
-1. Build the 6000.0.60f1 signature library and re-run Rewind, to see how much of the gap was the library.
-2. Recheck the Rewind issues on its newest commit, patch the high-value ones locally or file them, and re-measure.
-3. Try compiling Rewind's Assembly-CSharp C# against Unity 2018.2's libraries, to choose between a source route and huntdown's IL route.
-4. On a PS Vita, load one of the game's atlases as a compressed texture built offline, and measure memory and load time, before investing in code repair.
+1. Clear the C++ compile wall, so the build writes a code module and a VPK.
+2. Repair the gap methods on the start path (`UnityMain`, `Main.init` and what they call), in the order the console or the bring-up probe hits them, and get the first frames on the console. That is the first measurement of speed.
+3. Merge SpriteBatch and the async sound loading, and count sprites per frame in real scenes.
+4. Check the RGBA 4444 pages and the memory per level on the console.
+5. Repair the remaining gap methods, and add Rewind patches or engine patterns where a cluster pays for it (the invoker decoder and `__store2` pattern in [repairs.md](repairs.md)).
+6. File the Rewind issues upstream with their repros.
+7. Play through every level against the PC game.
 
 ## Reproducing
 
+[build.md](build.md) has the setup and the pipeline: `uv run build.py` installs everything (Rewind with the 22 patches, the 60f1 library, Unity 2018.2's files) and runs the stages, and `pipeline.py recover` writes Rewind's assemblies to `work/recover/assemblies`.
+The commands below are the assessment's own measurements, for Git Bash on Windows, after setup and `recover`.
 Paths are relative to the repository; `work/` holds every output.
-The commands are for Git Bash on Windows.
 
 ```sh
 GAME="/c/Program Files (x86)/Steam/steamapps/common/Terminator 2D NO FATE"
 DATA="$GAME/Terminator 2D NO FATE_Data"
 DOTNET=tools/external/dotnet10/dotnet.exe
 NUGET="--source https://api.nuget.org/v3/index.json"
-REWIND=tools/external/rewind/src/Rewind.Cli/bin/Release/net10.0/rewind.exe
 LAB=tools/external/rewind/src/Rewind.Lab/bin/Release/net10.0/rewind-lab.exe
+SIG=tools/rewind/signatures/unity-6000.0.60f1-windows-x64.sig
 STATS="$DOTNET work/bin/RewindStats/RewindStats.dll"
-U2018=../huntdown-vita/tools/external/unity-2018.2.19f1/Editor/Data  # extracted by huntdown-vita's setup --vita
-OUT=work/rewind-steam/out/assemblies
+U2018=tools/external/unity-2018.2.19f1/Editor/Data
+OUT=work/recover/assemblies
+mkdir -p work/stats work/ilverify work/apigap
 
-# .NET 10 SDK (dotnet-install.ps1 from https://dot.net/v1/dotnet-install.ps1)
-powershell -ExecutionPolicy Bypass -File dotnet-install.ps1 -Version 10.0.404 -InstallDir tools/external/dotnet10
-
-# Rewind at the commit used, and the measuring tool
-git clone https://github.com/ratman-bit/Rewind-IL2CPP-Decompiler tools/external/rewind
-git -C tools/external/rewind checkout ea8e3050b2f8a0bb0fc64df0720b63998646eb58
-$DOTNET build -c Release tools/external/rewind/Rewind.slnx $NUGET
+# The measuring tool, and rewind-lab from setup's patched Rewind tree
 $DOTNET build -c Release tools/assess/RewindStats -o work/bin/RewindStats $NUGET
+$DOTNET build -c Release tools/external/rewind/src/Rewind.Lab $NUGET
 
-# Rewind
-$REWIND info "$GAME" > work/rewind-steam/info.txt
-$REWIND dump "$GAME" -o work/rewind-steam/dump
-$REWIND decompile "$GAME" -o work/rewind-steam/out > work/rewind-steam/decompile.log
-$LAB sig-apply tools/external/rewind/signatures/unity-6000.0.85f2-windows-x64.sig "$GAME" > work/rewind-steam/sig-apply-6000.0.85f2.txt
+# Coverage and gap reasons; compare two runs
+$STATS stats $OUT work/stats/methods-all.tsv > work/stats/stats-all.txt
+$STATS stats $OUT work/stats/game.tsv Assembly-CSharp InControl Steamworks > work/stats/stats-game.txt
+python -I tools/assess/compare_stats.py <before stats.txt> work/stats/stats-all.txt
 
-# Coverage and gap reasons
-$STATS stats $OUT work/rewind-steam/methods-all.tsv > work/rewind-steam/stats-all.txt
-$STATS stats $OUT work/rewind-steam/methods-Assembly-CSharp.tsv Assembly-CSharp > work/rewind-steam/stats-Assembly-CSharp.txt
-$STATS stats $OUT work/rewind-steam/methods-InControl.tsv InControl > work/rewind-steam/stats-InControl.txt
-$STATS stats $OUT work/stats/game.tsv Assembly-CSharp InControl Steamworks
+# What the library identifies
+$LAB sig-apply $SIG "$GAME" > work/stats/sig-apply-6000.0.60f1.txt
 
-# Cecil: load with 0.11.6, round trip; then with huntdown's 0.10.0-beta6
+# The library's test builds (Unity 6000.0.60f1 and MSVC 14.50 in tools/external), then pdbsyms.py
+# on each build's GameAssembly.pdb and rewind-lab sig-build over the four symbols.tsv
+python -I tools/assess/sigtest/build_sigtest.py tools/external/unity-6000.0.60f1/Editor/Data work/sigbuild \
+  --msvc tools/external/msvc-14.50 master release master-size master-nogc
+
+# The Rewind repros: build once (10 to 25 minutes), then check a Rewind build
+python -I tools/assess/rewind-repros/build_repros.py
+python -I tools/assess/rewind-repros/check_repros.py tools/external/rewind/src/Rewind.Cli/bin/Release/net10.0 --report work/rewind-repros/results.md
+
+# Cecil: load and round trip with 0.11.6
 for a in Assembly-CSharp InControl Steamworks; do $STATS load $OUT $a; $STATS roundtrip $OUT $a work/roundtrip/cecil-0.11; done
-CECIL10=../huntdown-vita/tools/external/mono.cecil-0.10.0-beta6/Mono.Cecil.dll
-mkdir -p work/bin/CecilOldLoad && cp "$CECIL10" work/bin/CecilOldLoad/
-/c/Windows/Microsoft.NET/Framework64/v4.0.30319/csc.exe -nologo -langversion:5 -out:work/bin/CecilOldLoad/CecilOldLoad.exe -r:"$CECIL10" tools/assess/CecilOldLoad/CecilOldLoad.cs
-work/bin/CecilOldLoad/CecilOldLoad.exe $OUT work/roundtrip/cecil-0.10 Assembly-CSharp InControl Steamworks
 
-# ILVerify (Steamworks and InControl alike, without the exclude file)
+# ILVerify
 $DOTNET tool install dotnet-ilverify --tool-path work/tools/ilverify $NUGET
 work/tools/ilverify/ilverify.exe $OUT/Assembly-CSharp.dll -r "$OUT/*.dll" --exclude-file work/ilverify/acs-exclude.txt --verbose > work/ilverify/Assembly-CSharp.txt
 python -I tools/assess/ilverify_summary.py work/stats/game.tsv work/ilverify/Assembly-CSharp.txt work/ilverify/InControl.txt work/ilverify/Steamworks.txt
 
-# API gaps against Unity 2018.2
-for a in Assembly-CSharp InControl Steamworks; do
-  $STATS apigap $OUT $a "$U2018" work/apigap/$a.tsv > work/apigap/$a.txt
-  $STATS xcheck $OUT $a "$U2018" > work/apigap/$a.xcheck.txt
-done
+# API gaps against Unity 2018.2, before the code stage's rules
+for a in Assembly-CSharp InControl Steamworks; do $STATS apigap $OUT $a "$U2018" work/apigap/$a.tsv > work/apigap/$a.txt; done
 python -I tools/assess/apigap_categories.py work/apigap/Assembly-CSharp.tsv work/apigap/InControl.tsv work/apigap/Steamworks.tsv --stats work/stats/game.tsv > work/apigap/categories.txt
 
-# AssetRipper: the game as it is, then a Mono-layout copy with Rewind's assemblies
-python -I tools/assess/rip_assetripper.py "$GAME" work/assetripper/export-stubs work/assetripper/export-stubs.log
-M="work/assetripper/mono-game/Terminator 2D NO FATE_Data"
-mkdir -p "$M/Managed" && touch "work/assetripper/mono-game/Terminator 2D NO FATE.exe"
-(cd "$DATA" && cp -r Resources *.json app.info boot.config globalgamemanagers* level0 resources.* sharedassets0.assets "$OLDPWD/$M/")
-cp $OUT/*.dll "$M/Managed/"
-python -I tools/assess/rip_assetripper.py work/assetripper/mono-game work/assetripper/export-rewind work/assetripper/export-rewind.log
+# The gap methods left after the code stage, by marker sites
+uv run tools/downgrade/pipeline.py code
+grep -oE 'sites=[0-9]+$' artifacts/downgrade/code-report.txt | cut -d= -f2 | \
+  awk '{n++; s+=$1; b=($1<=5)?1:($1<=20)?2:($1<=50)?3:4; c[b]++} END{print n, s, c[1], c[2], c[3], c[4]}'
+
+# The C# route: Rewind's C# 7.3 against 2018.2, then the comparison with Rewind's IL
+REWIND=tools/external/rewind/src/Rewind.Cli/bin/Release/net10.0/rewind.exe
+$REWIND decompile "$GAME" -o work/compile2018/rewind73 --csharp 7.3 --assembly Assembly-CSharp --assembly InControl --assembly Steamworks --signatures $SIG
+sh tools/assess/compile2018/run.sh pass1 work/compile2018/rewind73/src work/compile2018/pass1
+sh tools/assess/compile2018/run.sh pass2 work/compile2018/rewind73/src work/compile2018/pass2
+sh tools/assess/compile2018/run.sh emit work/compile2018/pass2 work/compile2018/emit
 
 # Ghidra spot-check (il2cpp_usages.py needs pefile)
+$REWIND dump "$GAME" -o work/rewind-steam/dump
 python -I tools/assess/ghidra/dump_to_tables.py work/rewind-steam/dump/dump.cs work/ghidra/tables
 python -I tools/assess/ghidra/il2cpp_usages.py "$GAME/GameAssembly.dll" "$DATA/il2cpp_data/Metadata/global-metadata.dat" work/ghidra/tables/types.tsv work/ghidra/tables
 cmd //c mklink /J "C:\t2dghidra" "$(cygpath -w work/ghidra)"   # Ghidra rejects project paths containing .t3
 analyzeHeadless C:/t2dghidra/proj T2D -import "$GAME/GameAssembly.dll" -noanalysis
 analyzeHeadless C:/t2dghidra/proj T2D -process GameAssembly.dll -noanalysis -scriptPath tools/assess/ghidra \
-  -postScript ApplyDumpAndDecompile.java C:/t2dghidra/tables work/rewind-steam/sig-apply-6000.0.85f2.txt work/spotcheck/targets.tsv work/spotcheck
+  -postScript ApplyDumpAndDecompile.java C:/t2dghidra/tables work/stats/sig-apply-6000.0.60f1.txt work/spotcheck/targets.tsv work/spotcheck
 ```
 
-Ghidra rejects project paths containing `.t3`, so `C:\t2dghidra` is a junction to `work\ghidra`; `rmdir C:\t2dghidra` removes it and leaves `work\ghidra` alone.
+The first measurement ran upstream Rewind with `rewind decompile "$GAME" -o work/rewind-steam/out` and the 85f2 library; `tools/setup.py` builds the patched one, and `REWIND_NO_*` switches turn single patches off.
+The console tests have their own READMEs: `tools/assess/vita-texture-test`, `tools/assess/vita-mesh-test`, `tools/downgrade/audio/vita-audio-test` and the shader test in [shaders.md](shaders.md); each runs inside the shared `vita-device` lock.
+The bring-up probe's commands are in `tools/assess/bringup/README.md`.
 
+Ghidra rejects project paths containing `.t3`, so `C:\t2dghidra` is a junction to `work\ghidra`; `rmdir C:\t2dghidra` removes it and leaves `work\ghidra` alone.
 `targets.tsv` has one target per line: an id, a tab, and a method's full name (`Type::Method`) or an address.
 The script writes `<id>-<name>.c` (Ghidra's decompile) and `<id>-<name>.asm` (the annotated listing) per target.
 
@@ -419,9 +495,18 @@ They read the game and Rewind's output and write only under `work/`.
 | --- | --- |
 | `RewindStats/Program.cs` | .NET 10 and Mono.Cecil 0.11.6. `stats` counts complete, gap and placeholder bodies per assembly from Rewind's markers, with gap reasons, cause buckets, marker sites, the largest methods and the unidentified functions. `load` reads every body and resolves every reference. `roundtrip` writes a module back and re-reads it. `apigap` lists what Unity 2018.2's engine and `unityaot` lack; `xcheck` cross-checks it with Cecil's own resolver. `compare` diffs two builds of a module by structure. `il` prints a method's IL, `members` a type's members. |
 | `CecilOldLoad/CecilOldLoad.cs` | Loads, resolves and round-trips assemblies with huntdown's Mono.Cecil 0.10.0-beta6, built as huntdown builds its rewriter (C# 5, .NET Framework csc). |
+| `compare_stats.py` | Puts two `stats` reports side by side. |
+| `gap_buckets.py`, `note_whatif.py` | Gap methods by marker sites with the first assessment's hours; how many methods a fix would complete, from Rewind's notes. |
 | `apigap_categories.py` | Groups `apigap` rows into the categories above, and with `--stats` counts how many of the using methods already have gaps. |
 | `ilverify_summary.py` | Splits ILVerify's errors into gap methods, marker-free methods and noted-only methods, using `stats`' table. |
 | `rip_assetripper.py` | Runs AssetRipper 2.0.0 headless with huntdown's settings and a target version, and checks that it took the version. |
+| `sigtest/` | Builds a test project as editor-free IL2CPP Windows players in four configurations, replays the C++ build with a chosen MSVC, for the signature library. |
+| `pdbsyms.py`, `nsisbi_extract.py` | Dumps a PDB's public symbols for `rewind-lab sig-build`; unpacks Unity 6's module installers. |
+| `rewind-repros/` | A game-free repro per Rewind issue, its editor-free Master build, and a PASS/FAIL check of a Rewind build. |
+| `compile2018/` | Compiles Rewind's C# against Unity 2018.2, classifies the errors, applies the mechanical fixes and compares the result's IL with Rewind's. |
+| `bringup/` | Runs compile2018's output as a Unity 2018.2 Windows player and records each blocker. |
+| `atlas-usage/` | Which frames of which atlas each scene draws, and the memory of the repack schemes. |
+| `vita-texture-test/`, `vita-mesh-test/` | PS Vita apps that measure textures, and the game's meshes and draw path, with synthetic data. |
 | `ghidra/dump_to_tables.py` | Turns Rewind's `dump.cs` into method, type and field tables for Ghidra. |
 | `ghidra/il2cpp_usages.py` | Decodes the metadata-usage globals and the per-type field-offset table straight from the binary and metadata, without Rewind, as an independent check. |
 | `ghidra/ApplyDumpAndDecompile.java` | Headless Ghidra script: labels methods, metadata usages and Rewind's identified runtime helpers, builds class structures, and writes a decompile and an annotated listing per target. |
@@ -429,5 +514,5 @@ They read the game and Rewind's output and write only under `work/`.
 
 ## Rewind issues
 
-[rewind-issues.md](rewind-issues.md) holds 20 draft issues for Rewind found during this assessment, none filed yet.
-Issue 6 was corrected while writing this: of the 13 noted-only methods, 8 have invalid IL, and in the other 5 (`Main.update` among them) the unrecovered part is silently left out.
+[rewind-issues.md](rewind-issues.md) holds 21 draft issues for Rewind, each with a game-free repro and a Status line; none is filed yet.
+Upstream main is still `ea8e305`, so the fixes exist only as this repository's patches.
