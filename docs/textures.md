@@ -153,7 +153,7 @@ The counts are those of the Steam release, build 24040403, as Rewind recovers it
 | R2 | `BBSplash.update` | one `call BitmapData.loadTexturePacks(int)` | `call Atlas.SplashStep(int)`, which loads nothing |
 | R3 | `AssetsEmbed.staticInit` | `ldsfld AssetsPack.bblogotexnumber; call loadTexturePacks` | `ldstr "app:BBSplash"; call Atlas.Enter(string)`, since Main makes the BBSplash itself |
 | R4 | `BitmapData.loadTexturePacks(int)` | `Resources.Load<TextAsset>("texturepack/TexturePack" + n)` and `ImageConversion.LoadImage` | a new body: `ldarg.0; call Atlas.Preload(int); ret` |
-| R5 | `BitmapData.unityDraw`, `unityDrawClippedWidth` | two `ldsfld texpack; ldloc <page>; ldelem Texture2D` each | in place: `ldloc <page>; call Atlas.Get(int); nop` |
+| R5 | `BitmapData.unityDraw`, `unityDrawClippedWidth`, unless the method calls `T2DCompat.SpriteBatch` | two `ldsfld texpack; ldloc <page>; ldelem Texture2D` each | in place: `ldloc <page>; call Atlas.Get(int); nop` |
 | R6 | every `call Transition.getApp(int)` | 2 sites, both in `Transition.update` | after the call: `dup; call Atlas.EnterApp(object)` |
 | R6 | `GameMap.loadFile(int, int)` | static, two int parameters | at its start: `ldarg.0; ldarg.1; call Atlas.EnterMap(int, int)` |
 | R6 | `Game.loadScriptByLevelID(int)` | static, one int parameter | at its start: `ldarg.0; call Atlas.EnterLevel(int)` |
@@ -165,10 +165,13 @@ R1 also makes the 2,436 stores an older Rewind dropped from those tables irrelev
 After R4 and R5, nothing reads `BitmapData.texpack` but `initBitmapData`, which allocates it, so that method's Rewind gap around the allocation no longer matters for textures.
 The trims (`staticInit10` to `staticInit13`) and the sheet sizes stay, since trims don't change.
 
-R7, optional and not written: make `CreateMultiMeshFrames` bake a frame's four meshes on its first draw instead of all at start.
-`Sprites.loadFromID(-1)` builds meshes for about 34,500 sprite frames at start, over 150,000 Mesh objects with fonts and `Res` images.
-A parallel task measures what that costs on the console; R7 waits for its numbers.
-The rule would replace the body with an array of nulls the length of `tframes.uvx`, and have `unityDraw` and `unityDrawClippedWidth` fill `meshes[frame * 4 + variant]` through a compat helper before they use it.
+In the pipeline, R5 changes nothing: the sprite renderer's R8 ([drawing.md](drawing.md#the-rules)) runs first and replaces both draw methods' bodies with calls into `T2DCompat.SpriteBatch`, which takes the page from `Atlas.Get` itself.
+`AtlasDraws` skips a method that calls SpriteBatch, and `DowngradeAssemblies.OptionalPasses` lists it, so its 0 sites don't fail the run.
+On Rewind's output alone, as `check/check_rules.py` runs it, R5 still makes its four edits.
+
+R7, which was planned here as a lazy bake of a frame's four meshes on its first draw, is written as part of the sprite renderer ([drawing.md](drawing.md#the-rules)).
+It does less: `CreateMultiMeshFrames` returns an array of `tframes.uvx.Length * 4` nulls, and no mesh is baked at all, since R8's SpriteBatch builds each quad from the frame fields.
+That takes away the 150,000 Mesh objects `Sprites.loadFromID(-1)` made at start.
 
 ### Checking the rules
 
@@ -198,10 +201,11 @@ These changes are in the commit "Wire the texture pages into the pipeline", apar
 - `DowngradeAssemblies.Passes` adds, after `ListRewindGaps`, `new Pass("atlas", Scope.Game, AtlasTables)`, then `AtlasSplash`, `AtlasPackLoads`, `AtlasDraws` and `AtlasSceneHooks`. They go in the list itself, not in an array from AtlasPatches.cs, because the order of static initialisers across partial files is not defined.
 
 The atlas passes must run after any pass that replaces a whole method body among their targets.
-`unityDraw` has 48 Rewind gap sites and `GameMap.loadFile` 3; if a repair rewrites either method, the atlas pass after it must still find its pattern, or it throws and says which.
+The sprite renderer's R8 is one: it replaces `unityDraw` and `unityDrawClippedWidth` before the atlas passes, and `AtlasDraws` then skips them.
+`GameMap.loadFile` has 3 Rewind gap sites; if a repair rewrites it, `AtlasSceneHooks` must still find its pattern, or it throws and says which.
 
 With this wiring, `uv run tools/downgrade/pipeline.py project` runs through in 43 to 52 seconds.
-The rewriter's log shows `atlas: AtlasTables=6 AtlasSplash=3 AtlasPackLoads=1 AtlasDraws=4 AtlasSceneHooks=4`.
+The rewriter's log shows `atlas: AtlasTables=6 AtlasSplash=3 AtlasPackLoads=1 AtlasDraws=4 AtlasSceneHooks=4`; with the sprite renderer's rules in the pipeline, `AtlasDraws=0`.
 Its problem count stays at 245, none of them in a method the rules change.
 The project gets `Assets/Resources/atlas` with 106 pages, the two tables and their metas, and no `texturepack` folder.
 The pages are PNGs; `T2D_ATLAS_PAGES=raw` makes them raw `.bytes` TextAssets instead.

@@ -119,8 +119,9 @@ The last two stores make the next `fillRect` or `colorTransform` set its materia
 R7 leaves the array, all nulls, because the BitmapData constructor stores it in `meshes` and nothing reads it any more.
 `CreateMultiMesh`, for render textures and plain textures, still makes its four meshes; there are few of them, and nothing draws them now either.
 
-The passes go into `DowngradeAssemblies.Passes` before `ListRewindGaps`, in the order R8, R7, R9.
-R8 goes first so that R7's check that nothing reads `meshes` sees the new bodies, and both go before `ListRewindGaps` so that it doesn't report the gaps of the bodies they replace.
+The passes go into `DowngradeAssemblies.Passes` before `TypeGapValues` and `ListRewindGaps`, in the order R8, R7, R9.
+R8 goes first so that R7's check that nothing reads `meshes` sees the new bodies, and both go before the gap passes so that `TypeGapValues` doesn't type values in the bodies they throw away and `ListRewindGaps` doesn't report their gaps.
+`TypeGapValues` changes none of the four methods R7 to R9 take on Rewind's current output, and the code stage writes the same `Recovered.T2D` with it before or after these passes.
 `pipeline.REWRITER_SOURCES` adds `SpriteBatchPatches.cs`, and `pipeline.compat_sources()` adds `spritebatch/compat/*.cs` to T2DCompat.
 
 ### The atlas rules and the gap repairs
