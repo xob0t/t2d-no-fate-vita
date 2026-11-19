@@ -19,7 +19,7 @@ game) hold vita-build too while they read the PS Vita build, so no build rewrite
 upload. They hold it as a reader (a "reader" line in the lock file): a reader and pc-build don't wait
 for each other, since a PC build never writes the PS Vita build; a vita-build taker (a build or
 quickcode) waits for the reader as for any holder, and wait vita-build too. So a job that writes the
-PS Vita build (pipeline.py build --platform vita, package, quickcode) runs under vita-build, never
+PS Vita build (pipeline.py build, package) runs under vita-build, never
 pc-build: pipeline.py stops otherwise. "Reader" is only about pc-build: two readers still exclude
 each other, as two holders of one lock do (a seed during a 30-minute install waits, then stops).
 
@@ -32,13 +32,12 @@ command and everything it starts run in a Windows job that ends with lock.py: if
 unsupervised, and the lock, which names lock.py's process, counts as free once that process is gone
 (take removes it). The command sees T2D_LOCKS, the names of all the runs it is in, which
 pipeline.py and vita.py check (held_here, ours: a sync inside `lock.py run vita-build`
-is the build's own), and T2D_LOCK=<name>, the innermost run's, which build.py checks. For example, a
-Windows Mono player (pipeline.py's default platform is the PS Vita, whose stages run the same way
-under vita-build):
+is the build's own), and T2D_LOCK=<name>, the innermost run's, which build.py checks. pipeline.py
+builds only the PS Vita player now (it has no --platform), so its stages run under vita-build. For
+example, a project and a build of it:
 
-    uv run tools/downgrade/lock.py run pc-build "user: mono build" --wait 3600 -- \\
-        bash -c "uv run tools/downgrade/pipeline.py project --platform windows && \\
-                 uv run tools/downgrade/pipeline.py build --platform windows"
+    uv run tools/downgrade/lock.py run vita-build "user: rebuild" --wait 3600 -- \\
+        bash -c "uv run tools/downgrade/pipeline.py project && uv run tools/downgrade/pipeline.py build"
 
 The time spent waiting counts against whatever limits the caller's own run time; docs/vita.md ("Code
 changes without a full build") says how to queue in short steps with wait.

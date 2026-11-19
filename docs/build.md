@@ -152,7 +152,7 @@ In `Recovered.T2D`, the rewriter (`Rewrite` in `DowngradeAssemblies.cs`) changes
 2. The platform layer's pass ([platform](platform.md)).
 3. The fold-back passes ([foldback](../tools/downgrade/foldback/README.md)).
 4. The retargeting of type references to 2018.2 and T2DCompat.
-5. `Passes`, in list order: the member redirects; the sprite renderer's R8, R7, R9 ([drawing](drawing.md)); `TypeGapValues`, then `ListRewindGaps`, which counts the gaps left; the texture rules R1 to R6 ([textures](textures.md)), R5 skipping the methods R8 replaced; the sound rules A1 and A2 ([audio](audio.md)).
+5. `Passes`, in list order: the member redirects; the sprite renderer's R8, R7, R9 ([drawing](drawing.md)); `TypeGapValues`, then `ListRewindGaps`, which counts the gaps left; the texture rules R1 to R6 ([textures](textures.md)), R5 skipping the methods R8 replaced; the sound rules A1 to A3 ([audio](audio.md)).
 
 R3 and A1 both change `AssetsEmbed.staticInit`, each only its own instructions; the code stage writes the same assembly with the atlas passes before or after the audio passes, and with `TypeGapValues` before or after the sprite renderer's.
 

@@ -419,7 +419,7 @@ REWRITER_SOURCES = [
     *(COMPAT_FOLDER / 'rewriter' / f'{name}.cs' for name in ('PlatformRules', 'PlatformPasses')),
     HERE / 'atlas' / 'rewriter' / 'AtlasPatches.cs',  # the texture rules R1-R6 (docs/textures.md)
     HERE / 'spritebatch' / 'rewriter' / 'SpriteBatchPatches.cs',  # the sprite renderer's rules R7-R9 (docs/drawing.md)
-    HERE / 'audio' / 'rewriter' / 'AudioPatches.cs',  # the sound loading rules A1, A2 (docs/audio.md)
+    HERE / 'audio' / 'rewriter' / 'AudioPatches.cs',  # the sound loading rules A1 to A3 (docs/audio.md)
     # The repair engine and its rules (docs/repairs.md), which Rewrite() runs first. RepairsMain.cs is the
     # standalone authoring driver, with a Main of its own.
     *(HERE / 'repairs' / f'{name}.cs' for name in ('Engine', 'Edit', 'IL', 'Support', 'Expr', 'KnownBits', 'Patterns', 'RewriterHook')),
