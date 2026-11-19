@@ -67,6 +67,15 @@ namespace Repairs
             return Ldloc(lo).Op(OpCodes.Conv_U8).Ldloc(hi).Op(OpCodes.Conv_U8).I4(32).Op(OpCodes.Shl).Op(OpCodes.Or).BitsToDouble();
         }
 
+        // The double whose halves two pushes give (each an int32 or int64; its low 32 bits count).
+        public IL Halves(Action<IL> lo, Action<IL> hi)
+        {
+            lo(this);
+            Op(OpCodes.Conv_U4).Op(OpCodes.Conv_U8);
+            hi(this);
+            return Op(OpCodes.Conv_U4).Op(OpCodes.Conv_U8).I4(32).Op(OpCodes.Shl).Op(OpCodes.Or).BitsToDouble();
+        }
+
         public IL Call(string method) { return Emit(Instruction.Create(OpCodes.Call, ResolveMethod(method))); }
         public IL Callvirt(string method) { return Emit(Instruction.Create(OpCodes.Callvirt, ResolveMethod(method))); }
         public IL Newobj(string ctor) { return Emit(Instruction.Create(OpCodes.Newobj, ResolveMethod(ctor))); }

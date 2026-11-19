@@ -516,6 +516,18 @@ namespace Repairs
             return Replace(0, 3, il => il.Br(past));
         }
 
+        // A 2-byte store over two adjacent bool fields, `__store2(&this.F, v)` (mov word [this+off], v):
+        // F = low byte, next = high byte. next is the field at F's offset + 1 (the native layout).
+        public Site SplitStore2(string declaringType, string next)
+        {
+            if (Marker == null) return this;
+            var m = Regex.Match(Marker.Text, @"^__store2\(&this\.(\w+), (\d+)\)$");
+            if (!m.Success) throw new RepairException(repair.Key + ": marker " + Marker.Index + " is not __store2(&this.<field>, <constant>)");
+            int v = int.Parse(m.Groups[2].Value);
+            string first = declaringType + "::" + m.Groups[1].Value, second = declaringType + "::" + next;
+            return With(il => il.This().I4((v & 0xFF) != 0 ? 1 : 0).Stfld(first).This().I4((v >> 8) != 0 ? 1 : 0).Stfld(second));
+        }
+
         // Effect: delete. Opaque: delete with the instruction that consumes the value (stloc or pop).
         public Site Delete()
         {
