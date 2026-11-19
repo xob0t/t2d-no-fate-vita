@@ -52,7 +52,7 @@ static partial class Rules
             FieldDefinition data = pid == null ? null : pid.Fields.First(f => f.Name == fields[i]);
             sites[i].Replace(0, 1, il => il.Emit(Instruction.Create(OpCodes.Ldtoken, data)).Stloc(handle));
         }
-        m.Anchor(new[] { "ldloca.s V_" + handle, "ldloc." + value, "stfld System.IntPtr System.RuntimeFieldHandle::value" }, 0, anchorHash)
+        m.Anchor(new[] { "ldloca.s V_" + handle, value <= 3 ? "ldloc." + value : "ldloc.s V_" + value, "stfld System.IntPtr System.RuntimeFieldHandle::value" }, 0, anchorHash)
          .With(il => { });
     }
 
