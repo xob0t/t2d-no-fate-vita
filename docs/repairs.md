@@ -350,6 +350,10 @@ With them the code stage left 6 gap methods with 147 marker sites; the rules for
 | `Database.start` | 2 | repaired: `changeEnemy(0)` through the generic virtual invoker (slot 25) |
 | `MusicPlayer.draw` | 1 | repaired: a locked track's name through the `drawString` invoker |
 
+
+`Script.getRank`, the rank worked out at a level's end, threw `InvalidCastException` at the end of every level but Cyberdyne HQ's (Desert Town, Cyberdyne Research and Factory, Future War 1 in the first playtest), and `Script.endLevel` calls it before it saves the story's progress, the rank, the time and the achievements, so none of those were saved.
+Rewind keeps the class check the native code makes on the `levelID == 7` path (`this` against `CyberdyneHQ`, before `numCopsKilled`) as a fact about `this` for the whole method, and cast the two reads of `levelID`, a field of `Script`, too; the native code (0x18042AAB0) reads `[rdi+0x10]` unchecked.
+`rules/Scripts.cs` (`ScriptGetRank`) drops those two casts. It is the only such cast in `Assembly-CSharp` (a cast of `this` to a subclass followed by a member of `Script`'s own). On the console a level ended through `Game.changeState(2)` no longer throws (runs `dr`, `er`, `gr`).
 ## Prototype results
 
 ### On fixed60, the current rules

@@ -174,6 +174,8 @@ Elsewhere (the Windows test players) every pad Unity names is read in the layout
 The keyboard (`Keys.cs`) reads InControl's keys as Unity KeyCodes; on the PS Vita it reads nothing.
 `-t2d-input-log` logs every button and axis change of every pad (`T2D_INPUT`), for checking the layout on a console.
 
+`InputManager.UpdateInternal` runs every FixedUpdate and copies its action sets and each set's actions before updating them, into buffers it keeps; with `ToArray` that was about 190 bytes of garbage a tick (two sets of 13 actions), most of the managed heap's growth in a level: in Cyberdyne Research it went from 12 KB/s to 1.3 KB/s, in the Factory from 16 to 7 KB/s, and none of those runs collected in its level any more (runs `dr`, `df` against `er`, `ef`).
+
 ### Store services
 
 `compat/Store.cs` is the offline store: no sign-in, no achievements, stats or leaderboards on Steam, Epic or GOG, and nothing that waits for them.
