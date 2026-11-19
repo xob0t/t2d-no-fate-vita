@@ -6,7 +6,7 @@ A work in progress: [Terminator 2D: NO FATE](https://store.steampowered.com/app/
 
 The game ships only as native code (IL2CPP), so its code is first recovered with [Rewind](https://github.com/ratman-bit/Rewind-IL2CPP-Decompiler). With this repository's patches to Rewind (`tools/rewind/patches`), it gets 79% of all the game's methods back whole, and 93% of the game's own; the rest have gaps that need repair by hand or in Rewind.
 
-**It isn't finished.** The pipeline runs from your copy of the game to a VPK, and on a PS Vita the game boots to its menu and plays its first levels, Future War 1 and Desert Town, but 39 recovered methods still have gaps, so parts of the game stop at them. [docs/build.md](docs/build.md#where-it-stands) says how far the build gets, and [docs/assessment.md](docs/assessment.md) how much work is left.
+**It isn't finished.** The pipeline runs from your copy of the game to a VPK, and on a PS Vita the game boots to its menu and every level loads and plays from its briefing at 60 fps. 3 recovered methods still have gaps, all on paths the port doesn't take (the Xbox and UWP save writers, a Decimal compare, the Steam leaderboard rows), and the levels were each played for a minute or two, not to their end. [docs/build.md](docs/build.md#where-it-stands) says how far the build gets, and [docs/assessment.md](docs/assessment.md) how much work is left.
 
 There are no game files in this repository: no game assets, and none of the recovered code. You bring your own copy, and the pipeline only reads it.
 

@@ -339,16 +339,16 @@ Each commit's message has the details; by rule file:
 | `Scripts.cs` | `TerminatorBob`'s silverfish count, `PoliceCarWreck.hit`'s callback, `CyberdyneHQOutro.draw` | fields of the sprite each callback gets, and `visible = true`; a popped vtable read |
 | `HaxeRuntime.cs`, `Menus.cs`, `Levels.cs` | `Std.parseInt`, `Credits.draw`, `Database.draw`, `MusicPlayer.update`, `ArcadeEnding.drawBackground` | the string's second character (the `0x` test) and the marker after IL2CPP's IndexOutOfRange throw; string compares by the family; popped vtable reads; `Runtime.toDouble` inlined; background strips by parity, as `TruckChase.drawForeground` |
 
-With them the code stage leaves 6 gap methods with 147 marker sites:
+With them the code stage left 6 gap methods with 147 marker sites; the rules for `Database.start`, `MusicPlayer.draw` and `InifiniteOrBossRushSummary.draw` (`Menus.cs`, `Invokers.cs`) take that to 3 with 135, and `DrawParallaxTiled` (`Scripts.cs`) mends a whole method that Rewind got wrong ([rewind-issues.md](rewind-issues.md), issue 31):
 
 | Method | Sites | Why it is left |
 | --- | ---: | --- |
 | `SaveStats.saveStats` | 119 | the Xbox and UWP binary-writer save modes; this build's is `SAVE_MODE_UNITY_BINARY` |
-| `InifiniteOrBossRushSummary.draw` | 9 | the summary after infinite mode and boss rush |
+| `InifiniteOrBossRushSummary.draw` | 9 | repaired: three popped vtable reads, string compares by the family |
 | `Runtime.eq` | 9 | the Decimal comparison, which the game's Haxe values never take |
 | `HighscoreTable.draw` | 7 | the Steam leaderboard rows |
-| `Database.start` | 2 | |
-| `MusicPlayer.draw` | 1 | |
+| `Database.start` | 2 | repaired: `changeEnemy(0)` through the generic virtual invoker (slot 25) |
+| `MusicPlayer.draw` | 1 | repaired: a locked track's name through the `drawString` invoker |
 
 ## Prototype results
 

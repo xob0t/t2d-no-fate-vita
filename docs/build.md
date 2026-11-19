@@ -7,7 +7,7 @@ It writes the recovered code, the export and the Unity project to `work/`, the p
 Prose here is one sentence per line, so a diff shows only the sentences that changed.
 
 **The port plays its first levels, with gaps.**
-The pipeline runs end to end, and on the console Future War 1 and Desert Town play, but 39 methods still have Rewind's gaps; [Where it stands](#where-it-stands) has the details.
+The pipeline runs end to end, and on the console every level loads and plays from its briefing; 3 methods still have Rewind's gaps, on paths the port doesn't take. [Where it stands](#where-it-stands) has the details and [Levels](#levels) the level table.
 
 You need Windows 10 or 11 on x64, Git, and the game from Steam.
 With [uv](https://docs.astral.sh/uv/) installed, the short version is:
@@ -272,7 +272,7 @@ The blockers met on the way, in order:
 | Cyberdyne Factory's first frame never ended; a `T2D_TRACE` run put the main thread in `Script.drawParallaxTiled` with no method entered for 90 s | `Script.drawParallaxTiled` (also Future War 2 to 4, the attract demos) | Rewind (issue 31) | `rules/Scripts.cs`: the culled tiles' loop counter |
 | The prefetch's `LoadAsync` pages skipped the budget, and the player filled CDRAM to its last 0.5 MB | `Atlas.Switch` | atlas | the prefetch evicts and counts its loads, and a ballast render texture keeps 8 MB of CDRAM while pages wait for their first draw |
 
-With Rewind patches 0001 to 0031 and these rules the code stage leaves 69 gap methods with 405 marker sites; the rules for the main menu and Future War 1 (docs/repairs.md) take that to 50 methods with 319 sites, and Rewind patch 0032 with the issue 30 rule to 43 methods with 301 sites; the rules for the tutorial and Desert Town to 39 with 289.
+With Rewind patches 0001 to 0031 and these rules the code stage leaves 69 gap methods with 405 marker sites; the rules for the main menu and Future War 1 (docs/repairs.md) take that to 50 methods with 319 sites, and Rewind patch 0032 with the issue 30 rule to 43 methods with 301 sites; the rules for the tutorial and Desert Town to 39 with 289; the rules for the later levels and menus ([repairs](repairs.md#the-later-levels-and-the-menus-after-them)) to 3 with 135, all on paths the port doesn't take: `SaveStats.saveStats` (119, the Xbox and UWP writers), `Runtime.eq` (9, the Decimal compare) and `HighscoreTable.draw` (7, the Steam leaderboard rows).
 
 Measured on that console with `-t2d-heartbeat 5` (runs `work/runs/boot4`, `menu1`; for the level `fw1m`, a normal build with a screenshot every 30 s; Desert Town's from `level1a`, a `T2D_TRACE` build):
 
@@ -286,6 +286,43 @@ Measured on that console with `-t2d-heartbeat 5` (runs `work/runs/boot4`, `menu1
 | Frame time | splash, while the sounds load: p50 23.5 ms, p90 68 ms; attract and menu: p50 16.7 ms, p90 17.0 ms; Future War 1 walking and fighting: p50 16.7 ms, p90 17.2 to 17.5 ms, 59.9 fps in the windows without a screenshot (the worst frames, 0.7 s, are the probe's screenshots) |
 | Sprites a frame | splash 1 to 2, attract 4 to 8, menu 44; Future War 1 26 to 63 (74 at most), 148 on its first frames; Desert Town 20 to 105 |
 | SpriteBatch runs a frame | menu 4, of which 3 change texture; attract 2 to 3; Future War 1 8 to 11 (15 at most), of which 6 to 8 change texture; Desert Town 7 to 12, 4 to 8 |
+
+### Levels
+
+Every level of the arcade list and the level select's, played for a minute or two from its briefing with infinite health (`work/scratch/levels2.sh`: walk right firing and jumping, then back).
+The arcade list is `Game.levelIDs` as `initGame(1)` sets it, 0, 1, 2, 3, 5, 8, 9, 10; the level select's (`initGame(5)`, story order) is 11, 13, 12, 0, 4, 1, 2, 3, 5, 6, 7, 8, 9, 14, 15, 10, 16, 17, 18, which the probe sets at the briefing with `Game.mode = 5`, so a new save plays every level.
+The numbers are from `tools/downgrade/runsummary.py`, over the level's heartbeats without a screenshot (each screenshot stalls a frame 0.7 s); free memory as the level plays, CDRAM with the atlas's pages resident beside it.
+Runs are SpriteBatch's draws a frame, switches the runs that change texture; the mean range, the most in one frame in brackets.
+
+| Level | Run | Loads | Plays | Blockers | Fixes | Frame p50 / p90 (ms) | fps | Runs a frame | Switches a frame | Pages | CDRAM free | LPDDR free |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| L11 Desert Town (11) | `b3s0` | yes | yes | the controls tutorial before it (story mode) | Round 3's tutorial rules | 16.7 / 17.1-17.3 | 57.7-60.0 | 7.5-10.8 (13) | 4.1-8.6 | 40-42 MB | 38.5-40.5 MB | 194 MB |
+| L13 Cyberdyne Research (13) | `b2s1` | yes | yes | | | 16.7 / 17.1-17.3 | 57.9-60.3 | 9.0-11.3 (15) | 7.0-9.0 | 76-78 MB | 2.5-4.5 MB | 194 MB |
+| L12 Cyberdyne Factory (12) | `b5s2` | yes | yes | the first frame never ended (`b2s2`, `t3s2`); CDRAM down to 0.5 MB | `DrawParallaxTiled` (Rewind issue 31); the atlas's ballast | 16.7 / 17.2-17.4 | 56.2-60.4 | 9.4-35.4 (55) | 7.6-11.3 | 108-114 MB, 40 in main memory | 6.5-12.5 MB | 154 MB |
+| L00 Future War 1 (0) | `b2a0` | yes | yes | a 5.1 s frame at the Enter | the briefing's prefetch: 0.16 s | 16.7 / 17.2-17.4 | 58.1-60.0 | 9.5-13.0 (17) | 6.8-10.7 | 82 MB | 6.5 MB | 186 MB |
+| L04 Future War 2 (4) | `b4s4` | yes | yes | none seen; it calls `drawParallaxTiled`, fixed before the run | `DrawParallaxTiled` | 16.7 / 17.1-17.4 | 59.4-60.3 | 7.1-9.3 (13) | 5.1-7.2 | 74 MB, 32 in main memory | 38.5 MB | 162 MB |
+| L01 Biker Bar (1) | `lv1` | yes | yes | | | 16.7 / 17.1-17.3 | 59.9 | 5.8-11.2 (13) | 4.8-10.1 | 28 MB | 52.5 MB | 194 MB |
+| L02 Truck Chase (2) | `lv2` | yes | yes | | | 16.7 / 17.2-17.4 | 58.1-60.4 | 9.2-15.6 (21) | 7.6-12.9 | 40-46 MB | 34.5-40.5 MB | 194 MB |
+| L03 Hospital (3) | `lv3` | yes | yes | | | 16.7 / 17.3-17.4 | 58.2-60.0 | 10.6-13.7 (15) | 6.4-8.2 | 58 MB | 22.5 MB | 194 MB |
+| L05-07 Cyberdyne HQ (5) | `b2a4` | yes | yes | | | 16.7 / 17.3-17.4 | 57.9-60.3 | 11.2-24.8 (31) | 7.6-18.9 | 76-78 MB | 2.5-4.5 MB | 191-194 MB |
+| Cyberdyne HQ, level 6 | `b8s9` | yes | yes | | | 16.7 / 17.3-17.4 | 58.1-60.0 | 11.9-28.3 (41) | 8.3-20.9 | 78 MB, 32 in main memory | 34.5 MB | 162 MB |
+HQROWS| L08 Freeway Chase (8) | `b5a5` | yes | yes | | | 16.7 / 17.3-17.5 | 59.9-60.3 | 11.2-23.3 (33) | 8.1-20.7 | 72 MB, 24 in main memory | 16.5 MB | 186 MB |
+| L09 Steel Mill (9) | `b6a6` | yes | yes | | | 16.7 / 17.2-17.5 | 57.8-60.3 | 8.0-12.9 (16) | 6.0-11.1 | 82-86 MB, 32 in main memory | 26.5-30.5 MB | 162 MB |
+| L14 Police Station (14) | `b7s13` | yes | yes | | | 16.7 / 17.2-17.4 | 57.9-60.0 | 7.4-10.4 (12) | 6.1-8.4 | 46-48 MB | 32.5-34.5 MB | 194 MB |
+| L15 Future War 4 (15) | `b7s14` | yes | yes | none seen; it calls `drawParallaxTiled`, fixed before the run | `DrawParallaxTiled` | 16.7 / 17.2-17.3 | 59.9 | 9.4-12.4 (18) | 6.8-10.4 | 82 MB, 40 in main memory | 30.5 MB | 162 MB |
+| L10 Future War 3 (10) | `b6a7` | yes | yes | none seen; it calls `drawParallaxTiled`, fixed before the run | `DrawParallaxTiled` | 16.7 / 17.2-17.5 | 59.1-60.3 | 10.9-15.7 (22) | 8.9-13.7 | 74 MB, 32 in main memory | 38.5 MB | 162 MB |
+| L00/16 Future War 1, story (16) | `b8s16` | yes | yes | | | 16.7 / 17.2-17.4 | 59.9-60.3 | 8.0-12.8 (17) | 6.0-10.8 | 80 MB, 40 in main memory | 32.5 MB | 162 MB |
+| L04/17 Future War 2, story (17) | `b9s17` | yes | yes | | | 16.7 / 17.2-17.4 | 59.9-60.4 | 7.1-9.2 (11) | 5.1-7.2 | 74 MB, 32 in main memory | 38.5 MB | 162 MB |
+| L10/18 Future War 3, story (18) | `b9s18` | yes | yes | | | 16.7 / 17.2-17.5 | 59.1-60.3 | 11.0-17.2 (22) | 9.0-15.2 | 74 MB, 32 in main memory | 38.5 MB | 162 MB |
+| Attract demos (menu left idle; maps 10, 12) | `idle1`, `idle2t`, `idle3` | yes | yes | 190 MB of pages at the Enter: a 19 s frame, CDRAM 0.5 MB, main memory 55 MB; then every flush threw and the menu ran at 30 fps | `LazyScenes`; the flush skips a released texture and always empties its queue | 16.7 / - (worst 7.1 s and 3.3 s, the first frames of each demo) | 57-60 after the first seconds | | | 82-100 MB (map 10), 44-60 MB (map 12) | 4.5-26.5 MB | 162-194 MB |
+
+Infinite mode (level 48) and boss rush weren't tried; story mode's cutscenes between levels were tried only up to Desert Town (the levels here start from their briefing).
+None of the levels threw an exception in its minute; the runs before `b3s0` are on builds without the ballast.
+
+- The briefing prefetches the level's pages, so no level's Enter stalls: the level switch takes 0 ms, and the worst frame of an Enter was 0.18 s (Cyberdyne Factory); Future War 1's 5.1 s frame is gone.
+- Headroom: CDRAM free in play is 2.5 to 4.5 MB in Cyberdyne Research and the first Cyberdyne HQ run (`b2s1`, `b2a4`, before the ballast), 6.5 MB in Future War 1 (`b2a0`), 6.5 to 12.5 MB in Cyberdyne Factory with 108 to 114 MB of pages; elsewhere 16 to 52 MB. Main memory free is 154 to 194 MB in every level.
+- The pages that don't fit in CDRAM go to main memory (`video memory full` lines: Future War 2 a 32 MB page, Freeway 16 + 8 MB, Cyberdyne Factory 32 + 8 MB); the frame time in those levels is the same as in the others, p90 17.2 to 17.5 ms.
+- The most SpriteBatch runs in a frame were 55, in a Cyberdyne Factory fight, at 56 to 60 fps; the risk in [drawing](drawing.md#runs), many runs a frame, hasn't cost frame time anywhere yet.
 
 ## When something fails
 
