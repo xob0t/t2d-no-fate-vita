@@ -300,9 +300,11 @@ namespace Repairs
             }
             if (!IsSimpleLoad(load)) throw new RepairException("unbox: marker " + m.Index + "'s object isn't a local or an argument");
             ParameterDefinition p = Parameter(r.Method, load);
-            bool named = r.Method.Parameters.Any(x => x.Name == name);
-            if (named ? p == null || p.Name != name : p != null && !Regex.IsMatch(name, @"^[tmo]\d+$"))
-                throw new RepairException("unbox: marker " + m.Index + " reads " + name + ", not the object tested");
+            // Only a parameter tested and named by the marker is proven the same object. A local tested with a
+            // temporary in the marker (t5, m2, o3) may be another object Rewind kept in another local: left to a rule.
+            if (p == null || p.Name != name)
+                throw new RepairException("unbox: marker " + m.Index + " reads " + name + ", and the object tested is " +
+                                          (p == null ? "a local; nothing proves they are the same (a pinned rule can)" : p.Name));
             if (type.IsGenericParameter) throw new RepairException("unbox: marker " + m.Index + ": the type tested is generic");
             string tn = type.FullName, un = m.ValueType.FullName;
             Action<IL> value;

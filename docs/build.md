@@ -100,10 +100,10 @@ uv run build.py --dry-run             # print the setup command and the stages, 
    Checked against the test builds' PDB symbols it makes no wrong identification, on each build and on each build left out of the library. `build.py` skips the stage while the output comes from the same game files, Rewind build and library.
 2. `rip`: AssetRipper exports the game as a 2018.2 project into `work/rip-2018.2.19f1`. AssetRipper has no way to take recovered assemblies for an IL2CPP game, so it reads a Mono-layout copy of the game in `work/rip-input`: the game's data files, Rewind's assemblies in `Managed/` and an empty executable. The export then keeps the method bodies. That folder's path stays the same from run to run, since the export's `.meta` GUIDs depend on what AssetRipper loads. `build.py` skips the stage while the export comes from the same game files, recovered assemblies, AssetRipper and settings.
 3. `project`: assembles the Unity project in `work/t2d-2018.2.19f1-vita`. It runs the code stage (below), puts the rewritten assemblies and T2DCompat into `Assets/Plugins` with the exported assemblies' `.meta` files, and applies the asset rules (`asset_rules.py`).
-4. `build`: the editor-free builder (`tools/builder`, from Butcher's port) writes the PS Vita player into `builds/t2d-2018.2.19f1-vita`: the player's data, the code module from UnityLinker and IL2CPP, and the files Unity's build copies.
+4. `build`: the editor-free builder (`tools/builder`, from Butcher's port) writes the PS Vita player into `builds/t2d-2018.2.19f1-vita`: the player's data, the code module from UnityLinker and IL2CPP, and the files Unity's build copies. It writes `builds/t2d-2018.2.19f1-vita.incomplete` before its first write and removes it when the player is whole; while it is there, `package` and `vita.py`'s `install`, `sync` and `seed` refuse the folder, since a build that stopped at IL2CPP leaves the new data beside the last code module.
 5. `package`: makes `builds/t2d-2018.2.19f1-vita.vpk` with the title ID `TNOF00001`, with LiveArea art from the game's Steam store images (`livearea.py`).
 
-`build.py` holds the `vita-build` lock from `tools/downgrade/lock.py` for the whole run.
+`build.py` holds the `vita-build` lock from `tools/downgrade/lock.py` for the whole run, setup included; `tools/setup.py` run alone takes it too while it changes `tools/external` (not with `--dry-run`), so two setups never update Rewind's checkout at once, nor one under a running pipeline.
 If another job runs the pipeline, it waits.
 
 | Option | Effect |
@@ -152,7 +152,7 @@ In `Recovered.T2D`, the rewriter (`Rewrite` in `DowngradeAssemblies.cs`) changes
 2. The platform layer's pass ([platform](platform.md)).
 3. The fold-back passes ([foldback](../tools/downgrade/foldback/README.md)).
 4. The retargeting of type references to 2018.2 and T2DCompat.
-5. `Passes`, in list order: the member redirects; the sprite renderer's R8, R7, R9 ([drawing](drawing.md)); `TypeGapValues`, then `ListRewindGaps`, which counts the gaps left; the texture rules R1 to R6 ([textures](textures.md)), R5 skipping the methods R8 replaced; the sound rules A1 and A2 ([audio](audio.md)).
+5. `Passes`, in list order: the member redirects; the sprite renderer's R8, R7, R9 ([drawing](drawing.md)); `TypeGapValues`, then `ListRewindGaps`, which counts the gaps left; the texture rules R1 to R6 ([textures](textures.md)), R5 skipping the methods R8 replaced; the sound rules A1 to A3 ([audio](audio.md)).
 
 R3 and A1 both change `AssetsEmbed.staticInit`, each only its own instructions; the code stage writes the same assembly with the atlas passes before or after the audio passes, and with `TypeGapValues` before or after the sprite renderer's.
 

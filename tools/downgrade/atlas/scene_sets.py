@@ -22,6 +22,22 @@ import re
 EXTRA_KEYS = {'Tanker Chase': ['level:8'], 'Controls tutorial': ['app:LevelControls']}
 LEVEL_APPS = ['Game']
 
+# Draws the static analysis can't follow (an image id from arithmetic or a table), found on the console from the
+# atlas's miss log with the image of each miss: image -> the scenes that draw it ('levels': every level scene and the
+# controls tutorial). Each was a 190 to 250 ms frame in play, the page's synchronous load and first draw.
+EXTRA_IMAGES = {
+    # A player bullet's hit (PlayerProjectile -> GameObject.addHitSpark); missed in every level where Sarah shoots.
+    'IMAGE_BULLET_HIT_SPARK': 'levels',
+    'IMAGE_BULLET_H': ['L12 Cyberdyne Factory', 'L13 Cyberdyne Research', 'Controls tutorial'],
+    'IMAGE_HAZMAT_GUY': ['L12 Cyberdyne Factory', 'L13 Cyberdyne Research'],
+    'IMAGE_HAZMAT_ALT_GUY': ['L12 Cyberdyne Factory', 'L13 Cyberdyne Research'],
+}
+# A Future War bike's parts as it breaks up: the engine missed in Future War 1 (runs f3, g3 of the Sarah-level work,
+# and the first playtest); the other parts fly off with it.
+EXTRA_IMAGES.update({'IMAGE_FUTURE_BIKE_' + part: ['L00/16 Future War 1'] for part in ('ENGINE', 'EXHAUST', 'VISOR', 'DEBRIS')})
+# A crate's debris pieces, picked by number: the analysis finds 0 and 4 only.
+EXTRA_IMAGES.update({'IMAGE_DESERT_CRATE_DEBRIS_%d' % i: ['L11 Desert Town'] for i in range(9)})
+
 
 def level_ids(name):
     m = re.match(r'L(\d+)(?:-(\d+))?(?:/(\d+))?\b', name)
@@ -58,6 +74,13 @@ def main():
         out_scenes.append({'name': nm, 'keys': sorted(set(keys))})
         for i in s['images']:
             use.setdefault(name_of[i], []).append(k)
+    index = {s['name']: k for k, s in enumerate(out_scenes)}
+    levels = [k for k, s in enumerate(out_scenes) if re.match(r'L\d', s['name']) or s['name'] in EXTRA_KEYS]
+    for n, where in EXTRA_IMAGES.items():
+        if n not in consts:
+            continue  # a release without that image
+        ks = levels if where == 'levels' else [index[w] for w in where]
+        use[n] = sorted(set(use.get(n, [])) | set(ks))
     every = [n for n, v in use.items() if len(v) == len(scenes)]
     data = {
         'comment': 'Which images each scene draws (by Assets.IMAGE_* name) and the runtime keys that enter it. '

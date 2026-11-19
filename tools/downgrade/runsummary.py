@@ -4,8 +4,10 @@
 
 Prints the scene changes, errors and stalls, then the heartbeat windows from
 `--from` on (default: the last atlas switch into a level): p50/p90 ranges, fps,
-sprites, runs, page switches and free memory. Windows with a probe screenshot
-(worst frame > 300 ms) are counted apart, since each stalls the game ~0.6 s.
+sprites, runs, page switches and free memory. Windows in which the probe took a
+screenshot (a T2D_PROBE screenshot line) are counted apart, since each stalls the
+game ~0.6 s; a slow frame without one is a real hitch and stays in. The worst
+frame of all the windows is printed too.
 """
 import re
 import sys
@@ -23,6 +25,7 @@ def main(argv):
     lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
     events = []
     beats = []
+    shots = []  # log times of the probe's screenshots
     for line in lines:
         m = re.match(r"\s*([\d.]+) (\S+)(.*)", line)
         if not m:
@@ -41,6 +44,8 @@ def main(argv):
             if re.search(r"-> L\d+|-> level|-> \w+ (?!MissionBriefing|MainMenu)", rest) and " menu " not in rest and "cutscene" not in rest:
                 if "--from" not in argv:
                     start = t
+        elif tag == "T2D_PROBE" and rest.startswith(" screenshot "):
+            shots.append(t)
         elif tag == "T2D_STALL" and "ended" in rest:
             events.append((t, "stall" + rest[:60]))
         elif "Exception" in rest or "Error" in rest or "gap" in rest.lower():
@@ -58,7 +63,11 @@ def main(argv):
     if not sel:
         print("no heartbeats in the window")
         return
-    clean = [b for b in sel if float(b.get("worst", 0)) < 300]
+    # A beat covers the frames since the beat before. A screenshot's line comes after its stall, and the stalled
+    # frame's time is counted the frame after: a shot just before a beat's start counts for that beat too.
+    starts = {id(b): (beats[i - 1]["t"] if i else float("-inf")) for i, b in enumerate(beats)}
+    shot_beats = {id(b) for b in sel if any(starts[id(b)] - 0.1 < s <= b["t"] for s in shots)}
+    clean = [b for b in sel if id(b) not in shot_beats]
     use = clean or sel
 
     def rng(key, fmt="{:.1f}"):
@@ -70,6 +79,9 @@ def main(argv):
 
     print(f"window {sel[0]['t']:.0f}-{sel[-1]['t']:.0f} s: {len(sel)} beats, {len(clean)} without a screenshot")
     print(f"  fps {rng('fps')}  p50 {rng('p50')}  p90 {rng('p90')}  worst {rng('worst')}")
+    worst = max(sel, key=lambda b: float(b.get("worst", 0)))
+    where = " (a screenshot window)" if id(worst) in shot_beats else ""
+    print(f"  worst frame of all the windows: {float(worst.get('worst', 0)):.1f} ms at {worst['t']:.0f} s{where}")
     print(f"  sprites {rng('sprites', '{:.0f}')}  runs {rng('runs')}  pageSwitches {rng('pageSwitches')}  offscreen {rng('offscreen')}")
     print(f"  freeLPDDR {rng('freeLPDDRMB', '{:.0f}')}  freeCDRAM {rng('freeCDRAMMB')}  pages {rng('pages', '{:.0f}')}  pagesMB {rng('pagesMB', '{:.0f}')}  budget {rng('budgetMB')}  heap {rng('heapMB')}")
     print(f"  most in a frame: sprites {rng('spritesMax', '{:.0f}')}  runs {rng('runsMax', '{:.0f}')}")

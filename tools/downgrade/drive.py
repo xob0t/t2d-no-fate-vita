@@ -30,10 +30,22 @@ VITA = ['uv', 'run', str(ROOT / 'tools' / 'downgrade' / 'vita.py')]
 FOLDER = 'ux0:/data/T2DNoFate'
 
 
-def vita(*args, quiet=False):
-    out = subprocess.run([*VITA, *args], cwd=ROOT, capture_output=True, text=True, encoding='utf-8', errors='replace')
-    if not quiet:
-        print('vita', ' '.join(args), '->', (out.stdout.strip().splitlines() or [out.stderr.strip()[-200:] or '?'])[-1], flush=True)
+class Failed(Exception):
+    """A vita.py command that exited non-zero, with its last words."""
+
+
+def vita(*args, quiet=False, check=True):
+    """vita.py's output. check: a non-zero exit raises Failed (a sync, flags or a press that didn't happen must
+    stop the session, not go on as if it had)."""
+    out = subprocess.run(
+        [*VITA, *args], cwd=ROOT, capture_output=True, text=True, encoding='utf-8', errors='replace', check=False
+    )
+    last = (out.stdout.strip().splitlines() or [out.stderr.strip()[-200:] or '?'])[-1]
+    if not quiet or out.returncode:
+        code = f' (exit code {out.returncode})' if out.returncode else ''
+        print('vita', ' '.join(args), '->', last + code, flush=True)
+    if check and out.returncode:
+        raise Failed(f'vita.py {args[0]} failed (exit code {out.returncode}): {out.stderr.strip()[-300:] or last}')
     return out.stdout
 
 
@@ -81,14 +93,20 @@ def main():
     tag, flags, steps = sys.argv[1], sys.argv[2], sys.argv[3]
     out = ROOT / 'work' / 'runs' / tag
     out.mkdir(parents=True, exist_ok=True)
-    if '--sync' in sys.argv:
-        vita('sync')
-    vita('args', '--', *flags.split())
-    before = vita('log', quiet=True)  # the run before's whole log: a new run's differs
-    held = None
-    launched = False
+    for old in ('log.txt', 'log.stale.txt'):  # a tag run again: no log of the last session's left to read as this one's
+        (out / old).unlink(missing_ok=True)
     try:
-        if 'Launched' not in vita('launch'):
+        if '--sync' in sys.argv:
+            vita('sync')  # a failed sync would run the build before
+        vita('args', '--', *flags.split())
+        before = vita('log', quiet=True)  # the run before's whole log: a new run's differs
+    except Failed as error:
+        vita('args', '--', quiet=True, check=False)  # flags set before the failure aren't left for the next launch
+        sys.exit(f'drive: {error}; nothing was launched')
+    held = None
+    launched = stale = False
+    try:
+        if 'Launched' not in vita('launch', check=False):
             sys.exit('drive: the launch failed (is the console busy with another app?)')
         launched = True
         started = time.time()
@@ -99,7 +117,7 @@ def main():
                 end = time.time() + float(rest[0])
                 while time.time() < end:
                     time.sleep(min(5.0, max(0.0, end - time.time())))
-                    vita('do', 'nosleep on; screen on', quiet=True)
+                    vita('do', 'nosleep on; screen on', quiet=True, check=False)  # the next one tries again
             elif word == 'press':
                 hold = rest[1] if len(rest) > 1 else '150'
                 held = rest[0]
@@ -110,7 +128,7 @@ def main():
                 pattern, limit = re.compile(rest[0]), float(rest[1])
                 end = time.time() + limit
                 while time.time() < end:
-                    text = vita('log', quiet=True)
+                    text = vita('log', quiet=True, check=False)
                     if text.strip() and text != before and pattern.search(text):
                         print(f'{time.time() - started:6.1f} until {rest[0]}: matched', flush=True)
                         break
@@ -120,22 +138,37 @@ def main():
             else:
                 sys.exit(f'unknown step {step!r}')
         time.sleep(2)
+    except Failed as error:
+        sys.exit(f'drive: {error}; the session stopped there')
     finally:
         if held is not None:
-            vita('do', f'release {held}', quiet=True)
+            vita('do', f'release {held}', quiet=True, check=False)
             print(f'drive: released {held}', flush=True)
-        text = vita('log', quiet=True)
-        (out / 'log.txt').write_text(text, encoding='utf-8')
-        if launched and text == before:
-            print("drive: WARNING the log is the previous run's; this launch wrote no log", flush=True)
-        vita('quit')
+        if launched:
+            try:
+                text = vita('log', quiet=True)
+            except Failed as error:
+                text = None
+                print(f'drive: WARNING the log was not read: {error}', flush=True)
+            # The same text as before the launch: the player wrote no log of its own (it rotates log.txt as it
+            # starts), so this is the previous run's, kept apart rather than recorded as this one's.
+            stale = text is not None and text == before
+            if text is not None:
+                (out / ('log.stale.txt' if stale else 'log.txt')).write_text(text, encoding='utf-8')
+            if stale:
+                print("drive: WARNING the log is the previous run's; this launch wrote none (log.stale.txt)", flush=True)
+            # Only the game this session launched: `quit all` would end whatever app the console shows.
+            vita('quit', check=False)
         # The flags are one launch's: if the launch never read them, they go now.
-        if vita('args', '--show', quiet=True).strip() not in ('', 'args.txt: (empty)'):
-            vita('args', '--')
-        try:
-            fetch_shots(flags, out)
-        except (OSError, EOFError, ftplib.Error) as error:
-            print(f'drive: shots not fetched: {error}', flush=True)
+        if vita('args', '--show', quiet=True, check=False).strip() not in ('', 'args.txt: (empty)'):
+            vita('args', '--', check=False)
+        if launched:
+            try:
+                fetch_shots(flags, out)
+            except (OSError, EOFError, ftplib.Error) as error:
+                print(f'drive: shots not fetched: {error}', flush=True)
+    if stale:
+        sys.exit(1)
 
 
 main()

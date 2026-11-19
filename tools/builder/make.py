@@ -23,6 +23,9 @@ import build as data
 
 def make(out):
     start = time.time()
+    marker = paths.common.build_incomplete(out)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(f'make.py started {time.strftime("%Y-%m-%d %H:%M:%S")}', encoding='utf-8')
     with progress.display():
         with progress.step('Preparing the build folder'):
             paths.builtin_shaders()
@@ -37,6 +40,7 @@ def make(out):
             pipeline.reproducible_player_data(out / 'Media')
         pipeline.native_plugins(out)
         pipeline.boot_config(out)
+    marker.unlink()  # whole: package and the console tools take it now
     if times['reused']:
         progress.console.print('Code module: reused, its inputs have not changed')
     else:

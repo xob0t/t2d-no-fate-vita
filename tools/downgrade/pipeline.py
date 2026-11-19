@@ -59,6 +59,7 @@ from common import (
     GAME_EXE,
     GAME_NAME,
     HERE,
+    LINK,
     REWIND_EXE,
     REWIND_SIGNATURES,
     REWIND_STAMP,
@@ -75,6 +76,7 @@ from common import (
     meta_of,
     mono_cecil,
     project_folder,
+    require_complete,
     rewritten_folder,
     run,
     stable_meta,
@@ -412,12 +414,12 @@ COMPAT_MODULES = [
 ]
 REWRITER_SOURCES = [
     HERE / 'DowngradeAssemblies.cs',
-    *(HERE / 'rewriter' / f'{name}.cs' for name in ('Redirect', 'Runtime', 'RewindGaps', 'Stack', 'GapTyping', 'SplitMethods', 'MenuCursor', 'Trace')),
+    *(HERE / 'rewriter' / f'{name}.cs' for name in ('Redirect', 'Runtime', 'RewindGaps', 'Stack', 'GapTyping', 'SplitMethods', 'MenuCursor', 'MenuStrings', 'Trace')),
     # The platform layer's pass and its rules (docs/platform.md); compat_sources() takes only compat/*.cs.
     *(COMPAT_FOLDER / 'rewriter' / f'{name}.cs' for name in ('PlatformRules', 'PlatformPasses')),
     HERE / 'atlas' / 'rewriter' / 'AtlasPatches.cs',  # the texture rules R1-R6 (docs/textures.md)
     HERE / 'spritebatch' / 'rewriter' / 'SpriteBatchPatches.cs',  # the sprite renderer's rules R7-R9 (docs/drawing.md)
-    HERE / 'audio' / 'rewriter' / 'AudioPatches.cs',  # the sound loading rules A1, A2 (docs/audio.md)
+    HERE / 'audio' / 'rewriter' / 'AudioPatches.cs',  # the sound loading rules A1 to A3 (docs/audio.md)
     # The repair engine and its rules (docs/repairs.md), which Rewrite() runs first. RepairsMain.cs is the
     # standalone authoring driver, with a Main of its own.
     *(HERE / 'repairs' / f'{name}.cs' for name in ('Engine', 'Edit', 'IL', 'Support', 'Expr', 'KnownBits', 'Patterns', 'RewriterHook')),
@@ -594,8 +596,18 @@ def sync_tree(source: Path, destination: Path, overlay: dict, excluded: set, kno
     file the editor generated (for a folder or file that has none in the source) stays, so its GUID
     doesn't change on every run. known: copy_if_changed's record, kept by the caller between runs.
     step: a progress step, its bar set to the files to go through and advanced per file."""
+    if destination.is_symlink() or destination.is_junction():
+        raise SystemExit(f'{destination} is a link; the mirror would delete in its target. Remove the link first.')
     destination.mkdir(parents=True, exist_ok=True)
-    present = walk(destination)  # listed once: one stat per file was most of the time
+    present = walk(destination, links=True)  # listed once: one stat per file was most of the time
+    # A link or junction in the destination is removed, never gone into: its target isn't the mirror's.
+    for relative in [relative for relative, stat in present.items() if stat == LINK]:
+        path = destination / relative
+        try:
+            path.unlink()  # a junction, or a link to a file
+        except OSError:
+            os.rmdir(path)  # a link to a folder, which rmdir removes without going into it
+        del present[relative]
     known = {} if known is None else known
     wanted = set()
     files = walk(source)
@@ -610,7 +622,7 @@ def sync_tree(source: Path, destination: Path, overlay: dict, excluded: set, kno
         if stat is None:
             if relative not in present:
                 (destination / relative).mkdir(parents=True, exist_ok=True)
-        elif not same_time(stat, present.get(relative)):
+        elif not unchanged(source / relative, destination / relative, stat, present.get(relative)):
             (destination / relative).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source / relative, destination / relative)
     for relative, content in overlay.items():
@@ -634,8 +646,20 @@ def sync_tree(source: Path, destination: Path, overlay: dict, excluded: set, kno
 
 
 def same_time(stat, other):
-    """Whether two walk() entries are files of one size and modification second (copy2 keeps both)."""
-    return other is not None and stat[0] == other[0] and stat[1] // 10**9 == other[1] // 10**9
+    """Whether two walk() entries are files of one size and modification time, to the nanosecond (copy2
+    keeps both). By the second alone, a same-length edit within the second the last copy was made in
+    was missed."""
+    return other is not None and stat[0] == other[0] and stat[1] == other[1]
+
+
+def unchanged(source: Path, target: Path, stat, other):
+    """Whether target, of walk() entry other, already has source's content: the same size and time, or
+    the same size and second and the same bytes (a file system that keeps coarser times than the source's)."""
+    if same_time(stat, other):
+        return True
+    if other is None or stat[0] != other[0] or stat[1] // 10**9 != other[1] // 10**9:
+        return False
+    return filecmp.cmp(source, target, shallow=False)
 
 
 def copy_if_changed(source: Path, target: Path, known: dict | None = None, key: str = ''):
@@ -979,6 +1003,7 @@ def package_vita(build: Path) -> Path:
         sys.exit(f'No PS Vita build in {build}; build it first: pipeline.py build')
     if not (build / 'Media' / 'Modules' / 'il2CppAssemblies.suprx').exists():
         sys.exit(f'{build} has no code module (Media/Modules/il2CppAssemblies.suprx): its build stopped before IL2CPP')
+    require_complete(build)
     vpk = build.with_name(build.name + '.vpk')  # with_suffix would cut the version at its dots
     files = list(vita_app_files(build))
     total = sum(len(source) if isinstance(source, bytes) else source.stat().st_size for _, source in files)

@@ -100,7 +100,7 @@ The counts are those of the Steam release, build 24040403, as Rewind recovers it
 | --- | --- | --- | --- | --- |
 | R8 | `SpriteBatchDraws` | `BitmapData.unityDraw`, `unityDrawClippedWidth` | the parameters above by type; one `Graphics.DrawMesh`, a `DrawMeshNow`, reads of `meshes`, one store of `zorder`; no call into SpriteBatch yet | a new body each, below |
 | R7 | `SpriteBatchMeshes` | `BitmapData.CreateMultiMeshFrames(TextureFrames)` | static, returns `Mesh[]`, makes Meshes; nothing but the two draw methods reads `BitmapData.meshes` | `return new Mesh[tframes.uvx.Length * 4];` |
-| R9 | `SpriteBatchFlush` | `UnityMain.OnRenderObject` | one call of `Main.draw()`; a static `Camera m_RenderCamera` | after it: `ldsfld m_RenderCamera; call SpriteBatch.Flush(Camera)` |
+| R9 | `SpriteBatchFlush` | `UnityMain.OnRenderObject` | one call of `Main.draw()`; a static `Camera m_RenderCamera` | after it: `ldsfld m_RenderCamera; call SpriteBatch.Flush(Camera)`; the call in `try { } catch (Exception) { SpriteBatch.Discard(); throw; }`, so a draw that throws part way doesn't leave its sprites queued for the next frame |
 | R10 | `SpriteBatchFilters` | `Gfx.saturateImage(BitmapData, double)` | static, returns `BitmapData`, one call of `BitmapData.applyFilter`; nothing reads `BitmapData.bmfilter` | `return image;` |
 
 R8's new body is:
@@ -141,6 +141,10 @@ M1 pins `Menu.moveCursor`'s and `Rectangle.intersectionWrap`'s bodies with the r
 With it a move costs no frame: the worst frame of every window while moving is 17.4 to 18.2 ms (`ach4`), and the cursor goes where it went before: `-t2d-peek com.bitmapbureau.terminator.ui.Menu.cursorPos` (`ach6nav`; the peek's reflection makes garbage of its own, so not a timing run) logged Right +1, Down +8, Left -1 and Up -8 between the 32 icons (buttons 15 to 46, rows of 8), and no move for Up on the top row, Right on the last column and Down on the bottom row, where the search finds nothing.
 The main menu (35 sprites, 4 runs) stays at 60 fps with no collection, and Future War 1 plays as before with R10 (`lvl2`: 59.9 to 60.0 fps, p90 16.9 to 17.1 ms, worst 18.6 ms) and with M1 too (`lvl4`: 58.1 to 60.0 fps, p90 16.9 to 17.3 ms; its one long frame, 188 ms just after the start, is a page's first draw, as `lvl2`'s two).
 
+The high score table, which the main menu shows in its idle cycle (menu, attract demo, high scores), made about 100 KB/s of garbage, a collection about every minute while it showed: every frame it formatted every row's time with `Utils.getTimeString` (13 objects a call, and the result is dropped), drew every name a character at a time through `StringExt.substr(name, j, (object)1)`, and built every rank as `"(" + label + ")"`.
+`rewriter/MenuStrings.cs` has two rules for it, with `compat/TextMemo.cs`: M2 keeps `getTimeString`'s result per argument (the rule checks the method only reads `Text`'s constant strings and calls only `Math.Floor`, `Runtime.toString` and `String.Concat`), and M3, in `HighscoreTable.draw` only, takes a one-character substring inside the name from a kept string per character (any other case calls `substr` as before) and the `Concat`s from a cache kept by value.
+On the console (`-t2d-heartbeat 5`, a scratch build counting allocation sites) the table's 5 s windows went from about 6,800 counted allocations and 0.5 MB of heap growth (run `gm`) to about 470, mostly the boxed doubles of `HighscoreTable.update`, with the heap flat after the table's first window (`hm`).
+
 The passes go into `DowngradeAssemblies.Passes` before `TypeGapValues` and `ListRewindGaps`, in the order R8, R7, R9, R10.
 R8 goes first so that R7's check that nothing reads `meshes` sees the new bodies, and both go before the gap passes so that `TypeGapValues` doesn't type values in the bodies they throw away and `ListRewindGaps` doesn't report their gaps.
 `TypeGapValues` changes none of the four methods R7 to R9 take on Rewind's current output, and the code stage writes the same `Recovered.T2D` with it before or after these passes.
@@ -167,6 +171,7 @@ It runs R8, R7, R9 and the atlas passes in the pipeline's order and checks:
 
 - each pass's sites: R8 2, R7 1, R9 1, and the atlas passes' 6, 3, 1, 0 and 4;
 - that a second R8 refuses to run;
+- that R9's handler wraps `Main.draw()`, calls `Discard` and rethrows;
 - that nothing calls `CreateMultiMeshFrames` but the BitmapData constructor, and nothing reads `meshes`, reads `texpack` or calls `loadTexturePacks`;
 - the stack of every changed method, by the pipeline's own simulation;
 - that the new bodies have no locals, no handlers, no Rewind marker, and call nothing but SpriteBatch;

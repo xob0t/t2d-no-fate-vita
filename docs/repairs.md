@@ -235,7 +235,7 @@ Patterns check shapes, not hashes: they have no rule text to drift from, and a f
 | `barrier` | The inlined GC write barrier's flag test | `SkipBarrier`, as before |
 | `string` | `string.Equals(a, b)` inlined down to `SpanHelpers.SequenceEqual`'s loops over `&a._firstChar` and `&b._firstChar` (`__load1`, `__load8` markers) | The "same address" test, behind Equals' length test on the same two strings, becomes `String.Equals(a, b)` stored to the local the loops store their result to, then a branch to their merge; the loops die. Where the game uses `a != b`, the local takes 0 on "same"; the pattern then stores the negation, and checks that the loops' last compare is negated too. |
 | `box` | il2cpp's `Box(Int32, &slot)` inlined: a valuetype test (`__undefined()` < 0), a nullable test, `GetUninitializedObject` and `__Memcpy(o + 16, __frame(), size - 16)` | `box Int32` of the value into the block's result local, which becomes `object`; the block dies, with any write barrier inside it. The value is the low half of what Rewind computes on the block's reference-type path, `*(object*)&slot`, read by `KnownBits`. The result local must be read only where an object is taken (an object array's element, an `Object` parameter or field). |
-| `unbox` | `__loadN(__address(__reference_arithmetic((x + 16L))))`, a read of a boxed value | Behind `x is T`, `unbox.any T`: Int32 for 4 bytes, Boolean for 1, Double for 8 (as raw bits through `__Repairs.Bits.FromDouble` where Rewind typed the read as an int64). Behind only `x != null`, a 1-byte read is a Haxe Bool; a wider one is refused, its type undecided. |
+| `unbox` | `__loadN(__address(__reference_arithmetic((x + 16L))))`, a read of a boxed value | Behind `x is T`, `unbox.any T`: Int32 for 4 bytes, Boolean for 1, Double for 8 (as raw bits through `__Repairs.Bits.FromDouble` where Rewind typed the read as an int64). Behind only `x != null`, a 1-byte read is a Haxe Bool; a wider one is refused, its type undecided. The object tested must be the parameter the marker names: a local tested with a temporary in the marker (`t5`) is refused, since nothing proves they are one object, and left to a rule. |
 | `unreachable` | `__unreachable()` or `__noreturn()` right after a call | Deleted when the callee's body has no reachable `ret` (every path throws). After an unrecovered call (`__native_...`) it is refused. |
 
 ### Checked against the native code
@@ -350,6 +350,10 @@ With them the code stage left 6 gap methods with 147 marker sites; the rules for
 | `Database.start` | 2 | repaired: `changeEnemy(0)` through the generic virtual invoker (slot 25) |
 | `MusicPlayer.draw` | 1 | repaired: a locked track's name through the `drawString` invoker |
 
+
+`Script.getRank`, the rank worked out at a level's end, threw `InvalidCastException` at the end of every level but Cyberdyne HQ's (Desert Town, Cyberdyne Research and Factory, Future War 1 in the first playtest), and `Script.endLevel` calls it before it saves the story's progress, the rank, the time and the achievements, so none of those were saved.
+Rewind keeps the class check the native code makes on the `levelID == 7` path (`this` against `CyberdyneHQ`, before `numCopsKilled`) as a fact about `this` for the whole method, and cast the two reads of `levelID`, a field of `Script`, too; the native code (0x18042AAB0) reads `[rdi+0x10]` unchecked.
+`rules/Scripts.cs` (`ScriptGetRank`) drops those two casts. It is the only such cast in `Assembly-CSharp` (a cast of `this` to a subclass followed by a member of `Script`'s own). On the console a level ended through `Game.changeState(2)` no longer throws (runs `dr`, `er`, `gr`).
 ## Prototype results
 
 ### On fixed60, the current rules

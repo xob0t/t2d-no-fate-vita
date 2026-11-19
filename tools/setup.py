@@ -37,6 +37,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'downgrade'))
 import doctor
+import lock
 import progress
 from common import (
     ASSETRIPPER,
@@ -67,6 +68,7 @@ from common import (
 from rich.text import Text
 
 DOWNLOADS = WORK / 'installers'
+SETUP_LOCK_WAIT = 6 * 3600  # how long a setup waits for another job's pipeline (build.py's default)
 
 
 class Setup:
@@ -592,20 +594,32 @@ def main():
     parser.add_argument('--then-build', action='store_true', help=argparse.SUPPRESS)  # build.py builds next
     args = parser.parse_args()
     setup = Setup(args)
-    if not args.dry_run:  # what an interrupted extraction or delete left, so nothing half there is trusted
-        finish_deleting(EXTERNAL, WORK)
-    setup.python()
-    setup.unity_files()
-    setup.vc_runtime()
-    setup.dotnet(DOTNET10, '10', doctor.DOTNET10_ZIP, 'Rewind')
-    setup.rewind()
-    setup.assetripper()
-    setup.dotnet(doctor.DOTNET, '8', doctor.DOTNET_ZIP, "the builder's TypeModelGen")
-    setup.cecil()
-    setup.game()
-    setup.vita_sdk()
-    if args.vita_host:
-        setup.vita_host()
+    # The changes under the vita-build lock (build.py runs setup inside its own): two setups at once both cloned or
+    # checked out Rewind, and a setup changed tools/external under a running pipeline.
+    holder = f'setup.py {os.getpid()}: setup'
+    locking = not args.dry_run and not lock.ours('vita-build')
+    if locking:
+        WORK.mkdir(parents=True, exist_ok=True)
+    if locking and lock.take('vita-build', holder, SETUP_LOCK_WAIT, process=True) != 0:
+        sys.exit(f'setup: another job held the vita-build lock for {SETUP_LOCK_WAIT} s; try again later')
+    try:
+        if not args.dry_run:  # what an interrupted extraction or delete left, so nothing half there is trusted
+            finish_deleting(EXTERNAL, WORK)
+        setup.python()
+        setup.unity_files()
+        setup.vc_runtime()
+        setup.dotnet(DOTNET10, '10', doctor.DOTNET10_ZIP, 'Rewind')
+        setup.rewind()
+        setup.assetripper()
+        setup.dotnet(doctor.DOTNET, '8', doctor.DOTNET_ZIP, "the builder's TypeModelGen")
+        setup.cecil()
+        setup.game()
+        setup.vita_sdk()
+        if args.vita_host:
+            setup.vita_host()
+    finally:
+        if locking:
+            lock.release('vita-build', holder)
     print()
     if args.dry_run:
         print('Dry run: nothing was changed.')

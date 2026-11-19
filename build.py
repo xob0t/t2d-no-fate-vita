@@ -128,23 +128,25 @@ def main():
     parser.add_argument('--dry-run', action='store_true', help='list the setup command and the stages, run nothing')
     parser.add_argument('--locked', action='store_true', help=argparse.SUPPRESS)  # build.py under lock.py run
     args = parser.parse_args()
-    if args.locked or os.environ.get('T2D_LOCK'):
-        build(args)
-        return
-
     setup = [sys.executable, ROOT / 'tools' / 'setup.py', '--then-build']
     setup += ['--game', args.game] if args.game else []
     setup += ['--vita-sdk', args.vita_sdk] if args.vita_sdk else []
+    if args.locked or os.environ.get('T2D_LOCK'):
+        # Setup under the build lock too: two builds' setups both cloned or checked out Rewind's checkout, and a
+        # setup changed it under another job's pipeline.
+        if args.locked and not args.skip_setup and not args.dry_run:
+            run(f'setup stopped. {RETRY}', setup)
+        build(args)
+        return
+
     if args.dry_run:
+        print('under the vita-build lock:')
         if not args.skip_setup:
-            print('setup: ' + ' '.join(map(str, ['uv run tools/setup.py', *setup[2:]])))
-        print('then, under the vita-build lock:')
+            print('  setup    ' + ' '.join(map(str, ['uv run tools/setup.py', *setup[2:]])))
         for stage, arguments, output in plan(args):
             print(f'  {stage:8} uv run tools/downgrade/pipeline.py {" ".join(map(str, arguments))}  ->  {output}')
         return
-    if not args.skip_setup:
-        run(f'setup stopped. {RETRY}', setup)
-    # The stages under one build lock, so no other job's pipeline runs between them. lock.py run waits for
+    # Setup and the stages under one build lock, so no other job's pipeline runs between them. lock.py run waits for
     # the lock and releases it however build.py ends.
     rerun = [sys.executable, ROOT / 'build.py', '--locked', *sys.argv[1:]]
     command = [sys.executable, LOCK, 'run', 'vita-build', 'build.py', '--wait', str(args.wait), '--', *rerun]

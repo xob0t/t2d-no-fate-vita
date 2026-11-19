@@ -43,7 +43,7 @@ def atlas_overlay(exported: Path, assembly: Path, work: Path, report: Path, page
     out = work / 'atlas'
     stamp = work / STAMP
     current = _stamp(assembly, packs, page, raw)
-    if not (stamp.exists() and stamp.read_text() == current and (out / 'frames.bytes').exists()):
+    if not (stamp.exists() and stamp.read_text() == current and _missing(out, raw) == []):
         log('Repacking the texture packs into pages (tools/downgrade/atlas/repack.py)')
         command = [
             sys.executable,
@@ -78,6 +78,22 @@ def atlas_overlay(exported: Path, assembly: Path, work: Path, report: Path, page
     excluded = {PACKS, PACKS.with_name(PACKS.name + '.meta')}
     excluded |= {PACKS / f.name for f in packs.iterdir()}
     return overlay, excluded
+
+
+def _missing(out: Path, raw: bool):
+    """The files repack.py writes that out lacks (or has empty): the tables and every page frames.bytes counts,
+    each with its .meta. The stamp alone let a run reuse a folder that had lost a page."""
+    frames = out / 'frames.bytes'
+    try:
+        head = frames.read_bytes()[:16]
+    except OSError:
+        return [frames.name]
+    if len(head) < 16 or head[:4] != b'T2DF':
+        return [frames.name]
+    pages = int.from_bytes(head[12:16], 'little')
+    names = ['frames.bytes', 'scenes.bytes', *('p%03d%s' % (p, '.bytes' if raw else '.png') for p in range(pages))]
+    files = [out / n for name in names for n in (name, name + '.meta')]
+    return [f.name for f in files if not f.is_file() or f.stat().st_size == 0]
 
 
 def _big_pages(out: Path, tile: int):
