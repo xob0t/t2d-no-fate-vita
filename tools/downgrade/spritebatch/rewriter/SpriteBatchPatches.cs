@@ -14,6 +14,7 @@ using Mono.Cecil.Cil;
 //   new Pass("spritebatch", Scope.Game, SpriteBatchDraws),    R8
 //   new Pass("spritebatch", Scope.Game, SpriteBatchMeshes),   R7
 //   new Pass("spritebatch", Scope.Game, SpriteBatchFlush),    R9
+//   new Pass("spritebatch", Scope.Game, SpriteBatchFilters),  R10
 // spritebatch/check/SpriteCheck.cs runs them, with the atlas passes, on Rewind's Assembly-CSharp alone.
 partial class DowngradeAssemblies
 {
