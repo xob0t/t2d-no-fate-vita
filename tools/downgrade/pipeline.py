@@ -387,7 +387,13 @@ COMPAT_FOLDER = HERE / 'compat'
 
 
 def compat_sources():
-    return [HERE / 'Compat2018.cs', HERE / 'Unity6Shims.cs', *sorted(COMPAT_FOLDER.glob('*.cs'))]
+    # atlas/compat: the texture pages' runtime (docs/textures.md).
+    return [
+        HERE / 'Compat2018.cs',
+        HERE / 'Unity6Shims.cs',
+        *sorted(COMPAT_FOLDER.glob('*.cs')),
+        *sorted((HERE / 'atlas' / 'compat').glob('*.cs')),
+    ]
 
 
 COMPAT_MODULES = [
@@ -405,6 +411,7 @@ REWRITER_SOURCES = [
     *(HERE / 'rewriter' / f'{name}.cs' for name in ('Redirect', 'Runtime', 'RewindGaps', 'Stack')),
     # The platform layer's pass and its rules (docs/platform.md); compat_sources() takes only compat/*.cs.
     *(COMPAT_FOLDER / 'rewriter' / f'{name}.cs' for name in ('PlatformRules', 'PlatformPasses')),
+    HERE / 'atlas' / 'rewriter' / 'AtlasPatches.cs',  # the texture rules R1-R6 (docs/textures.md)
     # The repair engine and its rules (docs/repairs.md), which Rewrite() runs first. RepairsMain.cs is the
     # standalone authoring driver, with a Main of its own.
     *(HERE / 'repairs' / f'{name}.cs' for name in ('Engine', 'Edit', 'IL', 'Support', 'Expr', 'Patterns', 'RewriterHook')),
@@ -705,6 +712,14 @@ def asset_overlay(exported: Path, platform: str, assemblies: list):
     overlay.update(lighting)
     excluded |= lighting_excluded
     overlay.update(shader_overlay(exported))
+    # The texture pages in place of the twelve packs (docs/textures.md).
+    from atlas.step import atlas_overlay
+
+    atlas, atlas_excluded = atlas_overlay(
+        exported, RECOVERED / 'Assembly-CSharp.dll', WORK / 'atlas', ARTIFACTS / 'atlas', log=log
+    )
+    overlay.update(atlas)
+    excluded |= atlas_excluded
     overlay[Path('Assets') / 'link.xml'] = link_xml(assemblies, platform).encode()
     overlay[Path('Assets') / 'link.xml.meta'] = stable_meta('asset', 'link.xml', 'TextScriptImporter').encode()
     return overlay, excluded

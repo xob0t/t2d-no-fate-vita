@@ -113,6 +113,12 @@ partial class DowngradeAssemblies
         new Pass("runtime", Scope.All, ReimplementedInterfaces),
         // RewindGaps.cs: counts, changes nothing.
         new Pass("rewind", Scope.All, ListRewindGaps),
+        // atlas/rewriter/AtlasPatches.cs: the texture pages (docs/textures.md), R1 to R6.
+        new Pass("atlas", Scope.Game, AtlasTables),
+        new Pass("atlas", Scope.Game, AtlasSplash),
+        new Pass("atlas", Scope.Game, AtlasPackLoads),
+        new Pass("atlas", Scope.Game, AtlasDraws),
+        new Pass("atlas", Scope.Game, AtlasSceneHooks),
     };
 
     // Sites changed per rule (a pass, a row of a rule table, a game type a pass looks for),
