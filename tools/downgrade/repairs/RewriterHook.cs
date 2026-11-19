@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Mono.Cecil;
 
 // The repair engine as a step of the assembly rewriter (DowngradeAssemblies.cs), compiled into it with
@@ -29,6 +30,7 @@ partial class DowngradeAssemblies
         }
         Count("pass RepairRewindGaps", engine.RuleCount);
         return " repairRules=" + engine.RuleCount + " repairSites=" + engine.SiteCount + " repairErrors=" + engine.Errors.Count +
-               " barrierPatterns=" + engine.PatternsKept;
+               " patternMethods=" + engine.PatternsKept + " patternsPutBack=" + engine.PatternsDropped +
+               (engine.PatternReport == null ? "" : string.Concat(engine.PatternReport.Kept.Select(f => " " + f.Key + "Sites=" + f.Value.Removed)));
     }
 }

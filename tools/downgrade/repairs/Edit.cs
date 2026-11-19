@@ -215,7 +215,7 @@ namespace Repairs
             return error;
         }
 
-        static int Pops(Instruction ins, MethodDefinition method, bool returns)
+        internal static int Pops(Instruction ins, MethodDefinition method, bool returns)
         {
             OpCode op = ins.OpCode;
             if (op == OpCodes.Ret) return returns ? 1 : 0;
@@ -241,7 +241,7 @@ namespace Repairs
             return 0;
         }
 
-        static int Pushes(Instruction ins)
+        internal static int Pushes(Instruction ins)
         {
             OpCode op = ins.OpCode;
             var m = ins.Operand as MethodReference;

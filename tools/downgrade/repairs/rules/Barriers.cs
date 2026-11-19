@@ -2,7 +2,7 @@ using Repairs;
 
 // Inlined write barriers (Master builds) that Rewind leaves after a store to a field of an object it
 // can't type (the static-field ones Rewind's runtime fixes now remove): the store itself is
-// recovered; the barrier is GC plumbing. Patterns.WriteBarriers does the same where no rule is needed.
+// recovered; the barrier is GC plumbing. Patterns.cs's barrier family does the same where no rule is needed.
 static partial class Rules
 {
     // Sound.createSoundFromFile: the barrier after UnityWebRequestAsyncOperation.webRequest's store,

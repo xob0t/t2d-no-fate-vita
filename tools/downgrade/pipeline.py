@@ -414,7 +414,7 @@ REWRITER_SOURCES = [
     HERE / 'atlas' / 'rewriter' / 'AtlasPatches.cs',  # the texture rules R1-R6 (docs/textures.md)
     # The repair engine and its rules (docs/repairs.md), which Rewrite() runs first. RepairsMain.cs is the
     # standalone authoring driver, with a Main of its own.
-    *(HERE / 'repairs' / f'{name}.cs' for name in ('Engine', 'Edit', 'IL', 'Support', 'Expr', 'Patterns', 'RewriterHook')),
+    *(HERE / 'repairs' / f'{name}.cs' for name in ('Engine', 'Edit', 'IL', 'Support', 'Expr', 'KnownBits', 'Patterns', 'RewriterHook')),
     *sorted((HERE / 'repairs' / 'rules').glob('*.cs')),
     # The fold-back passes (foldback/README.md): inlined engine bindings and class library internals back to 2018.2's API.
     *sorted((HERE / 'foldback').glob('*.cs')),
