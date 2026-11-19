@@ -43,15 +43,3 @@ static partial class Rules
          .With(il => il.Ldloc(31).Castclass("com.bitmapbureau.terminator.sprites.objects.Elevator").Stloc(6));
     }
 }
-
-// GameObject.overCover: on finding the cover sprite it collides with, `sprite.collider = this; this.cover = sprite`
-// (0x1802BFAAF, 0x1802BFAC2, each with rt_WriteBarrier): the sprite is Sprites.sprite[i], Rewind's V5; the second
-// store's value was lost with its barrier call.
-static partial class Rules
-{
-    static void GameObjectOverCover(Engine e)
-    {
-        MethodRepair m = e.Method(GameObjectType + "::overCover()", "4ce01f9f");
-        m.Site("__undefined()", "40540507").With(il => il.Ldloc(5));
-    }
-}

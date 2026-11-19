@@ -315,6 +315,12 @@ Patch 0032 recovers the issue 29 switches, so the six methods are whole but for 
 
 With the 32 patches and these rules the code stage leaves 43 gap methods with 301 marker sites, no repair error and no unresolved reference.
 
+### After Rewind patch 0033
+
+Patch 0033 fixes issue 30: a direct call changes only the volatile registers its callee's code writes, so the values the write barrier's callers keep in r9 and xmm1 survive it.
+Three rules are retired, each method's new IL checked against what the rule made: `Sprites.addFromJSON` (`Barriers.cs`; the elevators' `type = 0` now in their recovered constructors), `Platform.doPlatformCheck` (`Barriers.cs`; `other.y = V4 - 1.0`) and `GameObject.overCover` (`Calls.cs`; `this.cover = V5`).
+`SaveSettings.loadSettings` (`Saves.cs`) was re-pinned: a temporary of Rewind's in its marker text went from `e21` to `e31`, and the exception is still V6.
+
 ## Prototype results
 
 ### On fixed60, the current rules

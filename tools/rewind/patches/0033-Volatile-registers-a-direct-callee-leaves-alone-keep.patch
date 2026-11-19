@@ -1,0 +1,233 @@
+From c445d321186f408eb96beee369416f2ad86e0e04 Mon Sep 17 00:00:00 2001
+From: xob0t <32616886+xob0t@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 13:59:28 +0300
+Subject: [PATCH] Volatile registers a direct callee leaves alone keep their
+ values across the call
+
+The lifter took every call as changing all Win64 volatile registers (rax, rcx, rdx, r8-r11, xmm0-xmm5). MSVC with
+LTCG knows which of them a callee of the same image writes, and keeps values in the others across the call. IL2CPP's
+write barrier writes only rax, rcx, rdx and r8:
+    xor r9d, r9d ; mov [rsi+0x3b0], r9 ; call <barrier> ; mov [rsi+0xec], r9d
+and the store after the call came out as "obj.field = __undefined()" (also a double kept in xmm1, a reference in
+r9). __chkstk keeps rcx, the size of a dynamic stack allocation, which was lost the same way.
+
+The volatile registers a direct call can change are now read from the callee's code (CalleeRegisters): every
+instruction reachable from its entry, through jumps and into the functions it calls, and the registers they write.
+A pop counts as a write; an indirect jump or call, undecodable code or more than 4000 instructions, and the callee
+changes them all. The others keep their values after the call. REWIND_NO_CALLEE_REGISTERS turns this off.
+
+On a commercial Unity 6000.0.60f1 game 16 more bodies are complete (4 in Assembly-CSharp), and one complete body
+with a wrong value is corrected: a respawn height that added 0 in place of a platform's top offset kept in r9
+across the barrier. One generic body over value types is lost: its stack allocation of sizeof(T) is now there,
+read from the runtime type, which Rewind does not express. Checked against the PDBs of four IL2CPP test builds:
+the barrier, il2cpp_rgctx_method, Il2CppTypeHash::Hash and __chkstk get sets that cover every register MSVC reads
+after a call to them.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/Rewind.Analysis/X64/CalleeRegisters.cs | 116 +++++++++++++++++++++
+ src/Rewind.Analysis/X64/X64Lifter.cs       |  39 +++++--
+ 2 files changed, 144 insertions(+), 11 deletions(-)
+ create mode 100644 src/Rewind.Analysis/X64/CalleeRegisters.cs
+
+diff --git a/src/Rewind.Analysis/X64/CalleeRegisters.cs b/src/Rewind.Analysis/X64/CalleeRegisters.cs
+new file mode 100644
+index 0000000..254b91a
+--- /dev/null
++++ b/src/Rewind.Analysis/X64/CalleeRegisters.cs
+@@ -0,0 +1,116 @@
++// Added for t2d-no-fate-vita (2026): the volatile registers a direct callee can change, read from its code. See NOTICE.md in that project's tools/rewind/patches.
++using System.Collections.Concurrent;
++using System.Runtime.CompilerServices;
++using Iced.Intel;
++using Rewind.Binary;
++
++namespace Rewind.Analysis.X64;
++
++/// <summary>
++/// Which of the Win64 volatile registers (rax, rcx, rdx, r8-r11, xmm0-xmm5) a direct call can change, read from
++/// the callee's code. A compiler that sees the whole program (MSVC with LTCG) knows a callee of the same image
++/// leaves some of them alone, IL2CPP's write barrier say, and keeps a value in one of them across the call; taking
++/// every volatile register as lost there turns that value into an undefined one.
++///
++/// Every instruction reachable from the callee's entry is visited, following jumps out of the function and the
++/// code of the functions it calls (a call comes back to the instruction after it): the registers any of them
++/// write are the ones that can change. A pop counts as a write, so a register saved and restored counts as
++/// changed. An indirect jump or call, code that cannot be decoded, or more code than the budget allows, and the
++/// callee can change every one of them.
++/// </summary>
++public static class CalleeRegisters
++{
++    /// <summary>Bit i: general register i (rax, rcx, rdx, rbx, rsp, rbp, rsi, rdi, r8-r15); bit 16 + i: xmm i.</summary>
++    public const uint Volatile = 0b1111_0000_0111u | 0b11_1111u << 16;
++    public const int XmmBit = 16;
++
++    private const int Budget = 4000;
++
++    private static readonly ConditionalWeakTable<NativeImage, ConcurrentDictionary<ulong, uint>> Cache = new();
++
++    /// <summary>The volatile registers a call to <paramref name="target"/> can change (<see cref="Volatile"/> when not known).</summary>
++    public static uint Clobbered(NativeImage image, ulong target) =>
++        Cache.GetOrCreateValue(image).GetOrAdd(target, t => Compute(image, t));
++
++    private sealed class ImageReader(NativeImage image) : CodeReader
++    {
++        public ulong Position;
++        public override int ReadByte() => image.IsMapped(Position) ? image.U8(Position++) : -1;
++    }
++
++    private static uint Compute(NativeImage image, ulong entry)
++    {
++        var reader = new ImageReader(image);
++        var decoder = Decoder.Create(64, reader, entry);
++        var info = new InstructionInfoFactory();
++        var seen = new HashSet<ulong>();
++        var work = new Stack<ulong>();
++        work.Push(entry);
++        uint written = 0;
++        while (work.Count > 0)
++        {
++            ulong ip = work.Pop();
++            while (seen.Add(ip))
++            {
++                if (seen.Count > Budget || image.SectionAt(ip) is not { IsExecutable: true }) return Volatile;
++                reader.Position = ip;
++                decoder.IP = ip;
++                decoder.Decode(out Instruction ins);
++                if (ins.IsInvalid) return Volatile;
++                written |= Writes(ins, info);
++                if ((written & Volatile) == Volatile) return Volatile;
++                switch (ins.FlowControl)
++                {
++                    case FlowControl.Next:
++                        break;
++                    case FlowControl.ConditionalBranch:
++                        work.Push(ins.NearBranchTarget);
++                        break;
++                    case FlowControl.UnconditionalBranch:
++                        if (!IsNear(ins)) return Volatile;
++                        ip = ins.NearBranchTarget;
++                        continue;
++                    case FlowControl.Call:
++                        if (!IsNear(ins)) return Volatile;
++                        work.Push(ins.NearBranchTarget);
++                        break;
++                    case FlowControl.Return:
++                    case FlowControl.Interrupt:
++                    case FlowControl.Exception:
++                        goto nextPath;
++                    default:
++                        // Indirect jumps and calls, transactions: where they go is not known here.
++                        return Volatile;
++                }
++                ip = ins.NextIP;
++            }
++            nextPath: ;
++        }
++        return written & Volatile;
++    }
++
++    private static bool IsNear(in Instruction ins) => ins.Op0Kind is OpKind.NearBranch64 or OpKind.NearBranch32 or OpKind.NearBranch16;
++
++    private static uint Writes(in Instruction ins, InstructionInfoFactory factory)
++    {
++        switch (ins.Mnemonic)
++        {
++            // Clears only the upper halves of the ymm registers; their low 128 bits are what is tracked here.
++            case Mnemonic.Vzeroupper:
++                return 0;
++            // Load the vector registers from memory without naming them.
++            case Mnemonic.Vzeroall or Mnemonic.Fxrstor or Mnemonic.Fxrstor64 or Mnemonic.Xrstor or Mnemonic.Xrstor64 or
++                Mnemonic.Xrstors or Mnemonic.Xrstors64:
++                return Volatile;
++        }
++        uint mask = 0;
++        foreach (UsedRegister used in factory.GetInfo(ins).GetUsedRegisters())
++        {
++            if (used.Access is not (OpAccess.Write or OpAccess.CondWrite or OpAccess.ReadWrite or OpAccess.ReadCondWrite)) continue;
++            Register full = used.Register.GetFullRegister();
++            if (full.IsGPR64()) mask |= 1u << (full - Register.RAX);
++            else if (full.IsZMM() && full - Register.ZMM0 < 16) mask |= 1u << (XmmBit + (full - Register.ZMM0));
++        }
++        return mask;
++    }
++}
+diff --git a/src/Rewind.Analysis/X64/X64Lifter.cs b/src/Rewind.Analysis/X64/X64Lifter.cs
+index 8a22c03..3e93c48 100644
+--- a/src/Rewind.Analysis/X64/X64Lifter.cs
++++ b/src/Rewind.Analysis/X64/X64Lifter.cs
+@@ -1,4 +1,4 @@
+-// Modified for t2d-no-fate-vita (2026): stack arguments of calls to targets not yet known, switches through byte-indexed jump tables, jump-table registers dead after the jump. See NOTICE.md in that project's tools/rewind/patches.
++// Modified for t2d-no-fate-vita (2026): stack arguments of calls to targets not yet known, switches through byte-indexed jump tables, jump-table registers dead after the jump, volatile registers a direct callee leaves alone kept across the call. See NOTICE.md in that project's tools/rewind/patches.
+ using Iced.Intel;
+ using Rewind.Analysis.Ir;
+ using Rewind.Binary;
+@@ -1305,7 +1305,8 @@ public sealed class X64Lifter : IMachineLifter
+         return count;
+     }
+ 
+-    private void AfterCall(Node call, CallReturn returns)
++    /// <param name="clobbered">The volatile registers the callee can change (<see cref="CalleeRegisters"/>); the others keep their values.</param>
++    private void AfterCall(Node call, CallReturn returns, uint clobbered = CalleeRegisters.Volatile)
+     {
+         Node Proj(int which, VT type)
+         {
+@@ -1313,22 +1314,38 @@ public sealed class X64Lifter : IMachineLifter
+             p.Imm = which;
+             return p;
+         }
++        // bit: the register's bit in clobbered (CalleeRegisters' numbering).
++        void Kill(int v, VT type, int bit)
++        {
++            if ((clobbered & 1u << bit) != 0) SetVar(v, _b.Undef(type));
++        }
++        const int Xmm = CalleeRegisters.XmmBit;
+         // Registers the callee does not return anything in hold nothing meaningful afterwards.
+         bool any = returns == CallReturn.Unknown;
+-        SetVar(0, any || returns == CallReturn.Integer ? Proj(CallResult.IntReturn, VT.I64) : _b.Undef(VT.I64));
+-        SetVar(VarXmm + 0, any || returns is CallReturn.Float or CallReturn.Double ? Proj(CallResult.FloatLane0, VT.I32) : _b.Undef(VT.I32));
+-        SetVar(VarXmm + 1, any || returns == CallReturn.Double ? Proj(CallResult.FloatLane1, VT.I32) : _b.Undef(VT.I32));
+-        SetVar(VarXmm + 2, _b.Undef(VT.I32));
+-        SetVar(VarXmm + 3, _b.Undef(VT.I32));
+-        // Caller-saved registers hold nothing meaningful afterwards.
+-        foreach (int v in (int[])[1, 2, 8, 9, 10, 11]) SetVar(v, _b.Undef(VT.I64));
++        if (any || returns == CallReturn.Integer) SetVar(0, Proj(CallResult.IntReturn, VT.I64));
++        else Kill(0, VT.I64, 0);
++        if (any || returns is CallReturn.Float or CallReturn.Double) SetVar(VarXmm + 0, Proj(CallResult.FloatLane0, VT.I32));
++        else Kill(VarXmm + 0, VT.I32, Xmm);
++        if (any || returns == CallReturn.Double) SetVar(VarXmm + 1, Proj(CallResult.FloatLane1, VT.I32));
++        else Kill(VarXmm + 1, VT.I32, Xmm);
++        Kill(VarXmm + 2, VT.I32, Xmm);
++        Kill(VarXmm + 3, VT.I32, Xmm);
++        // Caller-saved registers hold nothing meaningful afterwards, unless the callee's code leaves them alone.
++        foreach (int v in (int[])[1, 2, 8, 9, 10, 11]) Kill(v, VT.I64, v);
+         for (int x = 1; x <= 5; x++)
+             for (int lane = 0; lane < 4; lane++)
+-                SetVar(VarXmm + x * 4 + lane, _b.Undef(VT.I32));
++                Kill(VarXmm + x * 4 + lane, VT.I32, Xmm + x);
+         SetVar(VarFlags, _b.Undef(VT.Flags));
+         _rdxSignExtends = 0;
+     }
+ 
++    /// <summary>Set REWIND_NO_CALLEE_REGISTERS to take every call as changing every volatile register.</summary>
++    private static readonly bool NoCalleeRegisters = Environment.GetEnvironmentVariable("REWIND_NO_CALLEE_REGISTERS") != null;
++
++    /// <summary>The volatile registers a call can change: for a direct call, the ones its target's code writes.</summary>
++    private uint ClobberedBy(in Instruction ins) =>
++        NoCalleeRegisters || ins.Op0Kind != OpKind.NearBranch64 ? CalleeRegisters.Volatile : CalleeRegisters.Clobbered(_image, ins.NearBranchTarget);
++
+     /// <summary>Return convention of the call most recently emitted.</summary>
+     private CallReturn _lastCallReturn;
+ 
+@@ -1947,7 +1964,7 @@ public sealed class X64Lifter : IMachineLifter
+                     n.Op1Kind == OpKind.Register && n.Op1Register == Register.RAX)
+                     return;
+                 Node call = EmitCall(ins, tail: false, noReturn: false);
+-                AfterCall(call, _lastCallReturn);
++                AfterCall(call, _lastCallReturn, ClobberedBy(ins));
+                 return;
+             }
+ 
+-- 
+2.56.0.windows.4
+

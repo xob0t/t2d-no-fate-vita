@@ -21,22 +21,4 @@ static partial class Rules
         MethodRepair m = e.Method("com.bitmapbureau.terminator.AssetsEmbed::loadBytes(Int32)", "5c928f80");
         m.Site("__load4(", "c07e9ee0").SkipBarrier();
     }
-
-    // Sprites.addFromJSON: GameObject.type of the FWElevator (0x1804A8488..84A5) and the FW3BossLift
-    // (0x1804A9C8F..9CA5): `xor r9d, r9d`, the stopPoint store and its barrier call (0x1800A0270, which keeps r9),
-    // then `mov [rsi+0xEC], r9d`. Rewind takes r9 as clobbered by the call (rewind-issues.md, issue 30); native stores 0.
-    static void SpritesAddFromJSON(Engine e)
-    {
-        MethodRepair m = e.Method("com.bitmapbureau.terminator.game.Sprites::addFromJSON(StaticTiledData,Int32)", "d4fc1184");
-        foreach (Site s in m.Sites("__undefined()", 2, "9293b62b 7a100053")) s.With(il => il.I4(0));
-    }
-
-    // Platform.doPlatformCheck: landing on the platform, `other.y = top - 1.0` (0x1802FA223..234): top is in xmm1
-    // (Rewind's V4, x offset + the platform's y) across the platform store's barrier call, which keeps xmm1 as it keeps
-    // r9 (issue 30); Rewind reads the value after the call as __undefined() into V6 and its bits as a double.
-    static void PlatformDoPlatformCheck(Engine e)
-    {
-        MethodRepair m = e.Method("com.bitmapbureau.terminator.sprites.objects.Platform::doPlatformCheck(GameObject)", "337da87c");
-        m.Site("__undefined()", "cc0767fd").Replace(0, 3, il => il.Ldloc(4));
-    }
 }

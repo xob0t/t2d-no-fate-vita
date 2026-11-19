@@ -10,11 +10,11 @@ static partial class Rules
     // controllerKeyboard store, the flag kept in a local.
     static void SaveSettingsLoadSettings(Engine e)
     {
-        MethodRepair m = e.Method("com.bitmapbureau.terminator.savedata.SaveSettings::loadSettings()", "52cf296e");
-        m.Site("__IsAssignableFrom(__klass(),", "dba47e8d").With(il => il.I8(1));
-        m.Site("__ThreadStaticData(__klass())", 0, "fe6655e6").Delete();
-        m.Site("__store8(t#, e21)", "014d06ee").With(il => il.Ldloc(6).Stsfld("haxe.lang.Exceptions::exception"));
-        m.Site("__ThreadStaticData(__klass())", 0, "4fc23be2").Delete();
+        MethodRepair m = e.Method("com.bitmapbureau.terminator.savedata.SaveSettings::loadSettings()", "40e309fa");
+        m.Site("__IsAssignableFrom(__klass(),", "e005e2c0").With(il => il.I8(1));
+        m.Site("__ThreadStaticData(__klass())", 0, "3e51f294").Delete();
+        m.Site("__store8(t#, e31)", "d4eb29c8").With(il => il.Ldloc(6).Stsfld("haxe.lang.Exceptions::exception"));
+        m.Site("__ThreadStaticData(__klass())", 0, "7d535712").Delete();
         m.Site("__load4(", "fb0f3790").SkipBarrier();
     }
 }

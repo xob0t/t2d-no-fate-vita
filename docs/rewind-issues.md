@@ -446,7 +446,7 @@ Seen in a real game, 8 sites in 6 methods, all in play: `Button.staticCallbacks`
 
 ## 30. The write-barrier helper is taken to clobber r9 (new)
 
-Status: open; no repro yet.
+Status: fixed by patch 0033 (a direct call changes only the volatile registers its callee's code writes); the repro (`Issue30_*`, branch `rewind/issue30-repro`) passes.
 
 MSVC with LTCG knows which registers a function of the same image leaves alone, and keeps a value in r9 across a call to the write-barrier helper, which doesn't touch it.
 Rewind treats every call as clobbering the volatile registers (rax, rcx, rdx, r8 to r11), so a store of r9 after the call reads an undefined value:

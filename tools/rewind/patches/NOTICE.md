@@ -40,6 +40,7 @@ Changes made for t2d-no-fate-vita in 2026, one patch per change (0023 to 0027 al
 | 0030 | A read past the header of an object a type test proved to be a boxed value is the unboxed value, or a field of it. |
 | 0031 | Virtual calls on `this` merged from several paths, through a merged vtable-entry address or a merge of merges, are recovered. |
 | 0032 | A switch through a byte table of case indexes and a table of targets is recovered; the register a jump table jumps through is dead after the jump. |
+| 0033 | A direct call changes only the volatile registers the callee's code writes. |
 
 Every change has a `REWIND_NO_*` environment switch that turns it off.
 The patches hold no game code or data.
