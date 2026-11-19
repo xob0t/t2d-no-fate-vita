@@ -69,7 +69,8 @@ public static class ShaderTestBuild
         foreach (var step in report.steps)
             foreach (var m in step.messages.Where(m => m.type == LogType.Error || m.type == LogType.Exception || m.type == LogType.Warning))
                 Debug.Log("T2DSH " + m.type.ToString().ToUpperInvariant() + " " + step.name + ": " + m.content);
-        EditorApplication.Exit(report.summary.result == BuildResult.Succeeded ? 0 : 1);
+        // Shader errors leave the build "Succeeded", with the programs left out: any error fails it here.
+        EditorApplication.Exit(report.summary.result == BuildResult.Succeeded && report.summary.totalErrors == 0 ? 0 : 1);
     }
 
     static string Argument(string name)

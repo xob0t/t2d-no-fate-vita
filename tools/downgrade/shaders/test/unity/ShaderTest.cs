@@ -197,7 +197,6 @@ public class ShaderTest : MonoBehaviour
             rt.Create();
             return rt;
         }).ToArray();
-        perfSource = Input("pixelart", "point");
         var runs = new[] { new { Name = "crt", Fast = false }, new { Name = "crt_fast", Fast = true }, new { Name = "normal", Fast = false } };
         foreach (var run in runs)
         {
@@ -207,6 +206,7 @@ public class ShaderTest : MonoBehaviour
                 Color = Vector4.one, OutputSize = new Vector4(960, 544, 0, 0),
             };
             perfMaterial = MaterialFor(c);
+            perfSource = Input("pixelart", run.Fast ? "bilinear" : "point");
             perfShader = run.Name;
             perfFast = run.Fast;
             var means = new Dictionary<int, float>();

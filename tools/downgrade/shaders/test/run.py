@@ -132,7 +132,8 @@ def case_lines():
     for size in ((960, 544), (967, 544), (1920, 1080), (398, 224)):
         for source in ('pixelart', 'synthetic'):
             for fast in (False, True):
-                add(f'crt{"fast" if fast else ""}_{source}_{size[0]}x{size[1]}', 'Unlit/CRTShader', fast, source, 'point', size)
+                # The fast variant needs a bilinear source (CRTShader.shader); the faithful one samples texel centres.
+                add(f'crt{"fast" if fast else ""}_{source}_{size[0]}x{size[1]}', 'Unlit/CRTShader', fast, source, 'bilinear' if fast else 'point', size)
     add('crt_synthetic_960x544_bilinear', 'Unlit/CRTShader', False, 'synthetic', 'bilinear', (960, 544))
     background = (0.2, 0.4, 0.6, 0.4)  # all exact in 8 bits (0.5 clears to 127 on Direct3D 11)
     add('normal_rgba', 'Unlit/NormalShader', False, 'rgba', 'point', (398, 224), background)
@@ -279,6 +280,29 @@ def crt_dxbc(tex, u, v, output, filt):
     return np.concatenate([c, np.ones_like(c[..., :1])], axis=-1)
 
 
+def crt_fast_model(tex, u, v, output, filt):
+    """The T2D_CRT_FAST variant's own math (CRTShader.shader), to check it is written as designed; how far that
+    design is from the original is the comparison with crt_dxbc's reference."""
+    at_x, at_y = u * F(398.0) - F(0.5), v * F(224.0) - F(0.5)
+    at_z = u * F(output[0]) * F(0.333333343)
+    dx, dy = at_x - np.floor(at_x), at_y - np.floor(at_y)
+    first_x, first_y = at_x - dx + F(0.5), at_y - dy + F(0.5)
+    right = F(1.0) / (F(1.0) + np.exp2(F(4.0) - F(8.0) * dx))
+    beams = []
+    for distance in (dy, F(1.0) - dy):
+        t = np.minimum(distance * F(1.4), F(1.0)) - F(0.5)
+        t2 = t * t
+        beams.append(F(0.5) - t * (F(1.5703204) + t2 * (F(-2.5684607) + t2 * F(1.1498051))))
+    total = beams[0] + beams[1]
+    c = sample(tex, (first_x + right) * F(0.0025125628), (first_y + beams[1] / total) * F(0.0044642859), filt)[..., :3]
+    c = c * total[..., None]
+    group = np.floor((at_z - np.floor(at_z)) * F(3.0))[..., None]
+    c = c * (F(1.0) - F(0.5) * np.clip(np.abs(group - F([0.0, 1.0, 2.0])), 0, 1))
+    m = c.max(axis=-1, keepdims=True)
+    c = c / (m * F(0.48780488) + F(0.51219511))
+    return np.concatenate([c, np.ones_like(c[..., :1])], axis=-1)
+
+
 def blend(src, clear):
     """Blend SrcAlpha OneMinusSrcAlpha, One One over a target cleared to clear (UNORM8: the output clamped)."""
     src = np.clip(src, 0, 1)
@@ -292,7 +316,9 @@ def reference_case(case, inputs):
     w, h = case['size']
     tex = inputs[case['input']]
     v, u = np.meshgrid((np.arange(h, dtype=F) + F(0.5)) / F(h), (np.arange(w, dtype=F) + F(0.5)) / F(w), indexing='ij')
-    if case['shader'] == 'Unlit/CRTShader':
+    if case['shader'] == 'Unlit/CRTShader' and case['fast']:
+        out = crt_fast_model(tex, u, v, case['output'], case['filter'])
+    elif case['shader'] == 'Unlit/CRTShader':
         out = crt_dxbc(tex, u, v, case['output'], case['filter'])  # opaque: no blend
     elif case['shader'] == 'Unlit/NormalShader':
         out = blend(sample(tex, u, v, case['filter']), case['clear'])  # sample o0, v1.xy, t0, s0
@@ -307,10 +333,8 @@ def reference():
     inputs = {p.stem: load(p) for p in INPUTS.glob('*.png')}
     REFERENCE.mkdir(parents=True, exist_ok=True)
     for case in cases:
-        if case['fast']:
-            continue  # the fast variant is compared against the full reference of the same case
         Image.fromarray(reference_case(case, inputs), 'RGBA').save(REFERENCE / f'{case["name"]}.png')
-    log(f'reference: {sum(not c["fast"] for c in cases)} cases in {REFERENCE}')
+    log(f'reference: {len(cases)} cases in {REFERENCE}')
 
 
 def compare(renders: Path):
@@ -318,13 +342,15 @@ def compare(renders: Path):
     diffs = WORK / f'diff-{renders.name}'
     diffs.mkdir(parents=True, exist_ok=True)
     report, worst = [], 0
-    report.append(f'{"case":42} {"max":>4} {">1 px":>8} {">1 %":>7} {">8 %":>7} {"mean":>7} {"PSNR dB":>8}')
-    for case in cases:
-        name = case['name']
-        full = name.replace('crtfast_', 'crt_')
-        got_path, want_path = renders / f'{name}.png', REFERENCE / f'{full}.png'
-        if not got_path.exists():
-            report.append(f'{name:42} missing')
+    report.append(f'{"case, against":52} {"max":>4} {">1 px":>8} {">1 %":>7} {">8 %":>7} {"mean":>7} {"PSNR dB":>8}')
+    # Each case against its reference; the fast variant also against the faithful reference of its case ("vs
+    # faithful": what the cheaper design changes), which doesn't count towards the worst difference.
+    rows = [(c['name'], c['name'], 'reference', True) for c in cases]
+    rows += [(c['name'], c['name'].replace('crtfast_', 'crt_'), 'vs faithful', False) for c in cases if c['fast']]
+    for name, reference_name, against, counts in rows:
+        got_path, want_path = renders / f'{name}.png', REFERENCE / f'{reference_name}.png'
+        if not got_path.exists() or not want_path.exists():
+            report.append(f'{name + ", " + against:52} missing')
             worst = max(worst, 999)
             continue
         got = np.asarray(Image.open(got_path).convert('RGBA'), np.int16)
@@ -334,18 +360,18 @@ def compare(renders: Path):
         mse = float(np.mean((got[..., :3] - want[..., :3]).astype(np.float64) ** 2))
         psnr = 99.0 if mse == 0 else 10 * np.log10(255**2 / mse)
         report.append(
-            f'{name:42} {int(d.max()):4} {int((per_pixel > 1).sum()):8} {100 * (per_pixel > 1).mean():6.3f}% '
+            f'{name + ", " + against:52} {int(d.max()):4} {int((per_pixel > 1).sum()):8} {100 * (per_pixel > 1).mean():6.3f}% '
             f'{100 * (per_pixel > 8).mean():6.3f}% {d[..., :3].mean():7.4f} {psnr:8.2f}'
         )
-        if not case['fast']:
+        if counts:
             worst = max(worst, int(d.max()))
         if d.max() > 1:
             amplified = np.clip(per_pixel * (255 // max(1, int(d.max()))), 0, 255).astype(np.uint8)
-            Image.fromarray(amplified, 'L').save(diffs / f'{name}.png')
+            Image.fromarray(amplified, 'L').save(diffs / f'{name}{"" if counts else "-vs-faithful"}.png')
     text = '\n'.join(report)
     (WORK / f'report-{renders.name}.txt').write_text(text + '\n', encoding='utf-8')
     print(text)
-    log(f'worst difference of the faithful cases: {worst} (of 255); report {WORK / f"report-{renders.name}.txt"}')
+    log(f'worst difference from the references: {worst} (of 255); report {WORK / f"report-{renders.name}.txt"}')
     return worst
 
 
@@ -416,8 +442,11 @@ def gxp_programs():
                 continue
             blob = bytes(tree['compressedBlob'])
             for p, _platform in enumerate(tree['platforms']):
-                for o, offset in enumerate(tree['offsets'][p]):
-                    size, full = tree['compressedLengths'][p][o], tree['decompressedLengths'][p][o]
+                # 2018.2 stores one blob per platform; Unity 6 a list (one per segment).
+                offsets, sizes, fulls = (tree[k][p] for k in ('offsets', 'compressedLengths', 'decompressedLengths'))
+                if isinstance(offsets, int):
+                    offsets, sizes, fulls = [offsets], [sizes], [fulls]
+                for offset, size, full in zip(offsets, sizes, fulls):
                     data = lz4.block.decompress(blob[offset : offset + size], uncompressed_size=full)
                     start, index = 0, 0
                     while (start := data.find(b'GXP\x00', start)) >= 0:
