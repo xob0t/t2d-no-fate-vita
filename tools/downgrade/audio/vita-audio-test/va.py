@@ -9,7 +9,8 @@ Run every command that touches the console inside butcher-vita's lock, which all
 
 Commands:
   state                       perf's answer: the running app, clocks, fps
-  install [vpk]               stream the VPK to vitacompanion's installer (default work/vita-audio-test/t2d-audio-test.vpk)
+  install [vpk]               stream the VPK to vitacompanion's installer
+                              (default work/vita-audio-test/t2d-audio-test.vpk)
   run <tag> "<steps>"         write args.txt, launch, wait for the log's DONE (or the app to stop), fetch the log
                               into work/vita-audio-test/runs/<tag>
   fetch <tag>                 fetch the log only
@@ -33,7 +34,7 @@ import winreg
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import audio_rules  # noqa: E402
+import audio_rules
 
 WORK = audio_rules.default_export()[1].parent / 'vita-audio-test'
 RUNS = WORK / 'runs'
@@ -46,14 +47,18 @@ KEEP_AWAKE = 'nosleep on; screen on'
 def setting(name):
     if os.environ.get(name):
         return os.environ[name]
-    for key, path in ((winreg.HKEY_CURRENT_USER, 'Environment'),
-                      (winreg.HKEY_LOCAL_MACHINE, r'SYSTEM\CurrentControlSet\Control\Session Manager\Environment')):
+    for key, path in (
+        (winreg.HKEY_CURRENT_USER, 'Environment'),
+        (winreg.HKEY_LOCAL_MACHINE, r'SYSTEM\CurrentControlSet\Control\Session Manager\Environment'),
+    ):
         with contextlib.suppress(OSError), winreg.OpenKey(key, path) as handle:
             return winreg.QueryValueEx(handle, name)[0]
     return ''
 
 
-HOST = next((v for v in map(setting, ('BUTCHER_VITA_HOST', 'HUNT_VITA_HOST', 'CROW_VITA_HOST', 'DRIFTER_VITA_HOST')) if v), '')
+HOST = next(
+    (v for v in map(setting, ('BUTCHER_VITA_HOST', 'HUNT_VITA_HOST', 'CROW_VITA_HOST', 'DRIFTER_VITA_HOST')) if v), ''
+)
 
 
 def log(message):
@@ -64,7 +69,9 @@ def check_lock():
     lock = Path(os.environ.get('VITA_DEVICE_LOCK') or Path.home() / '.t3' / 'vita-device.lock')
     text = lock.read_text(encoding='utf-8', errors='replace') if lock.exists() else ''
     if 't2d: audio' not in text:
-        sys.exit(f'va.py: run inside lock.py run vita-device "t2d: audio" (the lock holds: {text.strip()[:200] or "nobody"})')
+        sys.exit(
+            f'va.py: run inside lock.py run vita-device "t2d: audio" (the lock holds: {text.strip()[:200] or "nobody"})'
+        )
 
 
 def ftp():
@@ -214,7 +221,7 @@ def install(vpk: Path):
     size = vpk.stat().st_size
     names = {line.split()[0] for line in command('help', timeout=4).splitlines() if line.strip()}
     if 'install' not in names:
-        sys.exit("vitacompanion on the console has no install command")
+        sys.exit('vitacompanion on the console has no install command')
     app = running_app()
     if app not in (None, 'none') and TITLE not in app:
         sys.exit(f'another app runs on the console ({app}); not installing over it')

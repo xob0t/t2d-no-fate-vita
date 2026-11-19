@@ -14,9 +14,20 @@ from pathlib import Path
 import UnityPy
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import audio_rules as ar  # noqa: E402
+import audio_rules as ar
 
-FORMATS = {0: 'PCM', 1: 'Vorbis', 2: 'ADPCM', 3: 'MP3', 4: 'VAG', 5: 'HEVAG', 6: 'XMA', 7: 'AAC', 8: 'GCADPCM', 9: 'ATRAC9'}
+FORMATS = {
+    0: 'PCM',
+    1: 'Vorbis',
+    2: 'ADPCM',
+    3: 'MP3',
+    4: 'VAG',
+    5: 'HEVAG',
+    6: 'XMA',
+    7: 'AAC',
+    8: 'GCADPCM',
+    9: 'ATRAC9',
+}
 LOAD = {0: 'decompress', 1: 'compressed', 2: 'streaming'}
 CODECS = {1: 'PCM8', 2: 'PCM16', 6: 'GCADPCM', 7: 'IMAADPCM', 8: 'VAG', 9: 'HEVAG', 11: 'MPEG', 13: 'AT9', 15: 'Vorbis'}
 RATES = [4000, 8000, 11000, 11025, 16000, 22050, 24000, 32000, 44100, 48000, 96000]
@@ -62,9 +73,11 @@ def main():
                 handle.seek(res.m_Offset)
                 bank = handle.read(min(res.m_Size, 0x200))
         codec, rate, channels, samples = bank_info(bank) if bank else ('no data', 0, 0, 0)
-        line = (f'{clip.m_Name}: {LOAD.get(clip.m_LoadType)} {FORMATS.get(clip.m_CompressionFormat)} {clip.m_Frequency} Hz '
-                f'{clip.m_Channels} ch preload={clip.m_PreloadAudioData} | bank {codec} {rate} Hz {channels} ch '
-                f'{samples} samples {res.m_Size} bytes in {Path(res.m_Source).name}')
+        line = (
+            f'{clip.m_Name}: {LOAD.get(clip.m_LoadType)} {FORMATS.get(clip.m_CompressionFormat)} {clip.m_Frequency} Hz '
+            f'{clip.m_Channels} ch preload={clip.m_PreloadAudioData} | bank {codec} {rate} Hz {channels} ch '
+            f'{samples} samples {res.m_Size} bytes in {Path(res.m_Source).name}'
+        )
         name = clip.m_Name
         if name.startswith(('fx_', 'amb_')):
             print('PROBE', line)

@@ -71,6 +71,8 @@ def write_if_changed(path: Path, data: bytes):
     if path.exists() and path.read_bytes() == data:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Windows refuses to overwrite a hidden file (some exported .meta files are), so replace it.
+    path.unlink(missing_ok=True)
     path.write_bytes(data)
 
 
@@ -84,7 +86,13 @@ def new_meta(source_meta: str, name: str, settings, quality=0.7):
     guid = hashlib.md5(f't2d-audio-test/{name}'.encode()).hexdigest()
     text = re.sub(r'^guid: \w+$', f'guid: {guid}', source_meta, count=1, flags=re.MULTILINE)
     text = ar.importer_text(text, settings, name)
-    return re.sub(r'^(  defaultSettings:\n(?:    .*\n)*?    quality: )[\d.]+', rf'\g<1>{quality}', text, count=1, flags=re.MULTILINE)
+    return re.sub(
+        r'^(  defaultSettings:\n(?:    .*\n)*?    quality: )[\d.]+',
+        rf'\g<1>{quality}',
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
 
 
 def make_project(with_game):
@@ -94,7 +102,9 @@ def make_project(with_game):
     write_if_changed(assets / 'Editor' / 'AudioTestBuild.cs', (HERE / 'unity' / 'AudioTestBuild.cs').read_bytes())
     modules = ['audio', 'imgui', 'jsonserialize']
     manifest = ',\n'.join(f'    "com.unity.modules.{m}": "1.0.0"' for m in modules)
-    write_if_changed(PROJECT / 'Packages' / 'manifest.json', ('{\n  "dependencies": {\n' + manifest + '\n  }\n}\n').encode())
+    write_if_changed(
+        PROJECT / 'Packages' / 'manifest.json', ('{\n  "dependencies": {\n' + manifest + '\n  }\n}\n').encode()
+    )
 
     resources = assets / 'Resources'
     lines = []
@@ -133,8 +143,23 @@ def build():
     log = WORK / 'build.log'
     started = time.time()
     result = subprocess.run(
-        [str(UNITY), '-batchmode', '-nographics', '-buildTarget', 'PSP2', '-projectPath', str(PROJECT),
-         '-executeMethod', 'AudioTestBuild.Build', '-buildOutput', str(BUILD), '-vitaTitleId', TITLE_ID, '-logFile', str(log)],
+        [
+            str(UNITY),
+            '-batchmode',
+            '-nographics',
+            '-buildTarget',
+            'PSP2',
+            '-projectPath',
+            str(PROJECT),
+            '-executeMethod',
+            'AudioTestBuild.Build',
+            '-buildOutput',
+            str(BUILD),
+            '-vitaTitleId',
+            TITLE_ID,
+            '-logFile',
+            str(log),
+        ],
         check=False,
     )
     lines = log.read_text(encoding='utf-8', errors='replace').splitlines() if log.exists() else []

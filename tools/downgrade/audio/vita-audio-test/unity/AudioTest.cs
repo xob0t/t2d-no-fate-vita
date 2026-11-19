@@ -15,6 +15,7 @@ using UnityEngine.Profiling;
 //   vol <v>              AudioListener volume (default 0.2)
 //   load                 Resources.Load every clip of the "game" group in the game's order, as AssetsEmbed.staticInit
 //                        does, imported with audio_rules.py's settings: time and main memory per kind
+//   loadasync <n>        the same with Resources.LoadAsync, n requests in flight at a time, frames going on
 //   streamcost <group>   load the group's 20 streamed copies (pre: preloadAudioData on, np: off), then play each alone:
 //                        memory per loaded clip, Play()'s time on the main thread, time to the first samples
 //   play <s> <v> <secs>  s streamed music clips looping at once plus v voices of in-memory sound effects, each
@@ -153,6 +154,7 @@ public class AudioTest : MonoBehaviour
             Log("STEP " + step);
             if (w[0] == "vol") AudioListener.volume = float.Parse(w[1], Inv);
             else if (w[0] == "load") yield return LoadGame();
+            else if (w[0] == "loadasync") yield return LoadAsync(int.Parse(w[1]));
             else if (w[0] == "streamcost") yield return StreamCost(w[1]);
             else if (w[0] == "play") yield return Play(int.Parse(w[1]), int.Parse(w[2]), float.Parse(w[3], Inv));
             else if (w[0] == "probe") yield return Probe();
@@ -220,6 +222,43 @@ public class AudioTest : MonoBehaviour
         Log(string.Format(Inv, "LOAD_FILE_EXISTS found={0} ms={1:F0} dataPath={2}", exists, existsMs, Application.dataPath));
         var states = entries.Where(x => x.Group == "game" && x.Clip != null).GroupBy(x => x.Clip.loadType + "/" + x.Clip.loadState).Select(g => g.Key + "=" + g.Count());
         Log("LOAD_STATES " + string.Join(" ", states.ToArray()));
+    }
+
+    // The same clips with Resources.LoadAsync, up to `inFlight` requests at a time, while frames go on.
+    IEnumerator LoadAsync(int inFlight)
+    {
+        yield return Settle();
+        Mem start = Read();
+        List<Entry> list = entries.Where(x => x.Group == "game").ToList();
+        var pending = new List<KeyValuePair<Entry, ResourceRequest>>();
+        var frames = new List<float>();
+        int next = 0, done = 0;
+        var all = System.Diagnostics.Stopwatch.StartNew();
+        while (done < list.Count)
+        {
+            while (next < list.Count && pending.Count < inFlight)
+            {
+                pending.Add(new KeyValuePair<Entry, ResourceRequest>(list[next], Resources.LoadAsync<AudioClip>(list[next].Path)));
+                next++;
+            }
+            yield return null;
+            frames.Add(Time.unscaledDeltaTime * 1000f);
+            for (int i = pending.Count - 1; i >= 0; i--)
+            {
+                if (!pending[i].Value.isDone) continue;
+                pending[i].Key.Clip = pending[i].Value.asset as AudioClip;
+                pending.RemoveAt(i);
+                done++;
+            }
+        }
+        double total = all.Elapsed.TotalMilliseconds;
+        Mem end = Read();
+        frames.Sort();
+        Log(string.Format(Inv, "LOADASYNC inFlight={0} clips={1} failed={2} totalMs={3:F0} frames={4} frameMs p50={5:F2} p99={6:F2} max={7:F2} over34={8} usedLP={9} MB unityAlloc+={10} | {11}",
+            inFlight, list.Count, list.Count(e => e.Clip == null), total, frames.Count, frames[frames.Count / 2], frames[Math.Min(frames.Count - 1, frames.Count * 99 / 100)],
+            frames[frames.Count - 1], frames.Count(f => f > 34f), Mb(start.LP - end.LP), Mb(end.UnityAlloc - start.UnityAlloc), end));
+        var states = list.Where(x => x.Clip != null).GroupBy(x => x.Clip.loadType + "/" + x.Clip.loadState).Select(g => g.Key + "=" + g.Count());
+        Log("LOADASYNC_STATES " + string.Join(" ", states.ToArray()));
     }
 
     // The memory of loaded streamed clips, with and without preloadAudioData, and what playing one costs.

@@ -10,20 +10,21 @@ The rule, by the clip's folder (the folders match the code's audiotype table: mu
 Skynet 3):
 
 - Music and ambience stream (HEVAG, stereo, 44.1 kHz), except clips shorter than STREAM_MIN_SECONDS (the
-  boss intros, the stings, two short loops), which stay compressed in memory. On the PS Vita an AudioSource
-  opens a streamed clip on the main thread when it plays it, about 35 ms each time (butcher-vita measured
-  this), and the game starts a short intro and its loop in the same frame.
+  boss intros, the stings, two short loops), which stay compressed in memory at 44.1 kHz. On the PS Vita
+  AudioSource.Play of a streamed clip blocks the main thread for 16 to 57 ms (the test), and the game starts
+  an intro and its loop in the same frame.
 - Everything else (sound effects, voices, Skynet's lines, UI) is compressed in memory as HEVAG, the PS Vita's
-  ADPCM, at 44.1 kHz. A clip whose two channels are the same, or whose difference is SIDE_DB_MONO or more
-  below their sum, is imported as mono (forceToMono): half of the effects are, and the game pans them itself.
-  Skynet's lines and the UI sounds are real stereo and stay stereo.
+  ADPCM, at MEMORY_RATE (32 kHz). A clip whose two channels are the same, or whose difference is SIDE_DB_MONO
+  (20 dB) or more below their sum, is imported as mono (forceToMono): 619 of 835 are, and the game pans
+  effects itself. Skynet's lines and the UI sounds are real stereo and stay stereo.
 - preloadAudioData stays on for clips in memory (otherwise each loads on the main thread when it first plays),
-  and off for streamed clips (STREAM_PRELOAD).
+  and off for streamed clips (STREAM_PRELOAD), which makes no difference on the console.
 
 The settings go into the exported .meta files' defaultSettings, which the editor's PS Vita import and the
 builder's tools/builder/audio.py both read. Unity 2018.2's PS Vita importer makes every clip HEVAG whatever
-format is asked, except PCM (huntdown-vita found this, and the test in tools/downgrade/audio/vita-audio-test
-checks it again for this game's clips).
+format is asked (Vorbis, MP3 and ATRAC9 included), except PCM and ADPCM; huntdown-vita found this, and the
+probe in tools/downgrade/audio/vita-audio-test confirmed it for 2018.2.19f1, with forceToMono and the rate
+override honoured.
 
     python -I tools/downgrade/audio/audio_rules.py [--export DIR] [--report DIR] [--apply PROJECT]
 
@@ -55,17 +56,19 @@ AUDIO = Path('Assets') / 'Resources' / 'audio'
 STREAM_MIN_SECONDS = 10.0
 # A stereo clip whose side (L-R) is this far below its mid (L+R), in RMS, is imported as mono (dB).
 SIDE_DB_MONO = -20.0
-# Whether streamed clips preload; the device test measures what a loaded streamed clip costs with each.
+# Whether streamed clips preload. On the PS Vita a streamed clip stays Unloaded after Resources.Load either way
+# and costs no measurable memory (20 clips: under 1 MB, with and without), so this only keeps the game's intent.
 STREAM_PRELOAD = False
-# Sample rate for clips in memory: None keeps the source's 44.1 kHz.
+# Sample rate for sound effects, voices and UI sounds in memory: None keeps the source's 44.1 kHz. The PS Vita's
+# importer honours the override (the test's probe: a 32 kHz HEVAG bank).
 MEMORY_RATE = 32000
 
 # Sizes. HEVAG: 16 bytes per 28 samples per channel; Unity stores each clip as a one-sample FSB5 bank with a
 # 0x60-byte header, padded to 32 bytes (huntdown-vita's tools/builder/fsb5.py).
 HEVAG_FRAME, HEVAG_FRAME_BYTES, BANK_HEADER, BANK_ALIGN = 28, 16, 0x60, 32
-# Main memory a loaded streamed clip costs before it plays, and a playing stream's buffers (bytes).
-# Placeholders until the device test (docs/audio.md, "Measurements") replaces them.
-STREAM_LOADED_BYTES = 200 * 1024
+# Main memory a loaded streamed clip costs before it plays (measured: none), and a playing stream's buffers
+# (bytes; measured under 1 MB for one, an estimate).
+STREAM_LOADED_BYTES = 0
 STREAM_PLAYING_BYTES = 64 * 1024
 
 KINDS = ('music', 'ambience', 'skynet', 'voice', 'sfx', 'ui')
@@ -170,8 +173,10 @@ def scan(exported: Path):
 
 def decide(clip: Clip) -> Settings:
     """The PS Vita import settings for a clip (the rule in the module's docstring)."""
-    if clip.kind in ('music', 'ambience') and clip.seconds >= STREAM_MIN_SECONDS:
-        return Settings(STREAMING, HEVAG, mono=False, rate=None, preload=STREAM_PRELOAD)
+    if clip.kind in ('music', 'ambience'):
+        # Short music stays in memory at the music's rate: a boss intro and its loop should sound alike.
+        load = STREAMING if clip.seconds >= STREAM_MIN_SECONDS else COMPRESSED_IN_MEMORY
+        return Settings(load, HEVAG, mono=False, rate=None, preload=load != STREAMING or STREAM_PRELOAD)
     mono = clip.channels == 2 and clip.side_db is not None and clip.side_db <= SIDE_DB_MONO
     return Settings(COMPRESSED_IN_MEMORY, HEVAG, mono=mono, rate=MEMORY_RATE, preload=True)
 
@@ -274,17 +279,42 @@ def mib(n):
 
 
 def print_report(rows):
-    head = ('kind', 'clips', 'minutes', 'longest s', 'source MiB', 'PCM MiB', 'streamed', 'in memory', 'mono',
-            'VPK MiB', 'resident MiB')
+    head = (
+        'kind',
+        'clips',
+        'minutes',
+        'longest s',
+        'source MiB',
+        'PCM MiB',
+        'streamed',
+        'in memory',
+        'mono',
+        'VPK MiB',
+        'resident MiB',
+    )
     print(' | '.join(head))
     for kind, r in rows.items():
-        print(' | '.join(str(x) for x in (
-            kind, r['clips'], f'{r["seconds"] / 60:.1f}', r['longest'], mib(r['source_bytes']), mib(r['pcm_bytes']),
-            r['streamed'], r['in_memory'], r['mono'], mib(r['vita_bytes']), mib(r['resident_bytes']),
-        )))
+        print(
+            ' | '.join(
+                str(x)
+                for x in (
+                    kind,
+                    r['clips'],
+                    f'{r["seconds"] / 60:.1f}',
+                    r['longest'],
+                    mib(r['source_bytes']),
+                    mib(r['pcm_bytes']),
+                    r['streamed'],
+                    r['in_memory'],
+                    r['mono'],
+                    mib(r['vita_bytes']),
+                    mib(r['resident_bytes']),
+                )
+            )
+        )
     print(
         f'resident = clips in memory as HEVAG + {STREAM_LOADED_BYTES // 1024} KiB per loaded streamed clip '
-        f'(placeholder); each playing stream adds about {STREAM_PLAYING_BYTES // 1024} KiB'
+        f'(measured on the console); each playing stream adds under 1 MB (estimate {STREAM_PLAYING_BYTES // 1024} KiB)'
     )
 
 
@@ -292,8 +322,9 @@ def default_export():
     here = Path(__file__).resolve().parents[3]
     candidates = [here]
     try:
-        common = subprocess.run(['git', '-C', str(here), 'rev-parse', '--git-common-dir'], capture_output=True,
-                                text=True, check=True).stdout.strip()
+        common = subprocess.run(
+            ['git', '-C', str(here), 'rev-parse', '--git-common-dir'], capture_output=True, text=True, check=True
+        ).stdout.strip()
         candidates.append(Path(common).resolve().parent)
     except (OSError, subprocess.CalledProcessError):
         pass
@@ -321,11 +352,23 @@ def main():
         for c in clips:
             s = decide(c)
             side = '' if c.side_db is None else f'{c.side_db:.1f}'
-            handle.write(f'{c.path}\t{c.kind}\t{c.format}\t{c.channels}\t{c.rate}\t{c.seconds:.3f}\t{side}\t'
-                         f'{s.load_type}\t{int(s.mono)}\t{s.rate or c.rate}\t{vita_bytes(c, s)}\n')
-    rule = {k: v for k, v in globals().items() if k in (
-        'STREAM_MIN_SECONDS', 'SIDE_DB_MONO', 'STREAM_PRELOAD', 'MEMORY_RATE', 'STREAM_LOADED_BYTES',
-        'STREAM_PLAYING_BYTES')}
+            handle.write(
+                f'{c.path}\t{c.kind}\t{c.format}\t{c.channels}\t{c.rate}\t{c.seconds:.3f}\t{side}\t'
+                f'{s.load_type}\t{int(s.mono)}\t{s.rate or c.rate}\t{vita_bytes(c, s)}\n'
+            )
+    rule = {
+        k: v
+        for k, v in globals().items()
+        if k
+        in (
+            'STREAM_MIN_SECONDS',
+            'SIDE_DB_MONO',
+            'STREAM_PRELOAD',
+            'MEMORY_RATE',
+            'STREAM_LOADED_BYTES',
+            'STREAM_PLAYING_BYTES',
+        )
+    }
     (out / 'report.json').write_text(json.dumps({'rule': rule, 'kinds': rows}, indent=1), encoding='utf-8')
     print(f'wrote {out / "clips.tsv"} and {out / "report.json"}')
     if args.apply:
