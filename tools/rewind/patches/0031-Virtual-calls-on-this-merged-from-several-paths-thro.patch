@@ -1,0 +1,175 @@
+From ea3099aad8f49dcc8e937766f20fc9b92e20d063 Mon Sep 17 00:00:00 2001
+From: xob0t <32616886+xob0t@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 10:20:49 +0300
+Subject: [PATCH 31/31] Virtual calls on this merged from several paths:
+ through a merged entry address or nested merges
+
+Patch 0008 recognizes a virtual call whose class pointer is merged from several paths. Two more shapes of the
+same tail merging, seen on calls on "this", were left as "__call_indirect(__load8(m0), this, ...)": each way
+computes the address of the same entry of the class ("class + 0x228") and the merged address is read for the
+method and its description; or each way reads the method pointer itself and some ways are merges already (a
+merge of merges), so the existing handling of merged method pointers saw no vtable entry. A merged entry
+address is now the object's class plus the entry's offset, and a merge of merges whose every way picks one
+virtual method on the call's receiver is that method. REWIND_NO_MERGED_VTABLE_ENTRIES and
+REWIND_NO_NESTED_MERGED_TARGETS turn them off.
+On a commercial Unity 6000.0.60f1 game 10 more Assembly-CSharp bodies are complete, none lost or changed.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../Recover/HirBuilder.Calls.cs               | 46 +++++++++++++-
+ .../Recover/HirBuilder.Values.cs              | 60 ++++++++++++++++++-
+ 2 files changed, 103 insertions(+), 3 deletions(-)
+
+diff --git a/src/Rewind.Analysis/Recover/HirBuilder.Calls.cs b/src/Rewind.Analysis/Recover/HirBuilder.Calls.cs
+index 94136cc..08df695 100644
+--- a/src/Rewind.Analysis/Recover/HirBuilder.Calls.cs
++++ b/src/Rewind.Analysis/Recover/HirBuilder.Calls.cs
+@@ -1,4 +1,4 @@
+-// Modified for t2d-no-fate-vita (2026): float arguments of native calls, slot-specialized invokers, offset-0 field addresses, gaps always marked, small structs as numbers, floating-point negation, inlined compare-exchange on references. See NOTICE.md in that project's tools/rewind/patches.
++// Modified for t2d-no-fate-vita (2026): float arguments of native calls, slot-specialized invokers, offset-0 field addresses, gaps always marked, small structs as numbers, floating-point negation, inlined compare-exchange on references, one virtual method through nested merges. See NOTICE.md in that project's tools/rewind/patches.
+ using Rewind.Analysis.Abi;
+ using Rewind.Analysis.Hir;
+ using Rewind.Analysis.Ir;
+@@ -1938,6 +1938,45 @@ public sealed partial class HirBuilder
+         return ways;
+     }
+ 
++    private static readonly bool NoNestedMergedTargets = Environment.GetEnvironmentVariable("REWIND_NO_NESTED_MERGED_TARGETS") != null;
++
++    /// <summary>
++    /// A merged code pointer some of whose ways in are merges themselves (ways that met before this point), each
++    /// way at the end taking the same virtual method's code from the class of the object it is called on: that
++    /// method, called on that object. (Where the ways pick different methods, only a merge of plain ways is
++    /// taken apart, above.)
++    /// </summary>
++    private MethodDef? OneMergedVirtualTarget(Node phi, Node? callReceiver)
++    {
++        var leaves = new List<Node>();
++        var seen = new HashSet<Node>();
++        bool Collect(Node n, int depth)
++        {
++            if (!seen.Add(n)) return true;
++            if (n.Op != Op.Phi) { leaves.Add(n); return true; }
++            if (depth > 4 || n.In.Length > 16) return false;
++            foreach (Node input in n.In)
++                if (!Collect(input, depth + 1)) return false;
++            return true;
++        }
++        if (!Collect(phi, 0) || leaves.Count < 2 || leaves.Count > 32) return null;
++        MethodDef? only = null;
++        Node? receiver = null;
++        foreach (Node leaf in leaves)
++        {
++            if (Peek(leaf) is not SVTable { MethodInfo: false, Interface: null } vt) return null;
++            TypeSig? receiverType = Peek(vt.Object) is SVal { Type: { } t } ? t : null;
++            if (_castTypes.TryGetValue(vt.Object, out List<TypeSig>? casts) && casts.Count == 1) receiverType = casts[0];
++            MethodDef? method = receiverType != null ? FindVirtual(Declared(receiverType), vt.Slot) : null;
++            if (method == null || method.IsStatic || method.GenericParameters.Length != 0 || method.DeclaringType.GenericParameters.Length != 0) return null;
++            // (One object throughout: the call's receiver is then the object every way read the class of.)
++            if ((only != null && !ReferenceEquals(only, method)) || (receiver != null && !ReferenceEquals(receiver, vt.Object))) return null;
++            only = method;
++            receiver = vt.Object;
++        }
++        return callReceiver != null && ReferenceEquals(callReceiver, receiver) ? only : null;
++    }
++
+     /// <summary>
+     /// The call of a merged code pointer whose ways in each picked a virtual method: a branch (or a switch) on the
+     /// number of the method, each arm calling its method with the call's arguments, all meeting again after it.
+@@ -2019,6 +2058,11 @@ public sealed partial class HirBuilder
+                     DispatchRefined = true;
+                 }
+             }
++            else if (!NoNestedMergedTargets && OneMergedVirtualTarget(targetNode, IntAt(call, 0)) is { } only)
++            {
++                BuildCall(call, only, [], [], isVirtual: true, tail, null, skipFirst: false);
++                return;
++            }
+         }
+         Sem target = Eval(targetNode);
+ 
+diff --git a/src/Rewind.Analysis/Recover/HirBuilder.Values.cs b/src/Rewind.Analysis/Recover/HirBuilder.Values.cs
+index 671dc6c..1d17952 100644
+--- a/src/Rewind.Analysis/Recover/HirBuilder.Values.cs
++++ b/src/Rewind.Analysis/Recover/HirBuilder.Values.cs
+@@ -1,4 +1,4 @@
+-// Modified for t2d-no-fate-vita (2026): virtual calls through merged class pointers, string indexer, gaps always marked, inlined object hash, small structs as numbers, floating-point negation, merged struct returns, low halves of 64-bit fields, casts of stored objects, unboxed reads after a type test. See NOTICE.md in that project's tools/rewind/patches.
++// Modified for t2d-no-fate-vita (2026): virtual calls through merged class pointers, string indexer, gaps always marked, inlined object hash, small structs as numbers, floating-point negation, merged struct returns, low halves of 64-bit fields, casts of stored objects, unboxed reads after a type test, a class entry's address merged from several paths. See NOTICE.md in that project's tools/rewind/patches.
+ using Rewind.Analysis.Hir;
+ using Rewind.Analysis.Ir;
+ using Rewind.Analysis.X64;
+@@ -1074,7 +1074,14 @@ public sealed partial class HirBuilder
+         foreach (var (node, scale) in terms)
+         {
+             if (scale != 1) continue;
+-            Sem s = node.Op == Op.Phi && MergedObjKlass(node) is { } merged ? merged : Eval(node);
++            Sem s;
++            if (node.Op == Op.Phi && MergedObjKlass(node) is { } merged) s = merged;
++            else if (node.Op == Op.Phi && MergedObjKlassEntry(node) is ({ } entryOf, var past))
++            {
++                s = entryOf;
++                offset += past;
++            }
++            else s = Eval(node);
+             if (!IsPointerLike(s) && !(s is SVal { Type: { } wrapper } && IsReferenceWrapper(wrapper))) continue;
+             baseNode = node;
+             baseSem = s;
+@@ -1131,6 +1138,55 @@ public sealed partial class HirBuilder
+     }
+ 
+     private static readonly bool NoMergedKlass = Environment.GetEnvironmentVariable("REWIND_NO_MERGED_KLASS") != null;
++    private static readonly bool NoMergedEntries = Environment.GetEnvironmentVariable("REWIND_NO_MERGED_VTABLE_ENTRIES") != null;
++
++    /// <summary>
++    /// The same as <see cref="MergedObjKlass"/> one step further: each way in computed the address of one entry
++    /// of the object's class ("class + 0x228", the same entry on every way), and the call after the merge reads
++    /// the method and its description through the merged address. That is the object's class, plus the entry's
++    /// offset. Ways that met before count as one, as there.
++    /// </summary>
++    private (SObjKlass Klass, long Offset)? MergedObjKlassEntry(Node phi, int depth = 0)
++    {
++        if (NoMergedEntries || phi.Block == null || phi.In.Length < 2 || depth > 4) return null;
++        var objects = new Node[phi.In.Length];
++        long? past = null;
++        for (int i = 0; i < phi.In.Length; i++)
++        {
++            Node input = phi.In[i];
++            Node obj;
++            long at = 0;
++            if (input.Op == Op.Phi)
++            {
++                if (MergedObjKlassEntry(input, depth + 1) is not ({ } inner, var innerAt)) return null;
++                (obj, at) = (inner.Object, innerAt);
++            }
++            else
++            {
++                Node klass = input;
++                if (input.Op == Op.Add && input.In[1].IsConst)
++                {
++                    klass = input.In[0];
++                    at = IrBuilder.SImm(input.In[1]);
++                }
++                if (!_sem.TryGetValue(klass, out Sem? s) || s is not SObjKlass known) return null;
++                obj = known.Object;
++            }
++            if (past != null && past != at) return null;
++            past = at;
++            objects[i] = obj;
++        }
++        if (past is not { } offset || offset == 0) return null;
++        if (objects.All(o => ReferenceEquals(o, objects[0]))) return (new SObjKlass(objects[0]), offset);
++        foreach (Node other in phi.Block.Phis)
++        {
++            if (ReferenceEquals(other, phi) || other.Dead || other.In.Length != objects.Length || other.Type != VT.I64) continue;
++            bool same = true;
++            for (int i = 0; i < objects.Length && same; i++) same = ReferenceEquals(other.In[i], objects[i]);
++            if (same) return (new SObjKlass(other), offset);
++        }
++        return null;
++    }
+ 
+     /// <summary>
+     /// The class of an object, merged from ways in that each read it: the compiler moves the read of the class
+-- 
+2.56.0.windows.4
+

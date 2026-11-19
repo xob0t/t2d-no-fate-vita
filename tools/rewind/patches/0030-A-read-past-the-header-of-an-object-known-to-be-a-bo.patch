@@ -1,0 +1,82 @@
+From a3351ee5ecfb6123b816c165322a23247f013b4f Mon Sep 17 00:00:00 2001
+From: xob0t <32616886+xob0t@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 10:12:49 +0300
+Subject: [PATCH 30/31] A read past the header of an object known to be a boxed
+ value is the value inside
+
+Where a test on the way in showed an object to be a boxed value ("if (o is int)", an exact class comparison,
+or the class check of an unbox the normalizer took out), the compiler drops the unbox's own check and reads the
+value at the end of the object header. Rewind found no field there in the object's static type ("no field at
+offset 0x10 of object") and marked the read. It is now the unboxed value, or the field of it read, as for an
+unbox through the runtime helper. REWIND_NO_TESTED_UNBOXES turns it off.
+On a commercial Unity 6000.0.60f1 game 186 more bodies are complete (9 in Assembly-CSharp, among them
+haxe.lang.Runtime.toInt, toBool and toString; 4 in InControl), none lost or changed.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../Recover/HirBuilder.Values.cs              | 24 ++++++++++++++++---
+ 1 file changed, 21 insertions(+), 3 deletions(-)
+
+diff --git a/src/Rewind.Analysis/Recover/HirBuilder.Values.cs b/src/Rewind.Analysis/Recover/HirBuilder.Values.cs
+index 8b4928b..671dc6c 100644
+--- a/src/Rewind.Analysis/Recover/HirBuilder.Values.cs
++++ b/src/Rewind.Analysis/Recover/HirBuilder.Values.cs
+@@ -1,4 +1,4 @@
+-// Modified for t2d-no-fate-vita (2026): virtual calls through merged class pointers, string indexer, gaps always marked, inlined object hash, small structs as numbers, floating-point negation, merged struct returns, low halves of 64-bit fields, casts of stored objects. See NOTICE.md in that project's tools/rewind/patches.
++// Modified for t2d-no-fate-vita (2026): virtual calls through merged class pointers, string indexer, gaps always marked, inlined object hash, small structs as numbers, floating-point negation, merged struct returns, low halves of 64-bit fields, casts of stored objects, unboxed reads after a type test. See NOTICE.md in that project's tools/rewind/patches.
+ using Rewind.Analysis.Hir;
+ using Rewind.Analysis.Ir;
+ using Rewind.Analysis.X64;
+@@ -913,7 +913,7 @@ public sealed partial class HirBuilder
+     /// <summary>The pointer to a runtime generic context (of a class or a method), and one entry of such a context.</summary>
+     private sealed record PRgctx(SRgctx Context) : Place;
+     private sealed record PRgctxItem(SRgctx Context, int Index) : Place;
+-    private sealed record PUnboxed(Node Object, int Offset) : Place;
++    private sealed record PUnboxed(Node Object, int Offset, TypeSig? Type = null) : Place;
+     private record PUnknown(string Why) : Place;
+     /// <summary>
+     /// Bytes of a struct that are not one of its fields nor a run of whole fields: [Offset, Offset + Size) of the
+@@ -1805,6 +1805,10 @@ public sealed partial class HirBuilder
+                 Place refined = FieldPlace(cast, tested, (int)a.Offset, size);
+                 if (refined is not PUnknown) return refined;
+             }
++            // Past the object header of an object known to be a boxed value: the value inside (an unbox whose
++            // class check the compiler dropped, since a test on the way here settled it).
++            if (direct is PUnknown && !NoTestedUnboxes && a.Offset >= _header && BoxedType(a.Base!) is { } boxed)
++                return new PUnboxed(a.Base!, (int)(a.Offset - _header), boxed);
+             return direct;
+         }
+         return new PUnknown($"memory access through a {type.DisplayName} value");
+@@ -1852,6 +1856,20 @@ public sealed partial class HirBuilder
+     }
+ 
+     private static readonly bool NoUnboxedWords = Environment.GetEnvironmentVariable("REWIND_NO_UNBOXED_WORDS") != null;
++    private static readonly bool NoTestedUnboxes = Environment.GetEnvironmentVariable("REWIND_NO_TESTED_UNBOXES") != null;
++
++    /// <summary>
++    /// The value type an object is known here to be a boxed instance of: a type test on every way here ("if (o
++    /// is int)"), an exact class comparison, or the class check of a cast the normalizer took out.
++    /// </summary>
++    private TypeSig? BoxedType(Node obj)
++    {
++        static bool Boxed(TypeSig t) => t.IsValueType && t is not SzArraySig and not ArraySig && !t.IsVoid;
++        if (TestedType(obj) is { } tested && Boxed(tested)) return tested;
++        if (ProvenClass(obj, _block) is { } proven && Boxed(proven)) return proven;
++        if (_castTypes.TryGetValue(obj, out List<TypeSig>? casts) && casts.Count == 1 && Boxed(casts[0])) return casts[0];
++        return null;
++    }
+ 
+     /// <summary>
+     /// The value type an object is known to be a boxed instance of where <paramref name="at"/> runs: an exact
+@@ -2079,7 +2097,7 @@ public sealed partial class HirBuilder
+                 return RgctxValue(entry.Context, entry.Index);
+             case PUnboxed u:
+             {
+-                TypeSig? type = _castTypes.TryGetValue(u.Object, out List<TypeSig>? casts) && casts.Count != 0 ? casts[0] : null;
++                TypeSig? type = u.Type ?? (_castTypes.TryGetValue(u.Object, out List<TypeSig>? casts) && casts.Count != 0 ? casts[0] : null);
+                 if (type == null && n.Block != null) type = ProvenClass(u.Object, n.Block);
+                 if (type == null)
+                 {
+-- 
+2.56.0.windows.4
+

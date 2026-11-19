@@ -1,0 +1,70 @@
+From bbec322d201a2ce3c7608ebe9b0321f794b90609 Mon Sep 17 00:00:00 2001
+From: xob0t <32616886+xob0t@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 10:05:36 +0300
+Subject: [PATCH 29/31] A call into the engine looked up on several paths
+ merged into one: the cached pointer is still that method
+
+Generated code calls an engine method through a pointer it looks up by name on first use and keeps in a
+static: "if (p == null) p = resolve(name); p(args)". Rewind folds that into the call of the internal-call
+method, but where the compiler merged two pasted-in copies of the same call (tail merging), the value stored
+into the static was a merge of two lookups, the static was not recognized, and the call stayed an indirect call
+through "__load8(<address>)" with "__nativecode()" markers. A merge whose every way in is a lookup of the same
+name is now that lookup. REWIND_NO_MERGED_ICALL_LOOKUPS turns it off.
+On a commercial Unity 6000.0.60f1 game the four such sites (Camera.set_rect_Injected twice,
+Transform.set_localScale_Injected, one JNI helper) become calls; no complete body lost or changed.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/Rewind.Analysis/Recover/Normalizer.cs | 25 +++++++++++++++++++++--
+ 1 file changed, 23 insertions(+), 2 deletions(-)
+
+diff --git a/src/Rewind.Analysis/Recover/Normalizer.cs b/src/Rewind.Analysis/Recover/Normalizer.cs
+index 0c08360..6a6ce00 100644
+--- a/src/Rewind.Analysis/Recover/Normalizer.cs
++++ b/src/Rewind.Analysis/Recover/Normalizer.cs
+@@ -1,4 +1,4 @@
+-// Modified for t2d-no-fate-vita (2026): floating-point negation. See NOTICE.md in that project's tools/rewind/patches.
++// Modified for t2d-no-fate-vita (2026): floating-point negation, engine-method lookups merged from several paths. See NOTICE.md in that project's tools/rewind/patches.
+ using Rewind.Model;
+ using Rewind.Analysis.Ir;
+ using Rewind.Analysis.Passes;
+@@ -949,7 +949,7 @@ public sealed partial class Normalizer(ProgramAnalysis program)
+         var statics = new Dictionary<ulong, Node>();
+         foreach (Block b in _fn.Blocks)
+             foreach (Node n in b.Nodes)
+-                if (n.Op == Op.Store && n.In[0].IsConst && resolved.TryGetValue(n.In[1], out Node? idiom))
++                if (n.Op == Op.Store && n.In[0].IsConst && LookedUp(n.In[1], resolved, 0) is { } idiom)
+                 {
+                     statics[(ulong)n.In[0].Imm] = idiom;
+                     n.Dead = true;
+@@ -990,6 +990,27 @@ public sealed partial class Normalizer(ProgramAnalysis program)
+ 
+     private static bool IsLazyTarget(Node n) => n.Op == Op.Idiom && (IdiomKind)n.Imm is IdiomKind.InternalCall or IdiomKind.PInvokeTarget;
+ 
++    private static readonly bool NoMergedLookups = Environment.GetEnvironmentVariable("REWIND_NO_MERGED_ICALL_LOOKUPS") != null;
++
++    /// <summary>
++    /// The engine method a value is the looked-up pointer of: the lookup's result, or - where the compiler
++    /// merged the ends of several paths that each look the same method up (two inlined copies of one call into
++    /// the engine) - a merge of such results, all of the same name.
++    /// </summary>
++    private static Node? LookedUp(Node value, Dictionary<Node, Node> resolved, int depth)
++    {
++        if (resolved.TryGetValue(value, out Node? idiom)) return idiom;
++        if (NoMergedLookups || value.Op != Op.Phi || depth > 4 || value.In.Length == 0) return null;
++        Node? common = null;
++        foreach (Node input in value.In)
++        {
++            if (ReferenceEquals(input, value)) continue;
++            if (LookedUp(input, resolved, depth + 1) is not { } one || (common != null && !ReferenceEquals(common, one))) return null;
++            common = one;
++        }
++        return common;
++    }
++
+     /// <summary>
+     /// An interface call in tail position is compiled as the search with a jump at each end: one where the
+     /// search found the interface (through the entry it found), one where it did not (through the runtime's
+-- 
+2.56.0.windows.4
+

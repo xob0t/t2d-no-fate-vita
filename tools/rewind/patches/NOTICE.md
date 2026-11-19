@@ -35,6 +35,10 @@ Changes made for t2d-no-fate-vita in 2026, one patch per change (0023 to 0027 al
 | 0025 | An object checked as a class is stored cast; a struct's address handed to a call is typed as its target. |
 | 0026 | A class's static data pointer merged from several paths is that class's statics. |
 | 0027 | An inlined compare-exchange on a reference field becomes `Interlocked.CompareExchange<T>`. |
+| 0028 | A call whose target isn't known yet takes as many stack arguments as the run of outgoing slots written before it. |
+| 0029 | An engine-method lookup merged from several paths (a tail-merged inlined internal call) collapses into the internal-call method. |
+| 0030 | A read past the header of an object a type test proved to be a boxed value is the unboxed value, or a field of it. |
+| 0031 | Virtual calls on `this` merged from several paths, through a merged vtable-entry address or a merge of merges, are recovered. |
 
 Every change has a `REWIND_NO_*` environment switch that turns it off.
 The patches hold no game code or data.

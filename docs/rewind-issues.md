@@ -272,7 +272,7 @@ Seen in a real game: 54 Assembly-CSharp methods with this reason, for example `P
 ## 17. A virtual call isn't recognized after tail-merging
 
 Status: fixed by patch 0008 for the static receiver; the repro passes and `Player.moveUpdate` is complete on the game.
-The this-form wasn't reproduced and is open if it exists.
+The this-form (virtual calls on `this` merged from several paths, through a merged vtable-entry address or a merge of merges) is fixed by patch 0031.
 
 When two paths end in the same virtual call with different arguments, MSVC keeps one call site and jumps to it from both (tail merging).
 Each path loads the receiver and its class, and the call block gets them, and the differing argument, as merged values.
@@ -296,7 +296,7 @@ Seen in a real game: `PoliceHelicopter::changeState` (`Utils.rand.Next(lo, 180)`
 ## 18. A misleading marker for an unidentified invoker thunk
 
 Status: patch 0009 recognizes invokers specialized for one slot; on the game `Gfx.draw` and `Player.changeState` are complete.
-The repro still fails because the 13-argument call loses its stack arguments, which is issue 21; they are marked as `__missing_argument()`.
+The 13-argument call's stack arguments, issue 21, are captured since patch 0028, and the repro passes.
 
 In a large method MSVC stops inlining IL2CPP's invoker templates, so a call through `VirtualActionInvokerN<…>::Invoke(slot, obj, args…)` stays a call.
 When every remaining call passes the same slot, LTCG specializes the invoker for it: the slot argument (RCX) goes dead and the invoker calls through `[klass+slot]`.
@@ -331,7 +331,7 @@ Seen in a real game: `UnityMain::BetterAnalog`.
 ## 20. Smaller coverage gaps
 
 Status: inlined constructors calling virtual methods are folded back by patch 0014 (the `InlinedCtor_NewVirtualTint` repro passes); where the object is kept in a local (`InlinedCtor_NewVirtualTintLocal`) it isn't, and that is left with a note.
-The double-returning interface invoker, the covariance check and the unboxing in an `is` pattern are open.
+Patch 0030 reads a value past the header of an object a type test proved to be a boxed value as the unboxed value (or a field of it), which covers the tested unboxing reads; the double-returning interface invoker and the covariance check are open.
 
 - Inlined constructors aren't folded back when the constructor calls virtual methods: `new VirtualTint(1, 1, 1, 0)` comes out as `(VirtualTint)FormatterServices.GetUninitializedObject(typeof(VirtualTint))`, the field stores and the two virtual calls. Repro: `InlinedCtor.InlinedCtor_NewVirtualTint` and `InlinedCtor_NewVirtualTintLocal`; `InlinedCtor_NewTint`, whose class is sealed and calls non-virtual methods, is folded back correctly. Reproduces on upstream main. Seen in a real game: 286 sites, for example `new ColorTransform(1, 1, 1, 0)` in `BBSplash`.
 - An interface invoker with a double return comes out typed `Opaque<long>`. With the 6000.0.60f1 library it is identified, but still "not translated", and the method still returns a long where a double is declared. Seen in a real game: 0x180003650, in `haxe.lang.Runtime::toDouble`.
@@ -341,7 +341,7 @@ The double-returning interface invoker, the covariance check and the unboxing in
 
 ## 21. Stack arguments of a call with many arguments are not captured (new)
 
-Status: open.
+Status: fixed by patch 0028: a call whose target isn't known yet takes as many stack slots as the run of outgoing slots written before it, from the first and with no hole, on every way in. The repro passes.
 
 A virtual call with 13 arguments, inlined into a small method, loses its last six arguments.
 Rewind marks them (`__Rewind.Opaque<double>("__missing_argument()")`, "call argument was not captured"), so nothing is silent, but the call is otherwise fully known.
@@ -415,9 +415,9 @@ Rewind already turns the runtime's own compare-exchange helper into `Interlocked
 The probe (`tools/assess/bringup`) ran Rewind's C# as a Unity 2018.2 Windows player and listed what stopped it.
 Checked again with all the patches:
 
-- Open: internal calls through a cached function pointer. Unity 6 caches the resolved internal call in a static: `__load8(0x1810CFE90)`, resolved and stored when null (`__nativecode()`), then `__call_indirect`. Seen in `UnityMain.ScreenStuff` (`Camera.set_rect`) and `UnityMain.FixedUpdate`.
+- Fixed by patch 0029: internal calls through a cached function pointer. Unity 6 caches the resolved internal call in a static: `__load8(0x1810CFE90)`, resolved and stored when null (`__nativecode()`), then `__call_indirect`. Seen in `UnityMain.ScreenStuff` (`Camera.set_rect`) and `UnityMain.FixedUpdate`.
 - Fixed by patch 0027: inlined field-like event accessors. `InputManager.OnDeviceAttached += …` came out as `Delegate.Combine` and an `__atomic_compare_exchange(&InputManager.OnDeviceAttached, m1, m0)` loop, in `UnityMain.OnEnable` and `OnDisable` (issue 27).
-- Open: an unboxing read as `__load4(obj + 16)` in `haxe.lang.Runtime.toInt` (the same as the last item of issue 20).
+- Fixed by patch 0030: an unboxing read as `__load4(obj + 16)` in `haxe.lang.Runtime.toInt` and `toBool`, behind their type tests.
 - Fixed: the element stores of `Vector3.zero`'s parts in `BitmapData..cctor` are whole `Vector3.zero` elements now.
 - Fixed by patch 0025: the `Vector3` local typed as `Color` in `UnityMain.OnRenderImage` (issue 25).
 - Fixed: `Main.main`'s inlined constructor, which came out as `__Rewind.Ref(new Sprite())`, is `new Main()` now.
