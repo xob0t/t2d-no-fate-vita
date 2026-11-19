@@ -92,7 +92,6 @@ namespace T2DCompat
             shotsAfter = Flags.Number("-t2d-shots", 3, 0f);
             var host = new GameObject("T2DProbe");
             DontDestroyOnLoad(host);
-            host.hideFlags = HideFlags.HideAndDontSave;
             probe = host.AddComponent<Probe>();
         }
 

@@ -11,7 +11,7 @@ using Debug = UnityEngine.Debug;
 // compat/ProbeFiles.cs (same author, MIT), without its thread-priority plugin.
 // Every message the player logs goes to ux0:data/T2DNoFate/log.txt (vita.py log; the two runs before are log.prev.txt
 // and log.prev2.txt): errors and exceptions with their stack traces, a message repeated back to back as one line with
-// its count, each line with the seconds since the start. It stops at MaxBytes, so an error every frame cannot fill the
+// its count (a repeat that goes on is written again every 5 s), each line with the seconds since the start. It stops at MaxBytes, so an error every frame cannot fill the
 // card. A thread of its own writes the lines, since a write to the card now and then takes seconds and the main thread
 // would wait for it; Flush writes what is queued from the calling thread. -t2d-log-sync writes on the logging thread.
 // Desktop players keep Unity's own log.
@@ -26,6 +26,7 @@ namespace T2DCompat
         static string path;
         static string last;
         static int repeats;
+        static double lastAt;
         static long written;
         static bool sync, full;
         static readonly object gate = new object();
@@ -53,7 +54,7 @@ namespace T2DCompat
                 path = Saves.VitaFolder + "/log.txt";
                 output = new StreamWriter(path, false, new UTF8Encoding(false));
                 output.WriteLine("Terminator 2D: NO FATE " + Application.version + ", Unity " + Application.unityVersion + ", T2DCompat log, " +
-                                 "player up " + Time.realtimeSinceStartup.ToString("F2") + " s");
+                                 "player up " + Time.realtimeSinceStartup.ToString("F2", System.Globalization.CultureInfo.InvariantCulture) + " s");
                 string[] args = Flags.Args;
                 output.WriteLine("args: " + string.Join(" ", args, 1, Math.Max(0, args.Length - 1)));
                 if (Flags.Note != null) output.WriteLine("T2D_LOG " + Flags.Note);
@@ -98,13 +99,14 @@ namespace T2DCompat
             {
                 if (full || output == null) return;
                 string entry = type == LogType.Log || type == LogType.Warning ? message : type + ": " + message + "\n" + stack;
-                if (entry == last)
+                if (entry == last && Seconds - lastAt < 5.0)
                 {
                     repeats++;
                     return;
                 }
+                lastAt = Seconds;
                 string line = (repeats > 0 ? "  (the line above " + repeats + " more times)\n" : "") +
-                              Seconds.ToString("F2") + " " + (entry ?? "").TrimEnd();
+                              Seconds.ToString("F2", System.Globalization.CultureInfo.InvariantCulture) + " " + (entry ?? "").TrimEnd();
                 last = entry;
                 repeats = 0;
                 written += line.Length + 1;
