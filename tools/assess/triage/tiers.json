@@ -1,0 +1,235 @@
+{
+ "_doc": "triage.py's play order and replacements. Classes by short or full name; methods 'Class::name' (every overload) or 'Class::*'. Tiers run in order; a 'scene' takes its roots and maps from work/atlas-usage/scenes.json.",
+ "scene_namespaces": [
+  "com.bitmapbureau.terminator.apps",
+  "com.bitmapbureau.terminator.scripts",
+  "com.bitmapbureau.terminator.cutscenes"
+ ],
+ "scene_base_classes": [
+  "App",
+  "Script",
+  "Cutscene",
+  "CompoundScene"
+ ],
+ "cut_methods": [
+  "Sprites::addFromJSON"
+ ],
+ "moot": {
+  "SteamManager::*": "platform layer: stubbed (STEAM_BUILD false; ctors keep gaps but nothing makes one)",
+  "EpicManager::*": "platform layer: stubbed",
+  "GalaxyManager::*": "platform layer: stubbed",
+  "PlayerPrefsX::*": "platform layer: stubbed (PlayerPrefs save mode unused)",
+  "LeaderboardState::*": "platform layer: leaderboards only with STEAM_BUILD",
+  "Platform::awardTrophy": "platform layer: stubbed",
+  "Platform::mapTrophiesAndAward": "platform layer: stubbed",
+  "UnityMain::dlc.*": "platform layer: stubbed",
+  "Utils::setSteamDeck": "platform layer: stubbed",
+  "Utils::systemLanguageSteam": "platform layer: forwarded to systemLanguageStandalone",
+  "Sound::createSoundFromFile": "platform layer: Sounds.Clip loader",
+  "PlayerPrefsX/*::*": "platform layer: stubbed",
+  "BitmapData::unityDraw": "spritebatch R8: new body",
+  "BitmapData::unityDrawClippedWidth": "spritebatch R8: new body",
+  "BitmapData::CreateMultiMeshFrames": "spritebatch R7: new body",
+  "AssetsPack::staticInit[5-9]": "atlas R1: table from Atlas",
+  "BitmapData::loadTexturePacks": "atlas R4: Atlas.Preload"
+ },
+ "tiers": [
+  {
+   "name": "0 boot",
+   "seeds": [
+    "UnityMain::Awake",
+    "UnityMain::OnEnable",
+    "UnityMain::Start",
+    "UnityMain::Update",
+    "UnityMain::FixedUpdate",
+    "UnityMain::OnPreRender",
+    "UnityMain::OnRenderImage",
+    "UnityMain::OnRenderObject",
+    "UnityMain::OnApplicationFocus",
+    "UnityMain::OnApplicationPause"
+   ],
+   "admit": [
+    "BBSplash"
+   ],
+   "instantiate": [
+    "UnityMain"
+   ]
+  },
+  {
+   "name": "1 main menu",
+   "admit": [
+    "MainMenu"
+   ]
+  },
+  {
+   "name": "2 L00 Future War 1",
+   "scene": "L00/16 Future War 1",
+   "admit": [
+    "MissionBriefing",
+    "ContinueScreen",
+    "FW1Outro"
+   ]
+  },
+  {
+   "name": "3 L01 Biker Bar",
+   "scene": "L01 Biker Bar"
+  },
+  {
+   "name": "4 L02 Truck Chase",
+   "scene": "L02 Truck Chase"
+  },
+  {
+   "name": "5 L03 Hospital",
+   "scene": "L03 Hospital",
+   "admit": [
+    "HospitalOutro"
+   ]
+  },
+  {
+   "name": "6 L04 Future War 2",
+   "scene": "L04/17 Future War 2",
+   "admit": [
+    "FW2Outro"
+   ]
+  },
+  {
+   "name": "7 L05-07 Cyberdyne HQ",
+   "scene": "L05-07 Cyberdyne HQ",
+   "admit": [
+    "CyberdyneHQOutro"
+   ]
+  },
+  {
+   "name": "8 L08 Freeway Chase",
+   "scene": "L08 Freeway Chase",
+   "admit": [
+    "FreewayChaseOutro"
+   ]
+  },
+  {
+   "name": "9 L09 Steel Mill",
+   "scene": "L09 Steel Mill",
+   "admit": [
+    "SteelMillMonologue",
+    "SteelMillOutro"
+   ],
+   "objects": [
+    "T1000SteelMillIntro"
+   ]
+  },
+  {
+   "name": "10 L10 Future War 3",
+   "scene": "L10/18 Future War 3",
+   "objects": [
+    "FW3CargoElevator"
+   ]
+  },
+  {
+   "name": "11 L11 Desert Town",
+   "scene": "L11 Desert Town",
+   "admit": [
+    "DesertTownIntro",
+    "DesertTownSpriteIntro",
+    "DesertTownOutro"
+   ]
+  },
+  {
+   "name": "12 L12 Cyberdyne Factory",
+   "scene": "L12 Cyberdyne Factory",
+   "admit": [
+    "FactoryOutro"
+   ]
+  },
+  {
+   "name": "13 L13 Cyberdyne Research",
+   "scene": "L13 Cyberdyne Research"
+  },
+  {
+   "name": "14 L14 Police Station",
+   "scene": "L14 Police Station"
+  },
+  {
+   "name": "15 L15 Future War 4",
+   "scene": "L15 Future War 4",
+   "admit": [
+    "FW4Outro"
+   ]
+  },
+  {
+   "name": "16 other menus",
+   "admit": [
+    "LevelSelect",
+    "HighscoreTable",
+    "Database",
+    "MusicPlayer",
+    "ReefLogo",
+    "Attract"
+   ]
+  },
+  {
+   "name": "17 story cutscenes",
+   "admit": [
+    "T1000IntroCutscene",
+    "GarageScene",
+    "InterrogationCutscene",
+    "DreamSequence",
+    "DysonExteriorScene",
+    "DysonInteriorScene",
+    "DysonSpared"
+   ]
+  },
+  {
+   "name": "18 extra modes",
+   "admit": [
+    "BossRushMenu",
+    "InfiniteModeMenu",
+    "InifiniteOrBossRushSummary"
+   ]
+  },
+  {
+   "name": "18b Tanker Chase",
+   "scene": "Tanker Chase"
+  },
+  {
+   "name": "18c Infinite mode",
+   "scene": "L48 Infinite mode"
+  },
+  {
+   "name": "18d Controls tutorial",
+   "scene": "Controls tutorial"
+  },
+  {
+   "name": "18e Demo",
+   "scene": "Demo / attract gameplay"
+  },
+  {
+   "name": "19 endings",
+   "admit": [
+    "ArcadeEnding",
+    "SarahKillsDysonEnding",
+    "SarahSparesDysonEnding",
+    "T800KillsDysonEnding",
+    "SteelMillSarahKillsDysonOutro",
+    "Conclusion",
+    "EndScreen",
+    "Credits"
+   ]
+  },
+  {
+   "name": "20 console-only"
+  }
+ ],
+ "gates": {
+  "(Main|App|Game|Menu|Button|SaveData|SaveStats|SaveSettings)::xbox.*": "20 console-only",
+  "Game::(?!staticInit$|\\.cctor$).*": "2 L00 Future War 1",
+  "MainMenu::(?!staticInit$|\\.cctor$).*": "1 main menu"
+ },
+ "factory_methods": [
+  "Trigger::update",
+  "HidingPlace::update",
+  "PoliceStationBackWallDoor::update",
+  "SkynetEnemyDoor::update"
+ ],
+ "_factory_doc": "factory_methods: spawners whose classes depend on a map parameter; the map's objects (atlas-usage maps.json) seed those classes per level instead",
+ "_objects_doc": "tier 'objects': classes the map data (atlas-usage) misses because a cut factory spawns them; placed by the level their name says"
+}
