@@ -622,7 +622,7 @@ def sync_tree(source: Path, destination: Path, overlay: dict, excluded: set, kno
         if stat is None:
             if relative not in present:
                 (destination / relative).mkdir(parents=True, exist_ok=True)
-        elif not same_time(stat, present.get(relative)):
+        elif not unchanged(source / relative, destination / relative, stat, present.get(relative)):
             (destination / relative).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source / relative, destination / relative)
     for relative, content in overlay.items():
@@ -646,8 +646,20 @@ def sync_tree(source: Path, destination: Path, overlay: dict, excluded: set, kno
 
 
 def same_time(stat, other):
-    """Whether two walk() entries are files of one size and modification second (copy2 keeps both)."""
-    return other is not None and stat[0] == other[0] and stat[1] // 10**9 == other[1] // 10**9
+    """Whether two walk() entries are files of one size and modification time, to the nanosecond (copy2
+    keeps both). By the second alone, a same-length edit within the second the last copy was made in
+    was missed."""
+    return other is not None and stat[0] == other[0] and stat[1] == other[1]
+
+
+def unchanged(source: Path, target: Path, stat, other):
+    """Whether target, of walk() entry other, already has source's content: the same size and time, or
+    the same size and second and the same bytes (a file system that keeps coarser times than the source's)."""
+    if same_time(stat, other):
+        return True
+    if other is None or stat[0] != other[0] or stat[1] // 10**9 != other[1] // 10**9:
+        return False
+    return filecmp.cmp(source, target, shallow=False)
 
 
 def copy_if_changed(source: Path, target: Path, known: dict | None = None, key: str = ''):
