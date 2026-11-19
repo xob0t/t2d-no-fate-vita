@@ -61,9 +61,12 @@ def main():
     parser.add_argument('--out', type=Path, default=paths.OUT)
     parser.add_argument('--vpk', action='store_true', help='also package it as a VPK beside the folder')
     args = parser.parse_args()
-    make(args.out)
-    if args.vpk:
-        downgrade_pipeline().package_vita(args.out)
+    # Under vita-build, as pipeline.py build and package are: no other writer between the .incomplete marker
+    # and its removal, and none while the VPK is packed (build_lock).
+    with paths.build_lock('builder: make.py'):
+        make(args.out)
+        if args.vpk:
+            downgrade_pipeline().package_vita(args.out)
     return 0
 
 

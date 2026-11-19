@@ -1,5 +1,6 @@
 """Paths the Unity-free build reads and writes."""
 
+import contextlib
 import sys
 from pathlib import Path
 
@@ -53,3 +54,26 @@ def builtin_shaders():
         with zipfile.ZipFile(archive) as z:
             z.extractall(BUILTIN_SHADERS)
     return BUILTIN_SHADERS
+
+
+BUILD_LOCK_WAIT = 1800  # how long build.py and make.py, run on their own, wait for vita-build
+
+
+@contextlib.contextmanager
+def build_lock(holder, wait=BUILD_LOCK_WAIT):
+    """Hold vita-build while the builder writes a build folder, as pipeline.py build does: build.py on its own
+    wrote the shared build's data unlocked, so a full build could remove the .incomplete marker in the middle
+    of it and package or vita.py's install take the half-written data as whole. Nothing to take when this
+    job already holds it (lock.py run, or a lock.py take named by T2D_HOLDER: pipeline.py build calls
+    make.make under it)."""
+    import lock
+
+    if lock.ours('vita-build'):
+        yield
+        return
+    if lock.take('vita-build', holder, wait, process=True) != 0:
+        sys.exit(f'{holder}: another job held vita-build for {wait:.0f} s; try again later.')
+    try:
+        yield
+    finally:
+        lock.release('vita-build', holder)
