@@ -329,6 +329,7 @@ namespace T2DCompat
                 runs[last].Quads++;
             else
             {
+                if (last >= 0 && (object)runs[last].Texture != (object)tex) pageSwitches++;
                 if (runCount == runs.Length) Array.Resize(ref runs, runs.Length * 2);
                 runs[runCount++] = new Run
                 {
@@ -372,8 +373,10 @@ namespace T2DCompat
         // The meshes' bounds: any quad on or near the screen, centred on z = 0 so that a run sorts by its own z.
         static readonly Bounds everywhere = new Bounds(Vector3.zero, new Vector3(1e5f, 1e5f, 0.5f * MaxQuads + 2f));
 
-        // Sprites, runs (draws) and meshes of the last Flush.
-        public static int LastSprites, LastRuns, LastMeshes;
+        // Sprites, runs (draws) and meshes of the last Flush; of its runs, those whose texture differs from the run
+        // before (page switches); and the off-screen draws (into render textures) since the Flush before it.
+        public static int LastSprites, LastRuns, LastMeshes, LastPageSwitches, LastOffscreen;
+        static int pageSwitches, offscreen;
 
         // Draws the queued screen sprites with the camera they were drawn for, and empties the queue.
         public static void Flush(Camera camera)
@@ -446,6 +449,10 @@ namespace T2DCompat
             LastSprites = sprites;
             LastRuns = runCount;
             LastMeshes = segmentCount;
+            LastPageSwitches = pageSwitches;
+            LastOffscreen = offscreen;
+            pageSwitches = 0;
+            offscreen = 0;
             runCount = 0;
             segmentCount = 0;
         }
@@ -486,6 +493,7 @@ namespace T2DCompat
         // texture and colours.
         static void DrawNow(Material material, Texture tex, bool colored)
         {
+            offscreen++;
             Init();
             Material pass = colored ? Copy(material, ref colorFrom, ref colorCopy) : Copy(material, ref normalFrom, ref normalCopy);
             if (pass == null) return;

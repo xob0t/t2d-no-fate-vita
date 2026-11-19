@@ -28,7 +28,8 @@ COMPAT_GUID = guid_for('plugin', 'T2DCompat')
 
 # IL2CPP strips the class libraries down to what code references. The game's assemblies are kept whole:
 # Haxe's runtime finds classes by name (Type.resolveClass), and serialized types are found by name too.
-PLATFORM_LINK_PRESERVE = {}
+# The PS Vita's free-memory readers, which T2DCompat's probe calls by reflection (compat/Probe.cs).
+PLATFORM_LINK_PRESERVE = {'vita': {'UnityEngine.PSVitaModule': ['UnityEngine.PSVita.Diagnostics']}}
 
 
 def link_xml(assemblies: list, platform: str):
