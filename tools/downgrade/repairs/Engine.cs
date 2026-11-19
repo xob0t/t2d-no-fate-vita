@@ -285,7 +285,7 @@ namespace Repairs
                     engine.Errors.Add(rule.Name + ": " + (e.InnerException is RepairException ? e.InnerException.Message : e.InnerException.ToString()));
                 }
             }
-            if (patterns) Patterns.WriteBarriers(engine);
+            if (patterns) Patterns.Run(engine, false);
             engine.Finish();
             return engine;
         }
@@ -306,6 +306,22 @@ namespace Repairs
         }
 
         public int PatternsKept, PatternsDropped;
+        public Patterns.Report PatternReport;
+
+        // A pattern's trial on one method (Patterns.cs): not registered, with the body as it was to put
+        // back. Adopt registers it once the trial finished the method; Finish then checks it like any repair.
+        internal MethodRepair Trial(MethodDefinition method)
+        {
+            Snapshot before = Snapshot.Of(method.Body);
+            Cleanup.LongBranches(method.Body);
+            return new MethodRepair(this, method, Name(method)) { Snapshot = before };
+        }
+
+        internal void Adopt(MethodRepair repair)
+        {
+            if (repairs.ContainsKey(repair.Method)) throw new RepairException(repair.Key + ": two repairs for one method");
+            repairs[repair.Method] = repair;
+        }
 
         // A method whose sites are checked by their shape (a table of methods sharing one recipe), not
         // by a hash each: its body hash must match exactly (an error, not a warning).
@@ -387,6 +403,17 @@ namespace Repairs
         }
 
         public Engine Engine { get { return engine; } }
+        internal IList<Marker> AllMarkers { get { return markers; } }
+
+        // A pattern's site: the marker itself (one found before or after earlier edits, by its call),
+        // checked by its shape instead of a hash.
+        internal Site SiteOf(Marker marker)
+        {
+            Marker own = markers.FirstOrDefault(m => m.Call == marker.Call);
+            if (own == null) throw new RepairException(key + ": marker \"" + marker.Text + "\" isn't one the method had");
+            used.Add(own.Index);
+            return new Site(this, own, hashes[own.Index]);
+        }
         public string Key { get { return key; } }
 
         // The nth marker (0-based) whose text starts with prefix, among those not taken yet by

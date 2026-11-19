@@ -10,6 +10,9 @@ using Repairs;
 //       Applies the rules and writes the result. Errors (stale or drifted rules, markers left, a bad
 //       stack) fail it with exit code 1 and nothing written. --pin also accepts rules without hashes
 //       and prints the hashes to paste in. --patterns also runs Patterns.cs on the methods no rule took.
+//   Repairs patterns <Assembly-CSharp.dll>
+//       A dry run of the patterns on every method with a marker of theirs, other gaps or not: per family,
+//       the markers it removes, and per method complete, partial (other markers left) or REFUSED (why).
 //   Repairs markers <Assembly-CSharp.dll> <filter>
 //       Every marker of the methods whose name contains filter, with its index, kind, IL offset and
 //       context hash, one per line (native/listing.py reads this), plus each method's body hash.
@@ -44,6 +47,15 @@ static class RepairsMain
                     if (n > 0) Console.WriteLine(Engine.Name(m) + "\t" + n);
                 }
                 return 0;
+            case "patterns":
+            {
+                Engine dry = new Engine(module, Mode.Strict);
+                Patterns.Report report = Patterns.Run(dry, true);
+                foreach (string line in report.Lines.OrderBy(l => l)) Console.WriteLine(line);
+                foreach (var f in report.Reach)
+                    Console.WriteLine("family " + f.Key + ": " + f.Value.Removed + " of " + f.Value.Seen + " markers removed in the methods tried");
+                return 0;
+            }
             case "apply":
                 if (args.Length < 3) return Usage();
                 bool pin = args.Contains("--pin");
@@ -59,7 +71,12 @@ static class RepairsMain
                 foreach (string p in engine.Pins) Console.WriteLine("PIN " + p);
                 foreach (string w in engine.Warnings) Console.WriteLine("WARNING " + w);
                 foreach (string e in engine.Errors) Console.WriteLine("ERROR " + e);
-                if (args.Contains("--patterns")) Console.WriteLine("patterns: write barriers removed in " + engine.PatternsKept + " methods, " + engine.PatternsDropped + " tried and put back");
+                if (args.Contains("--patterns"))
+                {
+                    Console.WriteLine("patterns: " + engine.PatternsKept + " methods finished, " + engine.PatternsDropped + " tried and put back");
+                    foreach (var f in engine.PatternReport.Kept)
+                        Console.WriteLine("  " + f.Key + ": " + f.Value.Removed + " markers in " + f.Value.Methods + " finished methods");
+                }
                 Console.WriteLine(engine.RuleCount + " rules, " + engine.SiteCount + " sites, " + engine.Errors.Count + " errors, " + watch.ElapsedMilliseconds + " ms");
                 if (engine.Errors.Count > 0 || (engine.Pins.Count > 0 && !pin)) return 1;
                 if (engine.Pins.Count > 0) Console.WriteLine("(pin mode: written, but rules without hashes must get them before a build accepts them)");
@@ -71,7 +88,7 @@ static class RepairsMain
 
     static int Usage()
     {
-        Console.WriteLine("usage: Repairs apply <in.dll> <out.dll> [--only r1,r2] [--pin] | markers <dll> <filter> | gaps <dll>");
+        Console.WriteLine("usage: Repairs apply <in.dll> <out.dll> [--only r1,r2] [--pin] [--patterns] | patterns <dll> | markers <dll> <filter> | gaps <dll>");
         return 2;
     }
 }
