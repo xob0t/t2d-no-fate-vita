@@ -202,6 +202,22 @@ So those rules are retired: `rules/Player.cs`, `rules/VirtualCalls.cs`, `rules/D
 With that rule and the write-barrier pattern (5 methods), Assembly-CSharp goes from 271 gap methods to 265, and the code stage passes with no `REPAIR ERROR`.
 The fixed60 tables below are kept as the record of how the rules were written.
 
+Patches 0023 to 0027 (2026-11-19) take out most of what the barrier pattern was for: the card markings on addresses in locals, elements and statics, which the pattern's shape didn't match.
+With them the code stage reports 188 gap methods with 1,241 marker sites (from 253 and 1,640); `rules/Barriers.cs` still applies unchanged.
+
+### Well-typed stand-ins for what is left (`rewriter/GapTyping.cs`)
+
+Some gap methods hold, next to a marker, a value of the wrong kind that Mono would run but psp2snc rejects in IL2CPP's C++: the bits of an inlined box handed on as an object, a `long` stack slot read as an object, a field's address shifted as a card index, an `Object` stored where a `GameObject` is.
+A method with a marker throws when it reaches one, so these only have to compile, not to run.
+The rewriter's `TypeGapValues` pass (after the retargeting, before the gaps are counted) handles them, in methods that still have a marker and nowhere else:
+
+- A number or an address where an object (or, for an address, arithmetic) is taken: the value is popped and `__Rewind.Opaque<T>("type: ...")` of the type taken stands for it. It is one more marker, counted with the others, and throws like them.
+- An object where a class derived from its type is taken: `castclass` to that class, the check the native code made.
+
+A value with several consumers, or whose type isn't known, is left and logged as `GAP TYPING SKIPPED`; each change is logged as `GAP TYPED`.
+On the Steam release it types 122 sites in 64 methods, most of them the inlined boxes of the enemies' constructors (`new object[] { 0 }`), which the `box` repair pattern will turn into real values.
+Since it touches only what is still a gap, a repair that completes a method takes the method out of its reach.
+
 ## Prototype results
 
 ### On fixed60, the current rules
