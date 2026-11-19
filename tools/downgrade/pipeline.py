@@ -416,6 +416,8 @@ REWRITER_SOURCES = [
     # standalone authoring driver, with a Main of its own.
     *(HERE / 'repairs' / f'{name}.cs' for name in ('Engine', 'Edit', 'IL', 'Support', 'Expr', 'Patterns', 'RewriterHook')),
     *sorted((HERE / 'repairs' / 'rules').glob('*.cs')),
+    # The fold-back passes (foldback/README.md): inlined engine bindings and class library internals back to 2018.2's API.
+    *sorted((HERE / 'foldback').glob('*.cs')),
 ]
 # Files in the rewriter's folders that are not rewriter parts.
 NOT_REWRITER_PARTS = {HERE / 'repairs' / 'RepairsMain.cs'}

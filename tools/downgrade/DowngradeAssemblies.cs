@@ -63,6 +63,10 @@ partial class DowngradeAssemblies
     // Input assemblies never written (the roots' "-" names): T2DCompat replaces them.
     static readonly HashSet<string> excluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     static readonly List<string> problems = new List<string>();
+    // Type references the target and T2DCompat lack, by module name: reported as problems only if the written module
+    // still references them. Rewrite's retargeting reads the file's own type references, which keep types nothing uses
+    // any more (System.RuntimeType in Rewind's output; what a pass took out, such as Bindings.ThrowHelper's callers).
+    static readonly Dictionary<string, List<string>> missingTypes = new Dictionary<string, List<string>>();
     // Methods and types a pass could not inspect because a type or method they name failed to
     // resolve (printed as SKIPPED; the run still succeeds): the pass left them as they were, so its
     // rule may be missing there. For MarkNativeCallbacks that means a native callback IL2CPP would
@@ -204,6 +208,7 @@ partial class DowngradeAssemblies
                 string stats = Rewrite(assembly);
                 string destination = Path.Combine(output, assembly.Name.Name + ".dll");
                 assembly.Write(destination);
+                ReportMissingTypes(assembly.MainModule.Name, destination);
                 Console.WriteLine(Path.GetFileName(file) + " -> " + Path.GetFileName(destination) + " " + stats);
             }
         }
@@ -343,6 +348,10 @@ partial class DowngradeAssemblies
         // calls into Steamworks by their own names, and take them out before Steamworks' types go to T2DCompat.
         int platform = IsGameAssembly(module) ? PlatformPatches(module) : 0;
         Count("pass PlatformPatches", platform);
+        // The fold-back passes (foldback/), before the retargeting too: they read the Unity 6 names of the engine's and
+        // class libraries' internals that IL2CPP inlined, and bring them back to 2018.2's API. They don't touch what
+        // the atlas passes match, so those (in Passes, after the retargeting) see the same code.
+        string folded = FoldBack(module);
         // Before the retargeting: it fills strippedTypes, whose references the loop leaves alone.
         int stripped = StripAttributes(module) + StripSecurityDeclarations(module);
         int retargeted = 0, shimmedTypes = 0, replacedGameTypes = 0;
@@ -376,7 +385,12 @@ partial class DowngradeAssemblies
                 shimmedTypes++;
                 if (replaced) replacedGameTypes++;
             }
-            else problems.Add(module.Name + ": type " + type.FullName);
+            else
+            {
+                List<string> missing;
+                if (!missingTypes.TryGetValue(module.Name, out missing)) missingTypes[module.Name] = missing = new List<string>();
+                missing.Add(type.FullName);
+            }
         }
         if (ReplacedGameNamespaces.Count > 0) Count("rule ReplacedGameNamespaces", replacedGameTypes);
         int attributeTypes = RetargetAttributeTypes(module);
@@ -411,7 +425,17 @@ partial class DowngradeAssemblies
         return "platform=" + platform + " retargeted=" + retargeted + " shimTypes=" + shimmedTypes + " attributeTypes=" + attributeTypes +
                " strippedAttributes=" + stripped +
                " widenedBodies=" + widened + " (short branches out of range in " + outOfRange + ")" +
-               " removedReferences=" + removed + repaired + string.Concat(groups.Where(changed.Contains).Select(g => lines[g]));
+               " removedReferences=" + removed + repaired + folded + string.Concat(groups.Where(changed.Contains).Select(g => lines[g]));
+    }
+
+    static void ReportMissingTypes(string moduleName, string written)
+    {
+        List<string> missing;
+        if (!missingTypes.TryGetValue(moduleName, out missing)) return;
+        HashSet<string> referenced;
+        using (ModuleDefinition module = ModuleDefinition.ReadModule(written))
+            referenced = new HashSet<string>(module.GetTypeReferences().Select(t => t.FullName));
+        foreach (string type in missing.Where(referenced.Contains)) problems.Add(moduleName + ": type " + type);
     }
 
     // [assembly: UnityAPICompatibilityVersion("<target>")] (T2D_API_VERSION, set by pipeline.py): the
