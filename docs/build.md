@@ -260,7 +260,7 @@ Measured on that console with `-t2d-heartbeat 5` (runs `work/runs/boot4`, `menu1
 
 | | Value |
 | --- | --- |
-| First frame | 14.2 s after launch. `Sounds.staticInit` asks for most of the 930 clips one after another, so start-up waits for them (9.7 s of waits; all 930 loaded at 18 s) |
+| First frame | 14.2 s after launch. `Sounds.staticInit` asks for most of the 930 clips one after another, so start-up waits for them (9.7 s of waits; all 930 loaded at 18 s). With the audio rule A3, which makes those `Sound`s without their clips, 4.4 s, and the attract at 11 s instead of 21 s (runs `aboot1`, `aboot2`; [audio.md](audio.md#start-up)) |
 | Main menu | 26.7 s after launch, through the splash, the logo and the attract cutscene |
 | Main memory free (LPDDR) | 254 MB at start, 195 MB in the attract and the menu; managed heap 20 MB |
 | Video memory free (CDRAM) | 89 MB at start, 60 to 70 MB in the attract and the menu |

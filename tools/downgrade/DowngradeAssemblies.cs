@@ -132,9 +132,10 @@ partial class DowngradeAssemblies
         new Pass("atlas", Scope.Game, AtlasPackLoads),
         new Pass("atlas", Scope.Game, AtlasDraws),
         new Pass("atlas", Scope.Game, AtlasSceneHooks),
-        // audio/rewriter/AudioPatches.cs: the sounds load in the background (docs/audio.md), A1 and A2.
+        // audio/rewriter/AudioPatches.cs: the sounds load in the background (docs/audio.md), A1 to A3.
         new Pass("audio", Scope.Game, AudioStartupLoads),
         new Pass("audio", Scope.Game, AudioClipLoads),
+        new Pass("audio", Scope.Game, AudioDeferredClips),
         // SplitMethods.cs: last, so every pass above sees whole methods; cuts what psp2snc -O3 can't compile.
         new Pass("size", Scope.Game, SplitLongMethods),
     };

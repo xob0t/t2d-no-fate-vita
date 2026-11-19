@@ -5,7 +5,7 @@ using System.Linq;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
 
-// Checks the sound loading rules (audio/rewriter/AudioPatches.cs, A1 and A2) with Mono.Cecil, in two parts.
+// Checks the sound loading rules (audio/rewriter/AudioPatches.cs, A1 to A3) with Mono.Cecil, in two parts.
 //
 // On Rewind's Assembly-CSharp, outside the pipeline:
 //   - what the game does before the rules: createSoundFromFile's File.Exists and UnityWebRequest, staticInit's
@@ -13,13 +13,17 @@ using Mono.Cecil.Cil;
 //   - A1 with the texture rules (atlas/rewriter/AtlasPatches.cs, R1 to R6, R3 in the same method) in both orders:
 //     staticInit comes out the same, and its stack and the new method's balance;
 //   - that the rules fail loudly on another shape: A1 run twice, A1 with staticInit's loop call gone, A2 without the
-//     platform pass's Sounds.Clip.
+//     platform pass's Sounds.Clip, A3 without A2.
 // On the pipeline's written Recovered.T2D (pipeline.py code), where every pass has run:
 //   - staticInit queues the sounds (A1) and enters the splash's pages (R3), and loads neither a sound nor a pack;
 //   - createSoundFromFile takes its clip from SoundLoads.Clip (A2), and has no File.Exists, UnityWebRequest or
 //     Sounds.Clip left;
+//   - createSoundFromFile starts with SoundLoads.Defer, and makes a Sound without its clip there (A3); nothing in the
+//     game reads Sound.snd or Sound.length but the constructor and the rule's t2dClip and t2dLength, which take the
+//     clip from SoundLoads.Clip; A3 run again fails;
 //   - every call into T2DCompat.SoundLoads resolves against T2DCompat.dll, and the stacks of AssetsEmbed's and
-//     Sound's methods balance (rewriter/Stack.cs, the pipeline's own check).
+//     Sound's methods, and of every method that calls t2dClip or t2dLength, balance (rewriter/Stack.cs, the
+//     pipeline's own check).
 // Prints the changed IL to <out>/audio-rules.il.txt.
 //
 // Usage: AudioCheck <Rewind's Assembly-CSharp.dll> <written Recovered.T2D.dll> <T2DCompat.dll> <out dir>
@@ -229,6 +233,8 @@ partial class DowngradeAssemblies
         Expect(missing != null, "A1 without staticInit's loadSound call fails: " + missing);
         string a2 = Throws(AudioClipLoads, Read(path));
         Expect(a2 != null, "A2 without the platform pass's Sounds.Clip fails: " + a2);
+        string a3 = Throws(AudioDeferredClips, Read(path));
+        Expect(a3 != null, "A3 without A2 fails: " + a3);
     }
 
     // Part 2: the pipeline's written assembly.
@@ -276,20 +282,71 @@ partial class DowngradeAssemblies
         var soundLoads = AllTypes(resolving.Types).SelectMany(t => t.Methods).Where(m => m.HasBody).SelectMany(Calls)
             .Where(m => m.DeclaringType.FullName == "T2DCompat.SoundLoads").ToList();
         int resolved = soundLoads.Count(m => { try { return m.Resolve() != null; } catch (AssemblyResolutionException) { return false; } });
-        Expect(soundLoads.Count == 2 && resolved == 2, "the " + soundLoads.Count + " calls into T2DCompat.SoundLoads resolve (" + resolved + ")");
+        Expect(soundLoads.Count == 4 && resolved == 4 && soundLoads.Count(m => m.Name == "Defer") == 1,
+            "the " + soundLoads.Count + " calls into T2DCompat.SoundLoads (Queue, Clip twice, Defer) resolve (" + resolved + ")");
+
+        // A3.
+        MethodDefinition clipOf = Method(module, SoundType, AudioClipMethod);
+        MethodDefinition lengthOf = Method(module, SoundType, AudioLengthMethod);
+        MethodDefinition constructor = module.GetType(SoundType).Methods.Single(m => m.IsConstructor && !m.IsStatic);
+        if (clipOf == null || lengthOf == null)
+        {
+            Fail("Sound has no " + AudioClipMethod + " or " + AudioLengthMethod + " (A3)");
+            return;
+        }
+        Expect(create.Body.Instructions[0].OpCode == OpCodes.Ldarg_0 && CallsTo(create, "T2DCompat.SoundLoads", "Defer") == 1 &&
+               ((MethodReference)create.Body.Instructions[1].Operand).Name == "Defer" &&
+               create.Body.Instructions.Count(i => i.OpCode == OpCodes.Newobj && i.Operand == constructor) == 2,
+            "createSoundFromFile starts with SoundLoads.Defer and makes the Sound without its clip there (A3)");
+        Expect(clipOf.IsStatic && clipOf.ReturnType.FullName == "UnityEngine.AudioClip" && CallsTo(clipOf, "T2DCompat.SoundLoads", "Clip") == 1,
+            AudioClipMethod + " is static AudioClip(Sound) and takes the clip from SoundLoads.Clip");
+        Expect(lengthOf.IsStatic && lengthOf.ReturnType.MetadataType == MetadataType.Double && CallsTo(lengthOf, SoundType, AudioClipMethod) == 1,
+            AudioLengthMethod + " is static double(Sound) and calls " + AudioClipMethod);
+        var direct = new List<string>();
+        var through = new List<MethodDefinition>();
+        foreach (TypeDefinition type in AllTypes(module.Types))
+            foreach (MethodDefinition method in type.Methods.Where(m => m.HasBody))
+            {
+                bool own = method == constructor || method == clipOf || method == lengthOf;
+                foreach (Instruction i in method.Body.Instructions)
+                {
+                    var field = i.Operand as FieldReference;
+                    if (!own && field != null && field.DeclaringType.FullName == SoundType && (field.Name == "snd" || field.Name == "length") &&
+                        i.OpCode != OpCodes.Stfld)
+                        direct.Add(method.FullName + ": " + i);
+                }
+                if (!own && (CallsTo(method, SoundType, AudioClipMethod) > 0 || CallsTo(method, SoundType, AudioLengthMethod) > 0))
+                    through.Add(method);
+            }
+        Expect(direct.Count == 0, "nothing reads Sound.snd or Sound.length but the constructor, " + AudioClipMethod + " and " + AudioLengthMethod +
+            (direct.Count > 0 ? ": " + string.Join("; ", direct) : ""));
+        foreach (MethodDefinition method in through)
+            Console.WriteLine("  " + method.DeclaringType.Name + "." + method.Name + ": " + CallsTo(method, SoundType, AudioClipMethod) + " " +
+                              AudioClipMethod + ", " + CallsTo(method, SoundType, AudioLengthMethod) + " " + AudioLengthMethod);
+        Expect(through.Sum(m => CallsTo(m, SoundType, AudioClipMethod)) == 4 && through.Sum(m => CallsTo(m, SoundType, AudioLengthMethod)) == 2,
+            "the game's 4 reads of Sound.snd and 2 of Sound.length go through " + AudioClipMethod + " and " + AudioLengthMethod);
+        string again = Throws(AudioDeferredClips, Read(path));
+        Expect(again != null, "A3 run again fails: " + again);
 
         int checkedMethods = 0;
+        var stacked = new List<MethodDefinition>();
         foreach (string type in new[] { Embed, SoundType })
-            foreach (MethodDefinition method in module.GetType(type).Methods.Where(m => m.HasBody))
-            {
-                string stack = StackProblem(method);
-                if (stack != null) Fail("stack of " + method.FullName + ": " + stack);
-                checkedMethods++;
-            }
-        Ok("stacks of AssetsEmbed's and Sound's " + checkedMethods + " methods checked");
+            stacked.AddRange(module.GetType(type).Methods.Where(m => m.HasBody));
+        stacked.AddRange(through.Where(m => !stacked.Contains(m)));
+        foreach (MethodDefinition method in stacked)
+        {
+            string stack = StackProblem(method);
+            if (stack != null) Fail("stack of " + method.FullName + ": " + stack);
+            checkedMethods++;
+        }
+        Ok("stacks of AssetsEmbed's and Sound's methods and the callers of " + AudioClipMethod + " and " + AudioLengthMethod + ", " +
+           checkedMethods + " in all, checked");
         Dump("written", init);
         Dump("written", queue);
         Dump("written", create);
+        Dump("written", clipOf);
+        Dump("written", lengthOf);
+        foreach (MethodDefinition method in through) Dump("written", method);
     }
 
     static int Main(string[] args)

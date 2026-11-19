@@ -1,4 +1,4 @@
-"""Checks the sound loading rules A1 and A2 (audio/rewriter/AudioPatches.cs) with Mono.Cecil: compiles AudioCheck.cs
+"""Checks the sound loading rules A1 to A3 (audio/rewriter/AudioPatches.cs) with Mono.Cecil: compiles AudioCheck.cs
 with the rule files (AudioPatches.cs, atlas/rewriter/AtlasPatches.cs, whose R3 shares AssetsEmbed.staticInit) and the
 rewriter's Stack.cs with the .NET Framework's csc and Mono.Cecil 0.10, as the pipeline compiles the rewriter, and runs
 it (see AudioCheck.cs) on Rewind's Assembly-CSharp and on the code stage's written Recovered.T2D.
