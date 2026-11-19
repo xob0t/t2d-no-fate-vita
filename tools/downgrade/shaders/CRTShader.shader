@@ -6,8 +6,9 @@
 // The game creates the material (BitmapData, with _OutputSize the camera's pixel size) but draws nothing
 // with it: its CRT option draws crt_layer over the frame with Unlit/NormalShader instead.
 //
-// T2D_CRT_FAST is a cheaper variant for the PS Vita (docs/shaders.md, "Cost"): about a third of the
-// faithful one's GPU time, within a few levels of it, but it needs a bilinear-filtered source.
+// T2D_CRT_FAST is a cheaper variant for the PS Vita (docs/shaders.md, "Cost"): 6.0 ms per 960x544 pass on the
+// console against the faithful one's 15.7 ms, a mean 0.2 levels from it on the game's pixel art (up to 25 at
+// one-pixel lines), but it needs a bilinear-filtered source.
 // It is a global keyword: Shader.EnableKeyword("T2D_CRT_FAST") switches every material of this shader
 // at run time. multi_compile keeps both variants in every build.
 Shader "Unlit/CRTShader" {
@@ -97,7 +98,7 @@ Shader "Unlit/CRTShader" {
             //   (together at most 1/16 of the weight, at a column's centre).
             // - It reads the two columns on both lines with one bilinear fetch: the fetch lands between the columns
             //   at the Gaussian's split and between the lines at the beams' split, and the beams' sum scales it.
-            //   That is the same sum of four, with the filter's 8-bit weights; on a point-filtered source it is the
+            //   That is the same sum of four, with the filter's own weights; on a point-filtered source it is the
             //   nearest texel instead.
             // - The raised cosine is a fitted odd quintic (within 0.00004 of it), the mask is arithmetic, and the
             //   coordinates are interpolated, not computed per pixel.

@@ -13,6 +13,7 @@ Commands:
   run              launch, wait for the log's DONE (or the app to stop), fetch the log and renders into
                    work/shaders/test/vita, then delete the renders on the console
   fetch            fetch the log and renders only
+  unrotate         put the channels of work/shaders/test/vita/raw's renders in place again
   clean            delete the app's renders on the console
   crashes          list crash dumps in ux0:data
 
@@ -149,8 +150,25 @@ def fetch():
                 with transferring():
                     connection.retrbinary(f'RETR {REMOTE}/{name}', buffer.write)
                 (out / name).write_bytes(buffer.getvalue())
+    unrotate(out)
     log(f'fetched into {out}')
     return out
+
+
+def unrotate(out):
+    """The PS Vita player's ReadPixels from an ARGB32 render texture into an RGBA32 texture keeps the render
+    texture's byte order, so the app's PNGs hold A, R, G, B as R, G, B, A. Keeps them in raw/ and writes each
+    with its channels in place."""
+    import numpy as np
+    from PIL import Image
+
+    raw = out / 'raw'
+    raw.mkdir(exist_ok=True)
+    for path in sorted(out.glob('*.png')):
+        (raw / path.name).write_bytes(path.read_bytes())
+        with Image.open(path) as image:
+            pixels = np.asarray(image.convert('RGBA'))
+        Image.fromarray(np.ascontiguousarray(pixels[..., [1, 2, 3, 0]]), 'RGBA').save(path)
 
 
 def read_log():
@@ -249,7 +267,7 @@ def main(argv):
     if not argv:
         sys.exit(__doc__)
     what = argv[0]
-    if what != 'crashes':
+    if what not in ('crashes', 'unrotate'):
         check_lock()
     if what == 'state':
         print(command('perf', timeout=4))
@@ -259,6 +277,10 @@ def main(argv):
         run()
     elif what == 'fetch':
         fetch()
+    elif what == 'unrotate':
+        for path in (OUT / 'raw').glob('*.png'):
+            (OUT / path.name).write_bytes(path.read_bytes())
+        unrotate(OUT)
     elif what == 'clean':
         clean()
     elif what == 'crashes':

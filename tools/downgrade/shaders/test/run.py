@@ -350,9 +350,11 @@ def compare(renders: Path):
     rows += [(c['name'], c['name'].replace('crtfast_', 'crt_'), 'vs faithful', False) for c in cases if c['fast']]
     for name, reference_name, against, counts in rows:
         got_path, want_path = renders / f'{name}.png', REFERENCE / f'{reference_name}.png'
-        if not got_path.exists() or not want_path.exists():
-            report.append(f'{name + ", " + against:52} missing')
-            worst = max(worst, 999)
+        if not want_path.exists():
+            sys.exit(f'no reference {want_path}: run.py reference')
+        if not got_path.exists():
+            # The PS Vita app skips cases larger than its screen (ShaderTest.cs).
+            report.append(f'{name + ", " + against:52} not rendered')
             continue
         got = np.asarray(Image.open(got_path).convert('RGBA'), np.int16)
         want = np.asarray(Image.open(want_path).convert('RGBA'), np.int16)

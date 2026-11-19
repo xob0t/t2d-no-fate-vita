@@ -10,7 +10,8 @@ using UnityEngine;
 // The shader test for Terminator 2D: NO FATE's three shaders as written for 2018.2 (tools/downgrade/shaders).
 // Renders each line of Resources/cases.txt (check.py writes it) into a render texture of the case's size and
 // saves it as <case>.png: in the editor (ShaderTestBuild.RenderD3D11, Direct3D 11) into the folder it is given,
-// on the PS Vita into ux0:data/t2dsh. On the PS Vita it then times the shaders (see Perf) and quits.
+// on the PS Vita into ux0:data/t2dsh, where ReadPixels keeps the ARGB32 render texture's byte order (device.py
+// puts the channels back). On the PS Vita it then times the shaders (see Perf) and quits.
 // Every line it logs starts with "T2DSH"; the PS Vita's log is ux0:data/t2dsh/log.txt.
 public class ShaderTest : MonoBehaviour
 {
@@ -163,6 +164,13 @@ public class ShaderTest : MonoBehaviour
         yield return null;
         foreach (Case c in Case.Load())
         {
+            // Render textures larger than the screen read back corrupted on the PS Vita (the 1920x1080 cases came
+            // back with the right picture squeezed into the top half and garbage below), so those are left out.
+            if (c.Width > Screen.width || c.Height > Screen.height)
+            {
+                Log("SKIP " + c.Name + " " + c.Width + "x" + c.Height + ": larger than the screen");
+                continue;
+            }
             byte[] png = Render(c);
             File.WriteAllBytes(Path.Combine(VitaFolder, c.Name + ".png"), png);
             Log("CASE " + c.Name + " " + c.Width + "x" + c.Height);
