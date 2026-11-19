@@ -693,6 +693,7 @@ namespace T2DCompat
     {
         const string SaveFormat = "T2D1";
         readonly List<InControl_PlayerAction> actions = new List<InControl_PlayerAction>();
+        InControl_PlayerAction[] actionsNow = new InControl_PlayerAction[0];
         internal InControl_PlayerAction listenWithAction;
         internal ulong listenStartTick;
 
@@ -781,8 +782,15 @@ namespace T2DCompat
         internal void Update(ulong tick)
         {
             InControl_InputDevice device = Device ?? InControl_InputManager.ActiveDevice;
-            foreach (InControl_PlayerAction action in actions.ToArray())
+            // A copy, as before (an action's update may add or remove actions), into a buffer kept from tick to tick:
+            // a new array every FixedUpdate was garbage the GC collected every few minutes, at 110 to 310 ms a time.
+            int count = actions.Count;
+            if (actionsNow.Length < count) actionsNow = new InControl_PlayerAction[count];
+            actions.CopyTo(actionsNow);
+            for (int i = 0; i < count; i++)
             {
+                InControl_PlayerAction action = actionsNow[i];
+                actionsNow[i] = null;
                 action.ownerEnabled = Enabled;
                 action.Update(tick, device);
                 if (action.UpdateTick > UpdateTick) UpdateTick = action.UpdateTick;
@@ -864,8 +872,19 @@ namespace T2DCompat
                 active = latest;
                 if (OnActiveDeviceChanged != null) OnActiveDeviceChanged(active);
             }
-            foreach (InControl_PlayerActionSet set in sets.ToArray()) set.Update(tick);
+            // A copy, as before, into a buffer kept from tick to tick (see PlayerActionSet.Update).
+            int count = sets.Count;
+            if (setsNow.Length < count) setsNow = new InControl_PlayerActionSet[count];
+            sets.CopyTo(setsNow);
+            for (int i = 0; i < count; i++)
+            {
+                InControl_PlayerActionSet set = setsNow[i];
+                setsNow[i] = null;
+                set.Update(tick);
+            }
         }
+
+        static InControl_PlayerActionSet[] setsNow = new InControl_PlayerActionSet[0];
 
         public static void OnApplicationFocus(bool focus)
         {
