@@ -674,11 +674,20 @@ def sync_tree(source: Path, destination: Path, overlay: dict, excluded: set, kno
         del known[key]
 
 
+def coarse(ns):
+    """Whether a modification time is a whole millisecond: a file system that keeps coarse times (FAT's 2 s,
+    exFAT's 10 ms, some network shares), where two versions of a file written in one tick have one time. On
+    NTFS (100 ns) about one file in 10,000 has such a time by chance: none of the 2,069 export files and 24
+    game files sampled (Nov 2026), so the byte compares this adds cost nothing there."""
+    return ns % 10**6 == 0
+
+
 def same_time(stat, other):
     """Whether two walk() entries are files of one size and modification time, to the nanosecond (copy2
     keeps both). By the second alone, a same-length edit within the second the last copy was made in
-    was missed."""
-    return other is not None and stat[0] == other[0] and stat[1] == other[1]
+    was missed. A coarse time (coarse) can't tell two versions apart: never the same then, and the
+    caller compares the bytes."""
+    return other is not None and stat[0] == other[0] and stat[1] == other[1] and not coarse(stat[1])
 
 
 def unchanged(source: Path, target: Path, stat, other):
@@ -704,7 +713,7 @@ def copy_if_changed(source: Path, target: Path, known: dict | None = None, key: 
         return
     if other is not None and other[0] == stat[0]:
         pair = [*stat, other[1]]
-        if known.get(key) == pair:
+        if known.get(key) == pair and not coarse(stat[1]):
             return
         if filecmp.cmp(source, target, shallow=False):
             known[key] = pair
