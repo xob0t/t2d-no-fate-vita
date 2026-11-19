@@ -92,7 +92,7 @@ Batching these draws (the mesh report's R10) is not done, as the report says it 
 
 ## The rules
 
-`tools/downgrade/spritebatch/rewriter/SpriteBatchPatches.cs` holds three rewriter passes.
+`tools/downgrade/spritebatch/rewriter/SpriteBatchPatches.cs` holds four rewriter passes.
 Each checks the IL and the fields it expects and throws if the code has changed shape.
 The counts are those of the Steam release, build 24040403, as Rewind recovers it.
 
@@ -101,6 +101,7 @@ The counts are those of the Steam release, build 24040403, as Rewind recovers it
 | R8 | `SpriteBatchDraws` | `BitmapData.unityDraw`, `unityDrawClippedWidth` | the parameters above by type; one `Graphics.DrawMesh`, a `DrawMeshNow`, reads of `meshes`, one store of `zorder`; no call into SpriteBatch yet | a new body each, below |
 | R7 | `SpriteBatchMeshes` | `BitmapData.CreateMultiMeshFrames(TextureFrames)` | static, returns `Mesh[]`, makes Meshes; nothing but the two draw methods reads `BitmapData.meshes` | `return new Mesh[tframes.uvx.Length * 4];` |
 | R9 | `SpriteBatchFlush` | `UnityMain.OnRenderObject` | one call of `Main.draw()`; a static `Camera m_RenderCamera` | after it: `ldsfld m_RenderCamera; call SpriteBatch.Flush(Camera)` |
+| R10 | `SpriteBatchFilters` | `Gfx.saturateImage(BitmapData, double)` | static, returns `BitmapData`, one call of `BitmapData.applyFilter`; nothing reads `BitmapData.bmfilter` | `return image;` |
 
 R8's new body is:
 
@@ -122,7 +123,21 @@ The last two stores make the next `fillRect` or `colorTransform` set its materia
 R7 leaves the array, all nulls, because the BitmapData constructor stores it in `meshes` and nothing reads it any more.
 `CreateMultiMesh`, for render textures and plain textures, still makes its four meshes; there are few of them, and nothing draws them now either.
 
-The passes go into `DowngradeAssemblies.Passes` before `TypeGapValues` and `ListRewindGaps`, in the order R8, R7, R9.
+R10 is about frame time, not drawing.
+`saturateImage` makes a `ColorMatrixFilter` (a `double[20]`, the filter and a `Point`) and `applyFilter` stores it in the image's `bmfilter`, for the PC build's `unityDraw` to apply; after R8 nothing reads `bmfilter`, so the PS Vita drew the same pixels either way and the call only made garbage.
+`Button.draw` makes it for every locked button every frame, and the options menu's achievements list has 32 locked icons on a new save (they are the game's own gray images, `IMAGE_ACHIEVEMENT_ICONS_GRAY`, so the screen looks the same with R10).
+Measured on the console with `-t2d-heartbeat 5 -t2d-stalls 100`, no screenshots, on the achievements list for about 140 s (idle, then about 30 presses of Right and 20 of Up and Down):
+
+| | Runs | Collections | Managed heap | Frames over 100 ms | 5 s windows |
+| --- | --- | --- | --- | --- | --- |
+| Before R10 | `ach1` | 16 (gc 5 to 21), one every 4 to 9 s | 20 to 25 MB and back, about 0.6 MB/s of garbage | one a collection, 110 to 153 ms | 56.9 to 59.9 fps, p50 16.7, p90 17.0 ms |
+| With R10 | `ach2` | 2 (gc 5 to 7) | about 0.08 MB/s idle | 3 entering the list, then 1 at the one collection | 58.5 to 59.9 fps, p50 16.7, p90 16.9 to 17.0 ms |
+
+Both runs draw 114 sprites a frame in 7.7 runs, 4 of them texture switches, from 7 resident pages (14 MB), with no atlas loads or misses.
+Moving the cursor on the list still costs one long frame a move, in both runs: 43 ms for Left and Right, 88 ms for Up and Down, against 17.6 ms with no input; moving in the options menu costs nothing (worst frame 17.3 ms). `Menu.moveCursor` looks for the next icon on a grid by moving an 8x8 rectangle 8 pixels at a time and testing it against every button with `Rectangle.intersectionWrap`, which allocates two Rectangles a call; that this is the cost is not measured yet.
+The main menu (35 sprites, 4 runs) stays at 60 fps with no collection, and Future War 1 with R10 plays as before (`lvl2`: 59.9 to 60.0 fps, p90 16.9 to 17.1 ms, worst 18.6 ms).
+
+The passes go into `DowngradeAssemblies.Passes` before `TypeGapValues` and `ListRewindGaps`, in the order R8, R7, R9, R10.
 R8 goes first so that R7's check that nothing reads `meshes` sees the new bodies, and both go before the gap passes so that `TypeGapValues` doesn't type values in the bodies they throw away and `ListRewindGaps` doesn't report their gaps.
 `TypeGapValues` changes none of the four methods R7 to R9 take on Rewind's current output, and the code stage writes the same `Recovered.T2D` with it before or after these passes.
 `pipeline.REWRITER_SOURCES` adds `SpriteBatchPatches.cs`, and `pipeline.compat_sources()` adds `spritebatch/compat/*.cs` to T2DCompat.
