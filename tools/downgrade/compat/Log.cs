@@ -168,17 +168,19 @@ namespace T2DCompat
 
         // Writes what is queued from the calling thread (before a deliberate stop). The writer's batch first, which it
         // took before these lines were queued: returning before it was written lost it at a quit just after, or wrote
-        // the lines out of order. At most FlushWaitMs for it.
+        // the lines out of order. At most FlushWaitMs in all, the file included: a writer stuck in a card write holds
+        // output, and Flush waited for it with no limit after the wait for its batch, which held up the main thread and
+        // Application.Quit() behind it. Lines it couldn't write go back to the front of pending for the writer.
         const int FlushWaitMs = 2000;
 
         public static void Flush()
         {
             if (sync || output == null) return;
             var lines = new List<string>();
+            int end = Environment.TickCount + FlushWaitMs;
             lock (gate)
             {
                 flushing = true;
-                int end = Environment.TickCount + FlushWaitMs;
                 while (writing)
                 {
                     int left = end - Environment.TickCount;
@@ -187,18 +189,26 @@ namespace T2DCompat
                 lines.AddRange(pending);
                 pending.Clear();
             }
+            bool entered = false, done = false;
             try
             {
-                lock (output)
-                {
-                    foreach (string line in lines)
-                        if (!Put(line)) return;
-                }
+                entered = Monitor.TryEnter(output, Math.Max(0, end - Environment.TickCount));
+                if (!entered) return;
+                done = true;
+                foreach (string line in lines)
+                    if (!Put(line)) return;
             }
             finally
             {
+                if (entered) Monitor.Exit(output);
                 lock (gate)
                 {
+                    if (!done && lines.Count > 0)
+                    {
+                        lines.AddRange(pending);
+                        pending.Clear();
+                        foreach (string line in lines) pending.Enqueue(line);
+                    }
                     flushing = false;
                     Monitor.PulseAll(gate);
                 }
