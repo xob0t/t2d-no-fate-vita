@@ -22,6 +22,7 @@ partial class DowngradeAssemblies
     const string SpriteColorTransform = "com.twissgreen.engine.geom.ColorTransform";
     const string SpriteUnityMain = "com.twissgreen.unity.UnityMain";
     const string SpriteMain = "com.bitmapbureau.terminator.Main";
+    const string SpriteGfx = "com.bitmapbureau.terminator.Gfx";
     const string SpriteBatchType = "T2DCompat.SpriteBatch";
 
     // The draw methods' parameters, by type, as Rewind recovers them.
@@ -366,6 +367,31 @@ partial class DowngradeAssemblies
             HandlerEnd = after,
             CatchType = new TypeReference("System", "Exception", module, module.TypeSystem.CoreLibrary),
         });
+        return 1;
+    }
+
+    // R10. Gfx.saturateImage(BitmapData, double): builds a ColorMatrixFilter (a double[20], the filter, a Point) and
+    // stores it in the image's bmfilter through applyFilter, for the PC build's unityDraw to pick up. After R8 nothing
+    // reads bmfilter, so the call only makes garbage; Button.draw makes it for every locked button every frame (the
+    // achievements list, 32 icons). Its body becomes
+    //   return image;
+    // The rule checks that the method is that filter (one applyFilter call) and that nothing reads bmfilter.
+    static int SpriteBatchFilters(ModuleDefinition module)
+    {
+        TypeDefinition gfx = GameType(module, SpriteGfx);
+        TypeDefinition bitmapData = GameType(module, SpriteBitmapData);
+        if (gfx == null || bitmapData == null) return 0;
+        const string rule = "R10";
+        MethodDefinition saturate = SpriteMethod(rule, gfx, "saturateImage", new[] { SpriteBitmapData, "System.Double" });
+        if (!saturate.IsStatic || saturate.ReturnType.FullName != SpriteBitmapData)
+            throw SpriteRule(rule, "Gfx.saturateImage is not static BitmapData (BitmapData, double)");
+        if (SpriteCount(saturate, i => SpriteCalls(i, "BitmapData", "applyFilter")) != 1)
+            throw SpriteRule(rule, "Gfx.saturateImage does not call BitmapData.applyFilter once");
+        foreach (TypeDefinition type in AllTypes(module.Types))
+            foreach (MethodDefinition m in type.Methods.Where(m => m.HasBody))
+                if (m.Body.Instructions.Any(i => (i.OpCode == OpCodes.Ldfld || i.OpCode == OpCodes.Ldflda) && SpriteUsesField(i, "bmfilter")))
+                    throw SpriteRule(rule, type.Name + "." + m.Name + " reads BitmapData.bmfilter, which R10 leaves unset");
+        SpriteReplaceBody(saturate, new List<Instruction> { Instruction.Create(OpCodes.Ldarg_0), Instruction.Create(OpCodes.Ret) });
         return 1;
     }
 }

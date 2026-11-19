@@ -116,12 +116,13 @@ partial class DowngradeAssemblies
         new Pass("redirect", Scope.All, MarkNativeCallbacks),
         // Runtime.cs
         new Pass("runtime", Scope.All, ReimplementedInterfaces),
-        // spritebatch/rewriter/SpriteBatchPatches.cs: the batched sprite renderer (docs/drawing.md), R8, R7, R9.
+        // spritebatch/rewriter/SpriteBatchPatches.cs: the batched sprite renderer (docs/drawing.md), R8, R7, R9, R10.
         // Before the gap passes, as R7 and R8 replace bodies that have gaps (TypeGapValues needn't type what R8 throws
         // away, and R8 checks the old body's draws), and before the atlas passes (AtlasDraws skips R8's).
         new Pass("spritebatch", Scope.Game, SpriteBatchDraws),
         new Pass("spritebatch", Scope.Game, SpriteBatchMeshes),
         new Pass("spritebatch", Scope.Game, SpriteBatchFlush),
+        new Pass("spritebatch", Scope.Game, SpriteBatchFilters),
         // GapTyping.cs: well-typed stand-ins for values of the wrong kind left in gap methods, before they are counted.
         new Pass("rewind", Scope.Game, TypeGapValues),
         // RewindGaps.cs: counts, changes nothing.
@@ -136,6 +137,9 @@ partial class DowngradeAssemblies
         new Pass("audio", Scope.Game, AudioStartupLoads),
         new Pass("audio", Scope.Game, AudioClipLoads),
         new Pass("audio", Scope.Game, AudioDeferredClips),
+        // rewriter/MenuCursor.cs: Menu.moveCursor's grid search stops at its first hit (docs/drawing.md), M1. Before Trace,
+        // which changes the bodies M1 pins by hash.
+        new Pass("menus", Scope.Game, MenuCursorSearch),
         // rewriter/Trace.cs: a diagnostic build's method trail (T2D_TRACE=1), after the passes that change bodies.
         new Pass("diagnostics", Scope.Game, TraceMethods, "T2D_TRACE"),
         // SplitMethods.cs: last, so every pass above sees whole methods; cuts what psp2snc -O3 can't compile.
