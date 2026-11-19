@@ -545,6 +545,23 @@ namespace T2DCompat
             }
         }
 
+        // Empties the queue without drawing it: R9's handler, when Main.draw() throws, so the failed frame's sprites
+        // don't draw under the next frame's.
+        public static void Discard()
+        {
+            for (int k = 0; k < runCount; k++)
+            {
+                runs[k].Material = null;
+                runs[k].Texture = null;
+            }
+            if (discards++ < 20) Debug.Log("T2D spritebatch: the frame's draw threw; " + runCount + " queued runs discarded (" + discards + " in all)");
+            pageSwitches = 0;
+            runCount = 0;
+            segmentCount = 0;
+        }
+
+        static int discards;
+
         // ---- prefetch ---------------------------------------------------------------------------------------------
 
         // The game's ColorTransform material, from its draws.

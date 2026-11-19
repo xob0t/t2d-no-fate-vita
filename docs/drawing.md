@@ -100,7 +100,7 @@ The counts are those of the Steam release, build 24040403, as Rewind recovers it
 | --- | --- | --- | --- | --- |
 | R8 | `SpriteBatchDraws` | `BitmapData.unityDraw`, `unityDrawClippedWidth` | the parameters above by type; one `Graphics.DrawMesh`, a `DrawMeshNow`, reads of `meshes`, one store of `zorder`; no call into SpriteBatch yet | a new body each, below |
 | R7 | `SpriteBatchMeshes` | `BitmapData.CreateMultiMeshFrames(TextureFrames)` | static, returns `Mesh[]`, makes Meshes; nothing but the two draw methods reads `BitmapData.meshes` | `return new Mesh[tframes.uvx.Length * 4];` |
-| R9 | `SpriteBatchFlush` | `UnityMain.OnRenderObject` | one call of `Main.draw()`; a static `Camera m_RenderCamera` | after it: `ldsfld m_RenderCamera; call SpriteBatch.Flush(Camera)` |
+| R9 | `SpriteBatchFlush` | `UnityMain.OnRenderObject` | one call of `Main.draw()`; a static `Camera m_RenderCamera` | after it: `ldsfld m_RenderCamera; call SpriteBatch.Flush(Camera)`; the call in `try { } catch (Exception) { SpriteBatch.Discard(); throw; }`, so a draw that throws part way doesn't leave its sprites queued for the next frame |
 
 R8's new body is:
 
@@ -148,6 +148,7 @@ It runs R8, R7, R9 and the atlas passes in the pipeline's order and checks:
 
 - each pass's sites: R8 2, R7 1, R9 1, and the atlas passes' 6, 3, 1, 0 and 4;
 - that a second R8 refuses to run;
+- that R9's handler wraps `Main.draw()`, calls `Discard` and rethrows;
 - that nothing calls `CreateMultiMeshFrames` but the BitmapData constructor, and nothing reads `meshes`, reads `texpack` or calls `loadTexturePacks`;
 - the stack of every changed method, by the pipeline's own simulation;
 - that the new bodies have no locals, no handlers, no Rewind marker, and call nothing but SpriteBatch;

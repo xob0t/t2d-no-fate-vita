@@ -190,6 +190,21 @@ partial class DowngradeAssemblies
             else if (after != null) { Console.WriteLine("FAIL stack check fails after the rules in " + Key(m) + " (" + after + ")"); failures++; }
             else Console.WriteLine("stack ok: " + Key(m));
         }
+        // R9's handler: Main.draw() in a try whose catch calls SpriteBatch.Discard() and rethrows.
+        foreach (MethodDefinition m in watched.Where(m => m.Name == "OnRenderObject"))
+        {
+            List<Instruction> ins = m.Body.Instructions.ToList();
+            ExceptionHandler h = m.Body.ExceptionHandlers.SingleOrDefault();
+            Instruction draw = ins.SingleOrDefault(i => i.Operand is MethodReference && ((MethodReference)i.Operand).Name == "draw");
+            bool ok = h != null && draw != null && h.HandlerType == ExceptionHandlerType.Catch && h.CatchType.FullName == "System.Exception" &&
+                      ins.IndexOf(h.TryStart) <= ins.IndexOf(draw) && ins.IndexOf(draw) < ins.IndexOf(h.TryEnd) &&
+                      h.HandlerStart.Operand is MethodReference && ((MethodReference)h.HandlerStart.Operand).Name == "Discard" &&
+                      h.HandlerStart.Next.OpCode == OpCodes.Rethrow && h.HandlerEnd == h.HandlerStart.Next.Next &&
+                      h.TryEnd.Previous.OpCode == OpCodes.Leave && h.TryEnd.Previous.Operand == h.HandlerEnd &&
+                      h.HandlerEnd.Next.Operand is MethodReference && ((MethodReference)h.HandlerEnd.Next.Operand).Name == "Flush";
+            Console.WriteLine(ok ? "handler ok: " + Key(m) + " discards the queue when Main.draw() throws" : "FAIL " + Key(m) + ": no R9 handler around Main.draw()");
+            if (!ok) failures++;
+        }
         foreach (MethodDefinition m in watched.Where(m => Replaced.Contains(Key(m))))
         {
             int left = Markers(m);
