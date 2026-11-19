@@ -119,8 +119,9 @@ uv run tools/downgrade/pipeline.py recover    # always runs Rewind again when ru
 uv run tools/downgrade/pipeline.py rip        # always exports again when run alone
 uv run tools/downgrade/pipeline.py code       # rewrite the assemblies, report what doesn't resolve
 uv run tools/downgrade/pipeline.py project
-uv run tools/downgrade/pipeline.py build
+uv run tools/downgrade/pipeline.py build      # refuses while code left unresolved references; --anyway builds the data
 uv run tools/downgrade/pipeline.py package
+uv run tools/builder/il2cpp.py                # the builder's code step alone (UnityLinker, IL2CPP)
 ```
 
 Other jobs on the machine share `work/`, `builds/` and `artifacts/`, so run each stage under the build lock:
@@ -177,19 +178,29 @@ As of 2026-11-19 on the Steam release:
 
 | Stage | Time | Result |
 | --- | --- | --- |
-| Setup, from nothing | 12 min | Every doctor check passes. 2.8 GB in `tools/external`. |
+| Setup, from nothing | 12 min | Every doctor check passes. 2.8 GB in `tools/external`. A rerun with everything in place takes seconds. |
 | `recover` | 81 s | 44 assemblies, 16 MB. Rewind identifies 59 kinds of runtime function with the 6000.0.60f1 library and recovers 13,785 of 18,368 native bodies completely (by its own count). |
 | `rip` | 29 s | 1,005 assets; the Mono-layout copy is 0.6 GB, the export 0.6 GB. |
-| `code` | 10 s | Runs through. 249 unresolved references (below), 811 gap methods with 8,587 marker sites in `Recovered.T2D`, 604 with 11,751 in InControl. |
+| `code` | 10 s | Runs through. 245 unresolved references (below), 811 gap methods with 8,587 marker sites in `Recovered.T2D`, 604 with 11,751 in InControl. |
 | `project` | 7 s | `work/t2d-2018.2.19f1-vita`, 0.6 GB. |
-| `build` | BUILD_TIME | BUILD_RESULT |
-| `package` | PACKAGE_TIME | PACKAGE_RESULT |
+| `build` | 18 min, then stops | With `--anyway`, the builder writes every data file (`resources.assets` 54 MB in 12.5 min, most of it encoding the 930 sound clips to HEVAG; `resources.resource` 492 MB; `unity_builtin_extra` in 3 min), 0.6 GB in all. Then its code step stops in UnityLinker (below). Without `--anyway` the stage refuses at once while the code stage left unresolved references. |
+| `package` | 67 s | Works on a build folder (a 472 MB VPK, with the LiveArea art and the patched eboot), but refuses a build without its code module, so it makes no VPK today. |
 
 The unresolved references are the ones [the assessment](assessment.md#api-gaps-against-unity-2018.2) predicted: the engine's binding calls IL2CPP inlined into the game (`*_Injected`, `UnityEngine.Bindings.ThrowHelper` and `Unmarshal`), private fields of the class libraries' collections and strings, `RenderTextureDescriptor`'s graphics formats in `UnityMain.OnPreRender`, and `UnityWebRequest.Result`.
 Most of them are in methods that have Rewind gaps anyway.
 Steamworks' 57 are in code the stub replaces.
 
-BUILD_NOTES
+UnityLinker stops at the first reference that doesn't resolve, and that is where the build ends today:
+
+```
+Mono.Linker.MarkException: Error processing method: 'System.Void InControl.PlayerActionSet::Load(System.String)'
+in assembly: 'InControl.dll' ---> Mono.Cecil.ResolutionException: Failed to resolve System.Char System.String::_firstChar
+```
+
+That is an inlined string index (`s[i]` read through the string's first character), one of the class library internals.
+Before it, the builder's code step had stopped on InControl's reference to Unity 6's `UnityEngine.InputLegacyModule` (`InputUnsafeUtility`, inlined from `Input.GetKey(string)`), which `Unity6Shims.cs` now sends back to `Input`.
+`uv run tools/builder/il2cpp.py` runs the builder's code step alone, in seconds up to UnityLinker, without the 18-minute data step.
+Even once everything resolves, the game would not run: every one of the 1,415 gap methods throws when it reaches a marker, and the three shaders are dummies.
 
 Before the game can start, in order:
 
@@ -208,5 +219,19 @@ Fix it and run `build.py` again: it picks up where it stopped.
 - `recover`: Rewind's log is `artifacts/downgrade/rewind.log`.
 - `rip`: "AssetRipper did not start" or "AssetRipper export produced no project": check `tools/external/assetripper-2.0.0` and `artifacts/downgrade/assetripper.log`.
 - `code` and `project`: the rewriter's log is `artifacts/downgrade/rewrite-2018.2.19f1-vita.log`, its summary `artifacts/downgrade/code-report.txt`. "expected at least ... The export changed or the rule no longer matches it" means a rule matched less than on the export it was written for, usually another release of the game.
-- `build`: each step names what it is on, and a failure prints the step and the file.
+- `build`: "The code stage left references that don't resolve" is today's state ([Where it stands](#where-it-stands)). Otherwise each step names what it is on, and a failure prints the step and the file; UnityLinker's log is `work/builder/il2cpp/unitylinker.log`.
 - Locks: "Held by another run" means another pipeline holds a build lock; `uv run tools/downgrade/lock.py status` shows who.
+
+## Time and disk space
+
+| Step | Time |
+| --- | --- |
+| Setup from nothing (downloads about 2 GB) | 12 minutes |
+| `recover` | 81 s |
+| `rip` | 29 s |
+| `code` and `project` | 10 s |
+| The builder's data step | 18 minutes, most of it the sound |
+| A rerun of `build.py` with recover and rip current | seconds, up to where it stops |
+
+After a first run the repository holds 2.8 GB of tools in `tools/external` (Unity's files 1.1 GB, the two .NET SDKs 1.5 GB), 1.8 GB in `work/` (the Mono-layout copy of the game, the export and the project, 0.6 GB each) and 0.6 GB in `builds/`.
+The doctor asks for 6 GB free for a first build.

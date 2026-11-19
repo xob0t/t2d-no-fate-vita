@@ -116,6 +116,21 @@ namespace T2DCompat
         }
     }
 
+    // Unity 6's Input.GetKey(string) and Input.GetAxisRaw(string) call InputUnsafeUtility, an internal class
+    // of InputLegacyModule, and IL2CPP inlined them into InControl: back to 2018.2's Input.
+    public static class UnityEngine_Internal_InputUnsafeUtility
+    {
+        public static bool GetKeyString(string name)
+        {
+            return Input.GetKey(name);
+        }
+
+        public static float GetAxisRaw(string axisName)
+        {
+            return Input.GetAxisRaw(axisName);
+        }
+    }
+
     // BitConverter.SingleToInt32Bits and Int32BitsToSingle (.NET Standard 2.1). Rewind packs 8-byte struct
     // returns with the first (docs/rewind-issues.md, issue 19), so most of their sites go when that is fixed.
     public static class System_BitConverter

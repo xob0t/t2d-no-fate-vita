@@ -444,6 +444,8 @@ ROOTS = GAME_ASSEMBLIES
 # The rewriter's lines that are problems: what doesn't resolve, rules that matched nothing, roots not found.
 PROBLEMS = ('UNRESOLVED', 'NO MATCH', 'MISSING')
 CODE_REPORT = 'code-report.txt'
+# The rewriter's exit code, beside the assemblies it wrote: build checks it before the builder's long data step.
+REWRITER_EXIT = 'rewriter-exit.txt'
 
 
 def rewrite_assemblies(recovered: Path, out: Path, version: str, platform: str, roots=ROOTS):
@@ -470,7 +472,14 @@ def rewrite_assemblies(recovered: Path, out: Path, version: str, platform: str, 
             run(f'Stubbing {target.stem}', [WORK / 'bin' / 'StubAssembly.exe', target, stubbed])
             stubbed.replace(target)
     code_report(output, out, platform)
+    (out / REWRITER_EXIT).write_text(f'{code}\n', encoding='utf-8')
     return code
+
+
+def rewriter_exit(version: str, platform: str):
+    """The last code stage's exit code (REWRITER_EXIT), or None when there is none."""
+    path = rewritten_folder(version, platform) / REWRITER_EXIT
+    return int(path.read_text(encoding='utf-8')) if path.exists() else None
 
 
 def code_report(output: str, out: Path, platform: str):
@@ -916,6 +925,8 @@ def package_vita(build: Path) -> Path:
 
     if not any(build.glob('*.self')):
         sys.exit(f'No PS Vita build in {build}; build it first: pipeline.py build')
+    if not (build / 'Media' / 'Modules' / 'il2CppAssemblies.suprx').exists():
+        sys.exit(f'{build} has no code module (Media/Modules/il2CppAssemblies.suprx): its build stopped before IL2CPP')
     vpk = build.with_name(build.name + '.vpk')  # with_suffix would cut the version at its dots
     files = list(vita_app_files(build))
     total = sum(len(source) if isinstance(source, bytes) else source.stat().st_size for _, source in files)
@@ -981,6 +992,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('stage', choices=STAGES)
     parser.add_argument('--game', type=Path, default=DEFAULT_GAME)
+    parser.add_argument(
+        '--anyway',
+        action='store_true',
+        help="build: run the builder even though the code stage left references that don't resolve (UnityLinker "
+        'then stops at the first, after the data step)',
+    )
     args = parser.parse_args()
     platform, version = 'vita', TARGET
     build_switches(platform)  # stops on a value a switch doesn't take, before any stage starts
@@ -1001,6 +1018,13 @@ def main():
     if args.stage == 'project':
         assemble(rip_dir, project, version, platform)
     if args.stage == 'build':
+        status = rewriter_exit(version, platform)
+        if status and not args.anyway:
+            sys.exit(
+                f"The code stage left references that don't resolve against {version} (rewriter exit {status}; "
+                f'{ARTIFACTS / CODE_REPORT}). UnityLinker stops at the first of them, after the builder has written '
+                'the data (about 18 minutes). Repair them first, or pass --anyway to build the data regardless.'
+            )
         sys.path.insert(0, str(HERE.parent / 'builder'))
         import make
 
