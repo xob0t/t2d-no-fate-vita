@@ -333,6 +333,8 @@ partial class DowngradeAssemblies
             var injected = (MethodReference)call.Operand;
             Binding binding = ResolveBinding(injected);
             if (binding.Keep) continue;
+            // Only a call folds back; an ldftn (a delegate of it) or ldvirtftn would become a call that pushes no pointer.
+            if (call.OpCode != OpCodes.Call && call.OpCode != OpCodes.Callvirt) { errors.Add(injected.Name + " is used by " + call.OpCode + ", not called"); continue; }
             if (binding.Error != null) { errors.Add(binding.Error); continue; }
             if (!flow.Reached(call)) { errors.Add("unreachable " + injected.Name); continue; }
             int n = injected.Parameters.Count;
