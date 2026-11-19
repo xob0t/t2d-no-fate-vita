@@ -63,6 +63,7 @@ from common import (
     REWIND_EXE,
     REWIND_SIGNATURES,
     REWIND_STAMP,
+    ROOT,
     TARGET,
     VITA_HOST,
     WORK,
@@ -589,6 +590,33 @@ PluginImporter:
 """
 
 
+def refuse_links(path: Path, root: Path | None = None):
+    """Stop unless no folder from the workspace root (ROOT) down to path, path included, is a link or
+    junction. The mirror writes and deletes under path: through work/rip-input/<game> as a junction to the
+    installed game, say, it deleted the game's il2cpp_data and Plugins and wrote Managed/ into it. A path
+    outside the workspace is checked from its drive's root."""
+    root = Path(os.path.abspath(ROOT if root is None else root))
+    path = Path(os.path.abspath(path))
+    try:
+        parts = path.relative_to(root).parts
+        current = root
+    except ValueError:
+        current = Path(path.anchor)
+        parts = path.relative_to(current).parts
+    for part in parts:
+        current = current / part
+        if current.is_symlink() or current.is_junction():
+            raise SystemExit(
+                f'{current} is a link; writing to {path} would write and delete in its target. Remove the link first.'
+            )
+
+
+def inside(path: Path, folder: Path):
+    """Whether path is folder or under it, links followed (resolve)."""
+    path, folder = path.resolve(), folder.resolve()
+    return path == folder or folder in path.parents
+
+
 def sync_tree(source: Path, destination: Path, overlay: dict, excluded: set, known: dict | None = None, step=None):
     """Mirror source into destination with generated files from overlay replacing or adding paths,
     and excluded source paths left out. An overlay value is the file's bytes, or a Path to copy it from.
@@ -596,8 +624,9 @@ def sync_tree(source: Path, destination: Path, overlay: dict, excluded: set, kno
     file the editor generated (for a folder or file that has none in the source) stays, so its GUID
     doesn't change on every run. known: copy_if_changed's record, kept by the caller between runs.
     step: a progress step, its bar set to the files to go through and advanced per file."""
-    if destination.is_symlink() or destination.is_junction():
-        raise SystemExit(f'{destination} is a link; the mirror would delete in its target. Remove the link first.')
+    refuse_links(destination)
+    if inside(destination, source) or inside(source, destination):
+        raise SystemExit(f'{destination} and {source} overlap; the mirror would write into its own source.')
     destination.mkdir(parents=True, exist_ok=True)
     present = walk(destination, links=True)  # listed once: one stat per file was most of the time
     # A link or junction in the destination is removed, never gone into: its target isn't the mirror's.
@@ -645,11 +674,20 @@ def sync_tree(source: Path, destination: Path, overlay: dict, excluded: set, kno
         del known[key]
 
 
+def coarse(ns):
+    """Whether a modification time is a whole millisecond: a file system that keeps coarse times (FAT's 2 s,
+    exFAT's 10 ms, some network shares), where two versions of a file written in one tick have one time. On
+    NTFS (100 ns) about one file in 10,000 has such a time by chance: none of the 2,069 export files and 24
+    game files sampled (Nov 2026), so the byte compares this adds cost nothing there."""
+    return ns % 10**6 == 0
+
+
 def same_time(stat, other):
     """Whether two walk() entries are files of one size and modification time, to the nanosecond (copy2
     keeps both). By the second alone, a same-length edit within the second the last copy was made in
-    was missed."""
-    return other is not None and stat[0] == other[0] and stat[1] == other[1]
+    was missed. A coarse time (coarse) can't tell two versions apart: never the same then, and the
+    caller compares the bytes."""
+    return other is not None and stat[0] == other[0] and stat[1] == other[1] and not coarse(stat[1])
 
 
 def unchanged(source: Path, target: Path, stat, other):
@@ -675,7 +713,7 @@ def copy_if_changed(source: Path, target: Path, known: dict | None = None, key: 
         return
     if other is not None and other[0] == stat[0]:
         pair = [*stat, other[1]]
-        if known.get(key) == pair:
+        if known.get(key) == pair and not coarse(stat[1]):
             return
         if filecmp.cmp(source, target, shallow=False):
             known[key] = pair

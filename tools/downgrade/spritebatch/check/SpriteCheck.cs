@@ -85,6 +85,7 @@ partial class DowngradeAssemblies
         new Pass("spritebatch", Scope.Game, SpriteBatchDraws),
         new Pass("spritebatch", Scope.Game, SpriteBatchMeshes),
         new Pass("spritebatch", Scope.Game, SpriteBatchFlush),
+        new Pass("spritebatch", Scope.Game, SpriteBatchFilters),
         new Pass("atlas", Scope.Game, AtlasTables),
         new Pass("atlas", Scope.Game, AtlasSplash),
         new Pass("atlas", Scope.Game, AtlasPackLoads),
@@ -95,13 +96,14 @@ partial class DowngradeAssemblies
     // The sites each pass changes in the Steam release (build 24040403) as Rewind recovers it.
     static readonly Dictionary<string, int> ExpectedSites = new Dictionary<string, int>
     {
-        { "SpriteBatchDraws", 2 }, { "SpriteBatchMeshes", 1 }, { "SpriteBatchFlush", 1 },
+        { "SpriteBatchDraws", 2 }, { "SpriteBatchMeshes", 1 }, { "SpriteBatchFlush", 1 }, { "SpriteBatchFilters", 1 },
         { "AtlasTables", 6 }, { "AtlasSplash", 3 }, { "AtlasPackLoads", 1 }, { "AtlasDraws", 0 }, { "AtlasSceneHooks", 4 },
     };
 
     const string BD = "com.twissgreen.engine.display.BitmapData";
 
-    static readonly string[] Replaced = { BD + "::unityDraw", BD + "::unityDrawClippedWidth", BD + "::CreateMultiMeshFrames" };
+    static readonly string[] Replaced =
+        { BD + "::unityDraw", BD + "::unityDrawClippedWidth", BD + "::CreateMultiMeshFrames", "com.bitmapbureau.terminator.Gfx::saturateImage" };
     static readonly string[] Watched = Replaced.Concat(new[] { "com.twissgreen.unity.UnityMain::OnRenderObject" }).ToArray();
 
     static string Key(MethodDefinition m) { return m.DeclaringType.FullName + "::" + m.Name; }

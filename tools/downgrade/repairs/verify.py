@@ -25,21 +25,47 @@ def ilverify(exe, dll, refs, names):
     for n in names:
         args += ['--include', re.escape(n.split('::')[-1].split('(')[0])]
     run = subprocess.run(args, capture_output=True, text=True, check=False)
-    errors = {}
+    return parse_ilverify(run, args, dll)
+
+
+# "[IL]: Error [StackUnexpected]: [<path> : Type::Method(...)][offset 0x0000000C] message", the offset missing for an
+# error that has none (a type or a signature that doesn't load), and "[MD]: ..." for metadata.
+ERROR = re.compile(r'^\[(\w+)\]: Error \[(\w+)\]: \[[^\]]*? : ([^\]]+?)\](?:\[offset 0x[0-9A-Fa-f]+\])?(.*)$')
+# ILVerify's last line: "<n> Error(s) Verifying <path>", or "All Classes and Methods in <path> Verified."
+SUMMARY = re.compile(r'^(?:(\d+) Error\(s\) Verifying |All Classes and Methods in )(.+?)(?: Verified\.)?$')
+
+
+def parse_ilverify(run, args, dll):
+    """{method: [error, ...]} from an ILVerify run. Accepted only when the run finished (its summary line, for this
+    assembly) and every error it counted was read: before (Nov 2026) any non-zero exit passed once one error with an
+    offset was read, so a run that stopped part way, or errors without an offset, went unseen."""
+    errors, read = {}, 0
+    summary = None
     for line in run.stdout.splitlines():
-        m = re.search(r' : (.+?)\]\[offset 0x([0-9A-F]+)\](.*)', line)
+        line = line.rstrip()
+        found = SUMMARY.match(line)
+        if found and os.path.basename(found.group(2)).lower() == os.path.basename(dll).lower():
+            summary = int(found.group(1) or 0)
+            continue
+        m = ERROR.match(line)
         if m:
+            read += 1
             # offsets move when IL is replaced: an error is its message and its place among the method's errors
-            errors.setdefault(m.group(1), []).append(re.sub(r'\s+', ' ', m.group(3)).strip())
-    # ILVerify exits non-zero when it finds IL errors; non-zero with none read is ILVerify failing (an assembly or
-    # a reference it couldn't load), which must not read as a method without errors.
-    if run.returncode != 0 and not errors:
-        fail('ILVerify', args, run)
+            message = re.sub(r'\s+', ' ', m.group(4)).strip()
+            errors.setdefault(m.group(3), []).append(f'[{m.group(2)}] {message}')
+        elif line.startswith('[') and ']: Error' in line:
+            fail('ILVerify (an error this script cannot read)', args, run, line)
+    if summary is None:
+        fail('ILVerify (no summary line: it did not finish)', args, run)
+    if read != summary:
+        fail(f'ILVerify (it counted {summary} errors, {read} were read)', args, run)
+    if (run.returncode != 0) != (summary > 0):
+        fail('ILVerify (its exit code and its error count disagree)', args, run)
     return errors
 
 
-def fail(tool, args, run):
-    tail = '\n'.join((run.stderr or run.stdout or '').strip().splitlines()[-10:])
+def fail(tool, args, run, tail=None):
+    tail = tail or '\n'.join((run.stderr or run.stdout or '').strip().splitlines()[-10:])
     sys.exit(f'{tool} failed (exit code {run.returncode}) on {" ".join(args[:2])}:\n{tail}')
 
 

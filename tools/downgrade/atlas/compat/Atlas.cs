@@ -216,6 +216,12 @@ namespace T2DCompat
         {
             drawn[page] = true;
             pendingBytes -= PageBytes(page);
+            PrefetchDrawn(page);
+        }
+
+        // A page of the prefetch is in video memory: drawn, or adopted again while its drawn texture waited for release.
+        static void PrefetchDrawn(int page)
+        {
             if (prefetchLeft.Remove(page) && prefetchLeft.Count == 0 && prefetchKey != null)
                 Debug.Log(string.Format(System.Globalization.CultureInfo.InvariantCulture,
                     "T2D atlas: prefetched {0}: {1} pages drawn in {2:0.00} s, {3:0.0} MB resident, budget {4:0.0} MB",
@@ -706,11 +712,14 @@ namespace T2DCompat
             pages[page] = t;
             // Resources.Load gives back a texture unloaded but not released yet: its pending release goes, so that an
             // unload before the next flush waits its own two flushes rather than releasing it under this frame's draws.
-            Unrelease(unloaded, t);
-            Unrelease(unloadedBefore, t);
+            // One that was drawn stays drawn: its texels are in video memory already. Counted as pending again (before
+            // Nov 2026), its size was reserved a second time for an upload that never comes, and an unload before its
+            // next draw then counted no release for memory that does come back.
+            bool wasDrawn = Unrelease(unloaded, t) | Unrelease(unloadedBefore, t);
             residentBytes += PageBytes(page);
-            drawn[page] = false;
-            pendingBytes += PageBytes(page);
+            drawn[page] = wasDrawn;
+            if (!wasDrawn) pendingBytes += PageBytes(page);
+            else PrefetchDrawn(page);
             lastUse[page] = ++useClock;
         }
 
@@ -741,14 +750,18 @@ namespace T2DCompat
         static List<Unloaded> unloaded = new List<Unloaded>();
         static List<Unloaded> unloadedBefore = new List<Unloaded>();
 
-        static void Unrelease(List<Unloaded> list, Texture2D t)
+        // Cancels t's pending release; whether it had been drawn.
+        static bool Unrelease(List<Unloaded> list, Texture2D t)
         {
+            bool wasDrawn = false;
             for (int i = list.Count - 1; i >= 0; i--)
                 if ((object)list[i].Texture == (object)t)
                 {
                     if (list[i].Drawn) releasingBytes -= PageBytes(list[i].Page);
+                    wasDrawn |= list[i].Drawn;
                     list.RemoveAt(i);
                 }
+            return wasDrawn;
         }
 
         // From SpriteBatch.Flush, before it draws: releases the textures of the pages unloaded before the last flush,

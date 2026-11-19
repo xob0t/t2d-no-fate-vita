@@ -363,10 +363,16 @@ TextScriptImporter:
 
 
 def write_if_changed(path, data):
-    if os.path.exists(path) and open(path, 'rb').read() == data:
-        return
-    with open(path, 'wb') as fh:
+    """Writes data unless path already holds it: beside path, then renamed over it, so a run stopped part way
+    leaves the old file or the new one, never part of it (step.py reuses what it finds)."""
+    if os.path.exists(path):
+        with open(path, 'rb') as fh:
+            if fh.read() == data:
+                return
+    part = path + '.part'
+    with open(part, 'wb') as fh:
         fh.write(data)
+    os.replace(part, path)
 
 
 def page_name(i):

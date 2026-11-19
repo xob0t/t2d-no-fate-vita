@@ -326,13 +326,14 @@ def main():
     parser.add_argument('--compare', action='store_true')
     args = parser.parse_args()
     out = args.out or paths.OUT
-    # The data alone: the code module may not match it until make.py builds the whole player again.
-    marker = paths.common.build_incomplete(out)
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text(f'build.py (the data alone) started {time.strftime("%Y-%m-%d %H:%M:%S")}', encoding='utf-8')
-    with progress.step('Reading the project'):
-        build = Build(out)
-    write_all(build, set(filter(None, args.only.split(','))), args.compare)
+    with paths.build_lock('builder: build.py, the data alone'):
+        # The data alone: the code module may not match it until make.py builds the whole player again.
+        marker = paths.common.build_incomplete(out)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(f'build.py (the data alone) started {time.strftime("%Y-%m-%d %H:%M:%S")}', encoding='utf-8')
+        with progress.step('Reading the project'):
+            build = Build(out)
+        write_all(build, set(filter(None, args.only.split(','))), args.compare)
     return 0
 
 

@@ -9,6 +9,8 @@ and artifacts/downgrade/atlas (report.json, memory.md).
 """
 
 import hashlib
+import os
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -60,11 +62,15 @@ def atlas_overlay(exported: Path, assembly: Path, work: Path, report: Path, page
             '--page',
             str(page),
         ] + (['--raw'] if raw else [])
+        # The stamp goes first: a repack cut off part way leaves some files new and some old, which the old stamp would
+        # otherwise vouch for once the inputs are back to what it names.
+        stamp.unlink(missing_ok=True)
         code = subprocess.run(command, check=False).returncode
         if code:
             sys.exit(f'The texture repacker failed (exit code {code}); see {report / "report.json"}')
         stamp.write_text(current)
-    overlay = {RESOURCES / 'atlas' / f.name: f for f in sorted(out.iterdir()) if f.is_file()}
+    # A .part is a file repack.py was writing when it was stopped (write_if_changed), not one of its files.
+    overlay = {RESOURCES / 'atlas' / f.name: f for f in sorted(out.iterdir()) if f.is_file() and f.suffix != '.part'}
     if not raw and tile:
         for name, path in _tiles(out, work / 'tiles', tile, log).items():
             overlay[RESOURCES / 'atlas' / name] = path
@@ -80,20 +86,130 @@ def atlas_overlay(exported: Path, assembly: Path, work: Path, report: Path, page
     return overlay, excluded
 
 
+PNG_END = b'\x00\x00\x00\x00IEND\xaeB`\x82'
+
+
 def _missing(out: Path, raw: bool):
-    """The files repack.py writes that out lacks (or has empty): the tables and every page frames.bytes counts,
-    each with its .meta. The stamp alone let a run reuse a folder that had lost a page."""
+    """The files repack.py writes that out lacks or has incomplete: the tables, read to their end, and every page
+    frames.bytes counts (a PNG that ends with IEND and has the size frames.bytes gives it; a raw page of exactly
+    w * h * 2 bytes), each with its .meta. The stamp alone let a run reuse a folder that had lost a page, and a
+    check of the tables' first bytes accepted one cut short."""
     frames = out / 'frames.bytes'
     try:
-        head = frames.read_bytes()[:16]
+        sizes = _frame_sizes(frames.read_bytes())
+    except (OSError, ValueError, struct.error):
+        return [frames.name]
+    bad = []
+    try:
+        _check_scenes((out / 'scenes.bytes').read_bytes(), len(sizes))
+    except (OSError, ValueError, struct.error):
+        bad.append('scenes.bytes')
+    for p, (w, h) in enumerate(sizes):
+        page = out / ('p%03d%s' % (p, '.bytes' if raw else '.png'))
+        if not _page_ok(page, w, h, raw):
+            bad.append(page.name)
+    names = ['frames.bytes', 'scenes.bytes', *('p%03d%s' % (p, '.bytes' if raw else '.png') for p in range(len(sizes)))]
+    metas = [out / (n + '.meta') for n in names]
+    return bad + [m.name for m in metas if not m.is_file() or m.stat().st_size == 0]
+
+
+def _frame_sizes(data: bytes):
+    """frames.bytes's page sizes, after reading it to its end (repack.frames_bytes's format); ValueError when it
+    isn't whole."""
+    if data[:4] != b'T2DF':
+        raise ValueError('not frames.bytes')
+    _format, rows, pages = struct.unpack_from('<III', data, 4)
+    sizes = [struct.unpack_from('<HH', data, 16 + 4 * i) for i in range(pages)]
+    pos = 16 + 4 * pages
+    for _ in range(rows):
+        (n,) = struct.unpack_from('<I', data, pos)
+        pos += 4 + 10 * n
+    if pos != len(data):
+        raise ValueError('frames.bytes is %d bytes, its rows need %d' % (len(data), pos))
+    return sizes
+
+
+def _check_scenes(data: bytes, pages: int):
+    """Reads scenes.bytes to its end (repack.scenes_bytes's format); ValueError when it isn't whole or names a page
+    frames.bytes doesn't have."""
+    if data[:4] != b'T2DS':
+        raise ValueError('not scenes.bytes')
+    pos = 12
+
+    def u16():
+        nonlocal pos
+        (v,) = struct.unpack_from('<H', data, pos)
+        pos += 2
+        return v
+
+    def text():
+        nonlocal pos
+        n = u16()
+        if pos + n > len(data):
+            raise ValueError('cut short')
+        pos += n
+
+    def page_list():
+        for _ in range(u16()):
+            if u16() >= pages:
+                raise ValueError('a page past frames.bytes')
+
+    (scenes,) = struct.unpack_from('<I', data, 8)
+    for _ in range(scenes):
+        text()
+        page_list()
+    (keys,) = struct.unpack_from('<I', data, pos)
+    pos += 4
+    for _ in range(keys):
+        text()
+        for _ in range(u16()):
+            u16()
+    for _ in range(u16()):
+        text()
+    page_list()
+    if pos != len(data):
+        raise ValueError('scenes.bytes has %d bytes past its end' % (len(data) - pos))
+
+
+def _page_ok(page: Path, w: int, h: int, raw: bool):
+    """Whether a page file is whole: a raw page of w * h * 2 bytes, or a PNG of w x h that ends with its IEND chunk."""
+    try:
+        size = page.stat().st_size
+        if raw:
+            return size == w * h * 2
+        with open(page, 'rb') as f:
+            head = f.read(24)
+            f.seek(max(0, size - len(PNG_END)))
+            end = f.read()
     except OSError:
-        return [frames.name]
-    if len(head) < 16 or head[:4] != b'T2DF':
-        return [frames.name]
-    pages = int.from_bytes(head[12:16], 'little')
-    names = ['frames.bytes', 'scenes.bytes', *('p%03d%s' % (p, '.bytes' if raw else '.png') for p in range(pages))]
-    files = [out / n for name in names for n in (name, name + '.meta')]
-    return [f.name for f in files if not f.is_file() or f.stat().st_size == 0]
+        return False
+    return _png_ok(head, end, w, h)
+
+
+def _png_ok(head: bytes, end: bytes, w=None, h=None):
+    if len(head) < 24 or head[:8] != b'\x89PNG\r\n\x1a\n' or head[12:16] != b'IHDR' or end != PNG_END:
+        return False
+    return w is None or struct.unpack('>II', head[16:24]) == (w, h)
+
+
+def _png_whole(path: Path):
+    """Whether a PNG file ends with its IEND chunk (a tile cut short by a stopped run doesn't)."""
+    try:
+        size = path.stat().st_size
+        with open(path, 'rb') as f:
+            head = f.read(24)
+            f.seek(max(0, size - len(PNG_END)))
+            return _png_ok(head, f.read())
+    except OSError:
+        return False
+
+
+def _save_atomic(image, path: Path):
+    """Saves a PNG beside path and renames it over path: a run stopped part way leaves the old file or none, never
+    half a PNG."""
+    part = path.with_name(path.name + '.part')
+    image.save(part, 'PNG', compress_level=6)
+    os.replace(part, path)
 
 
 def _big_pages(out: Path, tile: int):
@@ -131,8 +247,10 @@ def _tiles(out: Path, tiles: Path, tile: int, log=print):
                     name = '%s_%d.png' % (png.stem, r * cols + c)
                     box = (c * tw, h - (r + 1) * th, (c + 1) * tw, h - r * th)
                     path = tiles / name
-                    if not path.exists() or path.stat().st_mtime < png.stat().st_mtime:
-                        im.crop(box).save(path, 'PNG', compress_level=6)
+                    # Cut again when older than its page, or not whole (a tile written before tiles were saved
+                    # atomically, stopped part way).
+                    if not path.exists() or path.stat().st_mtime < png.stat().st_mtime or not _png_whole(path):
+                        _save_atomic(im.crop(box), path)
                     made[name] = path
                     meta = tiles / (name + '.meta')
                     repack.write_if_changed(str(meta), repack.TEXTURE_META.format(guid=repack.guid(name)).encode())

@@ -126,6 +126,9 @@ def game_bubble():
     finally:
         sys.path.remove(str(atlas))
     columns = numpy.nonzero(numpy.asarray(sprite)[:, :, 3].any(axis=0))[0]
+    if columns.size == 0:  # nothing drawn: columns.min() would stop the package
+        log(f'warning: the bubble falls back to the store art: {BUBBLE_IMAGE} has no opaque pixel')
+        return None
     centre = (columns.min() + columns.max()) // 2
     half = BUBBLE_SQUARE // 2
     square = sprite.crop((centre - half, 0, centre + half, BUBBLE_SQUARE))
