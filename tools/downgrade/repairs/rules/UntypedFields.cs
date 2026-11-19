@@ -132,4 +132,28 @@ static partial class Rules
             il.Ldsfld("com.bitmapbureau.terminator.game.Sprites::youngJohn").Castclass(john)
               .Ldloc(65).Castclass(john).Ldfld(john + "::runDirection").Op(OpCodes.Neg).Stfld(john + "::runDirection"));
     }
+
+    // TerminatorBob's count of active silverfish, a Haxe callback over the sprites: the sprite in V0 (as in
+    // PlayerProjectile's), +232 (0xE8) image, +244 (0xF4) state.
+    static void TerminatorBobCountActiveSilverFish(Engine e)
+    {
+        MethodRepair m = e.Method("com.bitmapbureau.terminator.sprites.enemies.TerminatorBob_countActiveSilverFish_148__Fun::__hx_invoke2_o(Double,Object,Double,Object)", "d66f7f75");
+        FieldOf(m.Site("__load4(__address(__reference_arithmetic((m# + 232L))))", "02acaf18"), 0, GameObjectType, GameObjectType + "::image");
+        FieldOf(m.Site("__load4(__address(__reference_arithmetic((m# + 244L))))", "01f1f367"), 0, GameObjectType, GameObjectType + "::state");
+    }
+
+    // PoliceCarWreck.hit's callback over the sprites: the sprite in V0, +232 image, +298 (0x12A) visible, +304 x and
+    // +312 y (twice each, as bits), and `visible = true` (+298).
+    static void PoliceCarWreckHitCallback(Engine e)
+    {
+        MethodRepair m = e.Method("com.bitmapbureau.terminator.sprites.objects.PoliceCarWreck_hit_84__Fun::__hx_invoke2_o(Double,Object,Double,Object)", "a01e8227");
+        FieldOf(m.Site("__load4(__address(__reference_arithmetic((m# + 232L))))", "d5b786c0"), 0, GameObjectType, GameObjectType + "::image");
+        FieldOf(m.Site("__load1(__address(__reference_arithmetic((m# + 298L))))", "62325c2d"), 0, GameObjectType, GameObjectType + "::visible");
+        FieldOf(m.Site("__load8(__address(__reference_arithmetic((m# + 304L))))", 0, "c12d3c7d"), 0, GameObjectType, GameObjectType + "::x");
+        FieldOf(m.Site("__load8(__address(__reference_arithmetic((m# + 304L))))", 0, "4dfac9fa"), 0, GameObjectType, GameObjectType + "::x");
+        FieldOf(m.Site("__load8(__address(__reference_arithmetic((m# + 312L))))", 0, "89993fcd"), 0, GameObjectType, GameObjectType + "::y");
+        FieldOf(m.Site("__load8(__address(__reference_arithmetic((m# + 312L))))", 0, "4d3b5dbb"), 0, GameObjectType, GameObjectType + "::y");
+        m.Site("__store1(__address(__reference_arithmetic((m# + 298L))), 1)", "31f7feae").With(il =>
+            il.Ldloc(0).Castclass(GameObjectType).I4(1).Stfld(GameObjectType + "::visible"));
+    }
 }

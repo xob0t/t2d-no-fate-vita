@@ -156,4 +156,28 @@ static partial class Rules
         m.Site("__call_indirect(__vtable(), t#, __vtable(), __klass(), __objklass())", "f99bd775").With(il =>
             il.Ldloc(24).Castclass("com.bitmapbureau.terminator.sprites.enemies.BomberTurret").Callvirt(GameObjectType + "::draw()"));
     }
+
+    // FW3Boss.hit: the legs, (GameObject)this.legs.__a[i] as FW3Boss.update casts them: hp (+148, 0x94) of leg V0, of
+    // leg 0, of leg 1 and of leg V1; the older of the two (age, +16, 0x10: legs[1].age > legs[0].age picks leg 0) goes
+    // to V5, and ((GameObject)V5).changeState(9) through slot 14 after the native class check (0x180373C44).
+    static void FW3BossHit(Engine e)
+    {
+        MethodRepair m = e.Method("com.bitmapbureau.terminator.sprites.enemies.FW3Boss::hit(GameObject)", "961ed232");
+        m.Site("__load4(__address(__reference_arithmetic((this.legs.__a[m#] + 148L))))", 0, "6d8717b1").With(il => { Leg(il, 0, true); il.Ldfld(GameObjectType + "::hp"); });
+        m.Site("__load4(__address(__reference_arithmetic((this.legs.__a[0] + 148L))))", "87df7443").With(il => { Leg(il, 0, false); il.Ldfld(GameObjectType + "::hp"); });
+        m.Site("__load4(__address(__reference_arithmetic((this.legs.__a[1] + 148L))))", "e571e796").With(il => { Leg(il, 1, false); il.Ldfld(GameObjectType + "::hp"); });
+        m.Site("__load4(__address(__reference_arithmetic((this.legs.__a[1] + 16L))))", "539d61c0").With(il => { Leg(il, 1, false); il.Ldfld(GameObjectType + "::age"); });
+        m.Site("__load4(__address(__reference_arithmetic((this.legs.__a[0] + 16L))))", "80616735").With(il => { Leg(il, 0, false); il.Ldfld(GameObjectType + "::age"); });
+        m.Site("__call_indirect(__vtable(), t#, 9L,", "853ad2a9").With(il =>
+            il.Ldloc(5).Castclass(GameObjectType).I4(9).Callvirt(GameObjectType + "::changeState(Int32)"));
+        m.Site("__load4(__address(__reference_arithmetic((this.legs.__a[m#] + 148L))))", 0, "8d5fc422").With(il => { Leg(il, 1, true); il.Ldfld(GameObjectType + "::hp"); });
+    }
+
+    // (GameObject)this.legs.__a[n], n the index or local n.
+    static void Leg(IL il, int n, bool local)
+    {
+        il.This().Ldfld("com.bitmapbureau.terminator.sprites.enemies.FW3Boss::legs").Ldfld("haxe.root.Array::__a");
+        if (local) il.Ldloc(n); else il.I4(n);
+        il.Op(OpCodes.Ldelem_Ref).Castclass(GameObjectType);
+    }
 }

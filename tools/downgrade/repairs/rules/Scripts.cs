@@ -28,4 +28,12 @@ static partial class Rules
         MethodRepair m = e.Method("com.bitmapbureau.terminator.scripts.Script::drawSummary()", "bb0aec82");
         m.Site("__vtable()", "bec808fc").Replace(0, 4, il => { });
     }
+
+    // CyberdyneHQOutro.draw: a font's vtable read for a virtual call Rewind recovered, shifted, narrowed and popped: it
+    // goes, as in Script.drawSummary.
+    static void CyberdyneHQOutroDraw(Engine e)
+    {
+        MethodRepair m = e.Method("com.bitmapbureau.terminator.cutscenes.CyberdyneHQOutro::draw()", "38ba54af");
+        m.Site("__vtable()", "dcf66616").Replace(0, 4, il => { });
+    }
 }
