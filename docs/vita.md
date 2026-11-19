@@ -53,6 +53,7 @@ It stops at 8 MB.
 `compat/Probe.cs` logs `T2D_BOOT` lines with the free memory at T2DCompat's start, each scene load and the first five frames.
 On the PS Vita the free memory is main memory (`freeLPDDRMB`), video memory (`freeCDRAMMB`) and physically contiguous memory (`freePHYSCONTMB`), from `UnityEngine.PSVita.Diagnostics`, which `link.xml` keeps.
 Its frame step runs from its own Update and, as a fallback, from `SpriteBatch.Flush`.
+The heartbeat line ends with the atlas's resident pages, their megabytes, those not drawn yet and the budget.
 
 | Flag | Effect |
 | --- | --- |
@@ -61,6 +62,11 @@ Its frame step runs from its own Update and, as a fallback, from `SpriteBatch.Fl
 | `-t2d-shots <s> <prefix> [after]` | A screenshot every s seconds from `after` seconds on, `<prefix>-<seconds>.png`. On the PS Vita each stalls the game about 0.6 s. |
 | `-t2d-quit-after <s>` | Quit s seconds after the start. |
 | `-t2d-log-sync` | Write the log on the logging thread. |
+| `-t2d-stalls <ms>` | During a frame longer than ms (default 1000; 0 turns it off), a thread of the probe's writes a `T2D_STALL` line every 250 ms: the free memory and, in a `T2D_TRACE=1` build, the game methods the main thread entered last; then how long the frame took. |
+| `-t2d-peek <path>,...` | `T2D_PEEK` lines with static fields read by reflection (`Namespace.Type.field`, then `.field` or `[index]`, into arrays and Haxe Arrays), on the first frame and whenever a value changes. |
+| `-t2d-invoke <call>,...` | At 10 s, calls by reflection (`<object or type path>::<method>[::<arg>...]`, an arg an int, `@<path>` or a string) and logs `T2D_INVOKE` with the result or the exception. |
+| `-t2d-set <App>:<path>=<value>,...` | Sets a static field as the game enters that App, before its `start()` (`*` for the first frame). Arcade mode with `MissionBriefing:com.bitmapbureau.terminator.game.Game.levelNumber=<n>` plays the arcade list's level n; `Game.infiniteHealth=true` keeps a scripted player alive. For tests only. |
+| `-t2d-atlas-sync` | The briefing's prefetch loads pages with `Resources.Load`, not `LoadAsync` ([textures](textures.md#the-runtime-class)). |
 | `-t2d-input-log`, `-t2d-store-log` | The platform layer's (`compat/Pad.cs`, `Store.cs`). |
 
 An exception in the log has no stack on a retail console. Build with `T2D_TRACE=1` ([build.md](build.md#build-switches)) and each error gets the game methods entered last instead.
