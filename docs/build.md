@@ -243,7 +243,6 @@ Story mode (the first item) plays the intro cutscenes, the briefing and the cont
 Start skips the cutscenes and the briefing.
 
 The blockers met on the way, in order:
-The blockers met on the way, in order:
 
 | What | Where | Kind | Fix |
 | --- | --- | --- | --- |
@@ -265,10 +264,13 @@ The blockers met on the way, in order:
 | The controls tutorial's gaps: a vtable read, two `drawString` invokers, merged `InitializeArray` handles | `ControlsExplanation.draw`, `setupScene`; `Sarah.changeImage` | repair | `rules/ControlsExplanation.cs` |
 | `other.y` lost across the barrier (xmm1) | `Platform.doPlatformCheck` | Rewind (issue 30) | `rules/Barriers.cs` |
 | The level stayed black: a page evicted or switched out mid-frame was destroyed before the queued sprites drew, and `SpriteBatch.Flush` threw `ArgumentNullException` | `Atlas.UnloadPage` | atlas | the texture is released two flushes later (`Atlas.ReleaseUnloaded`) |
-| `NullReferenceException` every frame in the controls tutorial (black), in `BmpFont.drawString` of text 472 with `bmpFontMediumWhite`; the text table is right when run on the PC | `ControlsExplanation.draw` | ? | open; the level loads after it |
-| `__vtable()` gaps after game over in arcade mode | `HighscoreTable.update` (2 sites), `draw` (13) | repair | open |
-| Video memory nearly full in Future War 1: 17 pages, 80 MB, leave 4.5 MB of CDRAM, and the atlas budget is 150 MB | `Atlas.BudgetBytes` | atlas | open: the budget should follow free CDRAM |
-| A 5.1 s frame entering Future War 1 | the level load | performance | open |
+| `NullReferenceException` every frame in the controls tutorial (black), in `BmpFont.drawString` of text 472 with `bmpFontMediumWhite` | `ControlsExplanation.draw` | repair | the button glyph where its paths join (`rules/ControlsExplanation.cs`) |
+| `__vtable()` gaps after game over in arcade mode | `HighscoreTable.update` (2 sites), `draw` (13) | repair | `rules/Highscores.cs`; the 7 sites left are the Steam leaderboard rows |
+| Video memory nearly full in Future War 1: 17 pages, 80 MB, leave 4.5 MB of CDRAM, and the atlas budget is 150 MB | `Atlas.BudgetBytes` | atlas | the budget follows free CDRAM ([textures](textures.md#the-runtime-class)) |
+| A 5.1 s frame entering Future War 1 | the level load | performance | the briefing prefetches the level's pages with `LoadAsync`: the worst frame of the Enter is 0.16 s (`b2a0`) |
+| The level-select list wasn't reachable on a new save, so most story levels couldn't be tried | the probe | test | `-t2d-set` writes int arrays: `Game.levelIDs` and `Game.mode = 5` at the briefing ([levels](#levels)) |
+| Cyberdyne Factory's first frame never ended; a `T2D_TRACE` run put the main thread in `Script.drawParallaxTiled` with no method entered for 90 s | `Script.drawParallaxTiled` (also Future War 2 to 4, the attract demos) | Rewind (issue 31) | `rules/Scripts.cs`: the culled tiles' loop counter |
+| The prefetch's `LoadAsync` pages skipped the budget, and the player filled CDRAM to its last 0.5 MB | `Atlas.Switch` | atlas | the prefetch evicts and counts its loads, and a ballast render texture keeps 8 MB of CDRAM while pages wait for their first draw |
 
 With Rewind patches 0001 to 0031 and these rules the code stage leaves 69 gap methods with 405 marker sites; the rules for the main menu and Future War 1 (docs/repairs.md) take that to 50 methods with 319 sites, and Rewind patch 0032 with the issue 30 rule to 43 methods with 301 sites; the rules for the tutorial and Desert Town to 39 with 289.
 
