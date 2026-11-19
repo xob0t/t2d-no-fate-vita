@@ -33,6 +33,10 @@
 // - The budget follows free video memory (BudgetBytes): a page that wouldn't fit beside the pages loaded but not drawn
 //   yet first unloads pages no current scene wants, least recently used first. Pages the scenes want load anyway, and
 //   go to main memory, which is slower to sample.
+// - Ballast: the player puts a page in CDRAM while it has room, whatever the budget says, and with CDRAM full its
+//   render thread stalls for good on its own next allocation (Cyberdyne Factory's 108 MB left 0.5 MB and froze the
+//   level's first frame). So while pages wait for their first draw, a render texture of BallastBytes holds CDRAM;
+//   the pages that don't fit beside it go to main memory, and its release gives the player its headroom back.
 // - Prefetch: a mission briefing (PrefetchApps) loads the pages of the level it briefs, which its start() names
 //   through Game.loadScriptByLevelID (EnterLevel, outside a level), and SpriteBatch.Flush draws one of them a frame,
 //   invisibly (NextWarm), so their texels are read while the briefing shows rather than on the level's first frame.
@@ -56,6 +60,8 @@ namespace T2DCompat
         public static long FixedBudgetBytes = 150L * 1024 * 1024;
         // Video memory left to the rest of the player: render textures, the sprite batch's meshes, the GPU's own.
         public static long CdramReserveBytes = 6L * 1024 * 1024;
+        // The ballast: a 2048x1024 ARGB32 render texture, held while pages wait for their first draw (HoldBallast).
+        public static long BallastBytes = 8L * 1024 * 1024;
         // Apps whose start prefetches the level named just before (a briefing's constructor loads its level's script),
         // and the apps between them and the level that keep what was prefetched (story mode's controls tutorial).
         public static readonly string[] PrefetchApps = { "MissionBriefing" };
@@ -100,6 +106,7 @@ namespace T2DCompat
         static int prefetchPages, prefetchAsyncPages;
         static readonly Queue<int> warmQueue = new Queue<int>();
         static readonly Dictionary<int, ResourceRequest> asyncLoads = new Dictionary<int, ResourceRequest>();
+        static long asyncBytes;
         static bool[] wanted;
         static string sceneLabel = "(start)";
 
@@ -326,7 +333,11 @@ namespace T2DCompat
             for (int p = 0; p < pages.Length; p++)
                 if (wanted[p] && pages[p] == null && !asyncLoads.ContainsKey(p))
                 {
-                    if (async && !InScenes(p, appScenes) && !InScenes(p, levelScenes)) LoadAsync(p);
+                    if (async && !InScenes(p, appScenes) && !InScenes(p, levelScenes))
+                    {
+                        Evict(PageBytes(p));
+                        LoadAsync(p);
+                    }
                     else LoadPage(p);
                     added++;
                 }
@@ -368,6 +379,7 @@ namespace T2DCompat
 
         static void LoadAsync(int page)
         {
+            HoldBallast();
             ResourceRequest request = Resources.LoadAsync<Texture2D>(Folder + PageName(page));
             if (request == null)
             {
@@ -375,6 +387,7 @@ namespace T2DCompat
                 return;
             }
             asyncLoads[page] = request;
+            asyncBytes += PageBytes(page);
         }
 
         // From SpriteBatch.Flush, once a frame: the next prefetched page that hasn't been drawn, for an invisible draw
@@ -390,6 +403,7 @@ namespace T2DCompat
                 {
                     if (!request.isDone) return null;
                     asyncLoads.Remove(p);
+                    asyncBytes -= PageBytes(p);
                     var t = request.asset as Texture2D;
                     if (t == null || pages[p] != null)
                     {
@@ -416,6 +430,7 @@ namespace T2DCompat
         static Texture2D LoadPage(int page)
         {
             Evict(PageBytes(page));
+            HoldBallast();
             Texture2D t = Resources.Load<Texture2D>(Folder + PageName(page));
             made[page] = false;
             if (t == null)
@@ -482,6 +497,7 @@ namespace T2DCompat
         // unless the page was loaded again since (Resources.Load gives back the same texture while it isn't unloaded).
         public static void ReleaseUnloaded()
         {
+            StepBallast();
             foreach (Unloaded u in unloadedBefore)
             {
                 if (u.Drawn) releasingBytes -= PageBytes(u.Page);
@@ -502,7 +518,7 @@ namespace T2DCompat
         {
             long free = FreeMemory.Bytes(FreeMemory.Cdram);
             if (free < 0) return residentBytes + need <= FixedBudgetBytes;
-            return pendingBytes + need <= free + releasingBytes - CdramReserveBytes;
+            return pendingBytes + asyncBytes + need <= free + releasingBytes - CdramReserveBytes;
         }
 
         static int spills;
@@ -527,6 +543,65 @@ namespace T2DCompat
                 }
                 UnloadPage(victim);
             }
+        }
+
+        // ---- ballast -----------------------------------------------------------------------------
+
+        static RenderTexture ballast;
+        static int ballastIdle, ballastLogs;
+        static long ballastFreeBefore = -1;
+
+        // Before a page that waits for its first draw: CDRAM's headroom goes to a render texture, so that the page
+        // goes to main memory if it doesn't fit beside it. Only with room for it and the reserve.
+        static void HoldBallast()
+        {
+            ballastIdle = 0;
+            if (ballast != null) return;
+            long free = FreeMemory.Bytes(FreeMemory.Cdram);
+            if (free < 0 || free < BallastBytes + CdramReserveBytes) return;
+            var rt = new RenderTexture(2048, 1024, 0, RenderTextureFormat.ARGB32);
+            rt.name = "T2D atlas ballast";
+            if (!rt.Create())
+            {
+                UnityEngine.Object.Destroy(rt);
+                return;
+            }
+            ballast = rt;
+            ballastFreeBefore = free;
+        }
+
+        // Each flush: the ballast goes two flushes after the last page was drawn (the render thread reads a page at
+        // the draw), or at once if CDRAM is down to half the reserve beside it outside a prefetch.
+        static void StepBallast()
+        {
+            if (ballast == null) return;
+            long free = FreeMemory.Bytes(FreeMemory.Cdram);
+            if (ballastFreeBefore >= 0)
+            {
+                if (ballastLogs++ < 20)
+                    Debug.Log(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                        "T2D atlas: ballast held in {0}: CDRAM {1:0.0} MB free before, {2:0.0} MB now", sceneLabel,
+                        ballastFreeBefore / 1048576.0, free / 1048576.0));
+                ballastFreeBefore = -1;
+            }
+            // Low outside a prefetch: pages that wait for a draw the scene may never make; the player's headroom first.
+            // In a prefetch the ballast stays, or the pages still to come would take what it gave back.
+            bool prefetching = asyncLoads.Count > 0 || warmQueue.Count > 0;
+            bool waiting = pendingBytes > 0 || prefetching;
+            bool low = free >= 0 && free < CdramReserveBytes / 2 && !prefetching;
+            if (waiting && !low)
+            {
+                ballastIdle = 0;
+                return;
+            }
+            if (!low && ++ballastIdle < 2) return;
+            ballast.Release();
+            UnityEngine.Object.Destroy(ballast);
+            ballast = null;
+            if (ballastLogs++ < 20)
+                Debug.Log(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    "T2D atlas: ballast released in {0}{1}: CDRAM {2:0.0} MB free, {3:0.0} MB of pages not drawn yet",
+                    sceneLabel, low ? " (CDRAM low)" : "", free / 1048576.0, pendingBytes / 1048576.0));
         }
 
         static string FreeLine()
