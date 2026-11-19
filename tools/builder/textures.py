@@ -4,14 +4,20 @@
     data = texture(asset, file_name, stream)     # Texture2D release dict; image bytes appended to stream
     data = sprite(asset, placement, file_name, file_id)  # a Sprite: a single sprite's (21300000) or a sheet's
 
-What the reference build shows (tools/builder/check_imported.py verifies it):
+What the reference build shows (tools/builder/check_imported.py verifies it; check_textures.py
+checks RGBA4444 and mipmaps against an editor build of generated images):
 - Format: the importer's PSP2 override if it is on, else the default platform's setting
   (automatic: DXT5/DXT1 when compressed, RGBA32/RGB24 when not, by whether the image has
   alpha). The PS Vita compresses only power-of-two textures: any other size falls back to
-  RGBA32 (DXT5) or RGB24 (DXT1). One mip level (no texture here enables mipmaps).
-- Pixels are stored bottom row first, linear (not swizzled). With "alpha is transparency" the
-  RGB of fully transparent texels is filled from the nearest visible texel (dilate()), so
-  filtering at sprite edges does not bleed black.
+  RGBA32 (DXT5) or RGB24 (DXT1). RGBA4444 (format 13) is taken at any size.
+- Pixels are stored bottom row first, linear (not swizzled or tiled, at any size). With "alpha is
+  transparency" the RGB of fully transparent texels is filled from the nearest visible texel
+  (dilate()), so filtering at sprite edges does not bleed black.
+- RGBA4444: one little-endian u16 per texel, R in the top nibble, A in the bottom, each channel
+  the 8-bit value's top 4 bits (truncated, not rounded: v >> 4).
+- Mipmaps: the levels one after another, largest first, down to 1x1 (floor(log2(max(w, h))) + 1
+  of them, at any size), from mip_levels(). Built here for uncompressed power-of-two textures only.
+- In an AssetBundle the .resS ends padded to a multiple of 4 bytes too (bundles.stream_file()).
 - Readable textures keep their pixels in the object ("image data"); every other one streams
   them from <file>.resS, appended in path ID order, each at a multiple of 4 bytes (a 1x1 RGB24
   texture is followed by 1 byte of padding; the .resS holds nothing else).
@@ -29,14 +35,14 @@ import unityyaml
 from paths import PROJECT, WORK
 from PIL import Image
 
-RGB24, RGBA32, DXT1, DXT5 = 3, 4, 10, 12
+RGB24, RGBA32, DXT1, DXT5, RGBA4444 = 3, 4, 10, 12, 13
 CUBEMAP_FILE_ID = 8900000
 COMPRESSED = {DXT1: RGB24, DXT5: RGBA32}  # and what each falls back to when the PS Vita cannot use it
 BUILD_TARGET = 'PSP2'
 SPRITE = 8  # textureType
 ALWAYS_PADDED = 6
 CACHE = WORK / 'textures'
-CACHE_VERSION = 2  # bump when the pixels change for the same input
+CACHE_VERSION = 4  # bump when the pixels change for the same input
 FAR = 1 << 30
 # Sprite pivots by the importer's alignment (9 is the custom spritePivot).
 ALIGNMENTS = [(0.5, 0.5), (0, 1), (0.5, 1), (1, 1), (0, 0.5), (1, 0.5), (0, 0), (0.5, 0), (1, 0)]
@@ -99,7 +105,7 @@ def texture_format(settings, width, height, alpha):
             fmt = RGBA32 if alpha else RGB24
     if fmt in COMPRESSED and not (is_pot(width) and is_pot(height)):
         fmt = COMPRESSED[fmt]
-    if fmt not in (RGB24, RGBA32, DXT1, DXT5):
+    if fmt not in (RGB24, RGBA32, DXT1, DXT5, RGBA4444):
         raise NotImplementedError(f'texture format {fmt}')
     return fmt
 
@@ -180,35 +186,92 @@ def load_rgba(path):
         return np.ascontiguousarray(np.asarray(img.convert('RGBA'))[::-1])
 
 
-def pixels(path, settings, fmt, rgba):
-    """The image data Unity stores for one texture (cached under work/builder/textures)."""
-    recipe = (CACHE_VERSION, fmt, settings.get('alphaIsTransparency'), ENCODER_NAME)
+def pixels(path, settings, fmt, rgba, mips=1):
+    """The image data Unity stores for one texture, its mip levels one after another (cached under
+    work/builder/textures)."""
+    srgb = settings['mipmaps'].get('sRGBTexture', '1') != '0'
+    recipe = (CACHE_VERSION, fmt, settings.get('alphaIsTransparency'), mips, srgb, ENCODER_NAME)
     key = hashlib.sha1(path.read_bytes() + repr(recipe).encode())
     cached = CACHE / f'{key.hexdigest()}.bin'
     if cached.exists():
         return cached.read_bytes()
+    if fmt in COMPRESSED and mips > 1:
+        raise NotImplementedError(f'{path.name}: mipmaps of a compressed texture')
     if settings.get('alphaIsTransparency') == '1':
         rgba = dilate(rgba)
-    if fmt == RGBA32:
-        data = rgba.tobytes()
-    elif fmt == RGB24:
-        data = np.ascontiguousarray(rgba[..., :3]).tobytes()
-    else:
-        data = ENCODE(rgba, fmt)
+    levels = mip_levels(rgba, srgb, mips) if mips > 1 else [rgba]
+    data = b''.join(encode_level(level, fmt) for level in levels)
     CACHE.mkdir(parents=True, exist_ok=True)
     cached.write_bytes(data)
     return data
 
 
+def encode_level(rgba, fmt):
+    if fmt == RGBA32:
+        return rgba.tobytes()
+    if fmt == RGB24:
+        return np.ascontiguousarray(rgba[..., :3]).tobytes()
+    if fmt == RGBA4444:
+        return rgba4444(rgba)
+    return ENCODE(rgba, fmt)
+
+
+def rgba4444(rgba):
+    """Unity's RGBA4444 from 8-bit RGBA: one little-endian u16 per texel, R in the top nibble, A in the
+    bottom, each channel's top 4 bits (the editor truncates; an 8-bit n * 17 comes back as n)."""
+    q = (rgba >> 4).astype(np.uint16)
+    return ((q[..., 0] << 12) | (q[..., 1] << 8) | (q[..., 2] << 4) | q[..., 3]).astype('<u2').tobytes()
+
+
+def mip_count(width, height):
+    return max(width, height).bit_length()
+
+
+def mip_levels(rgba, srgb, count):
+    """The image (rows bottom first, power-of-two sides) and its mip levels, as Unity 2018.2's importer
+    makes them for a Texture2D (mipMapMode 0, box): in float32 from v * (1 / 255), RGB in linear light
+    when sRGB (alpha always linear), each level halved from the unrounded one before it, horizontally
+    then vertically, and rounded half up to 8 bits. check_textures.py matches this byte for byte.
+    Odd sizes take another filter (not a box over n // 2 pairs, nor linear interpolation), so mip_count's
+    caller refuses them."""
+    f32 = np.float32
+    current = rgba.astype(f32) * f32(1 / 255)
+    if srgb:
+        current[..., :3] = srgb_to_linear(current[..., :3]).astype(f32)
+    levels = [rgba]
+    while len(levels) < count:
+        current = halve(halve(current, 1), 0)
+        out = current.copy()
+        if srgb:
+            out[..., :3] = linear_to_srgb(current[..., :3]).astype(f32)
+        levels.append(np.clip(np.floor(out * f32(255) + f32(0.5)), 0, 255).astype(np.uint8))
+    return levels
+
+
+def halve(a, axis):
+    """a (float32) at half its even size along axis, or as it is at size 1: pairs averaged."""
+    if a.shape[axis] == 1:
+        return a
+    a = np.moveaxis(a, axis, 0)
+    return np.moveaxis((a[0::2] + a[1::2]) * np.float32(0.5), 0, axis)
+
+
 def texture_settings(settings):
+    """The importer's sampler settings; its "unset" values (-1, and -100 for the mip bias) are built as
+    Unity's defaults: bilinear, anisotropy 1, no bias, Repeat."""
     t = settings.get('textureSettings') or {}
+
+    def value(key, unset, default, kind=int):
+        v = kind(t.get(key, unset))
+        return default if v == unset else v
+
     return {
-        'm_FilterMode': int(t.get('filterMode', -1)),
-        'm_Aniso': int(t.get('aniso', -1)),
-        'm_MipBias': float(t.get('mipBias', -100)),
-        'm_WrapU': int(t.get('wrapU', -1)),
-        'm_WrapV': int(t.get('wrapV', -1)),
-        'm_WrapW': int(t.get('wrapW', -1)),
+        'm_FilterMode': value('filterMode', -1, 1),
+        'm_Aniso': value('aniso', -1, 1),
+        'm_MipBias': value('mipBias', -100.0, 0.0, float),
+        'm_WrapU': value('wrapU', -1, 0),
+        'm_WrapV': value('wrapV', -1, 0),
+        'm_WrapW': value('wrapW', -1, 0),
     }
 
 
@@ -219,8 +282,9 @@ def texture(asset, file_name, stream, project=PROJECT):
     path = project / asset.path
     rgba = load_rgba(path)
     height, width = rgba.shape[:2]
-    if settings['mipmaps'].get('enableMipMap', '0') != '0':
-        raise NotImplementedError(f'{asset.path}: mipmaps')
+    mips = mip_count(width, height) if settings['mipmaps'].get('enableMipMap', '0') != '0' else 1
+    if mips > 1 and not (is_pot(width) and is_pot(height)):
+        raise NotImplementedError(f'{asset.path}: mipmaps of a non-power-of-two texture')
     size = int((platform(settings, BUILD_TARGET) or {}).get('maxTextureSize') or settings.get('maxTextureSize', 2048))
     if max(width, height) > size:
         raise NotImplementedError(f'{asset.path}: downscaling to {size}')
@@ -228,7 +292,7 @@ def texture(asset, file_name, stream, project=PROJECT):
     if scaled and not (is_pot(width) and is_pot(height)):
         raise NotImplementedError(f'{asset.path}: non-power-of-two scaling')
     fmt = texture_format(settings, width, height, has_alpha(rgba, settings))
-    data = pixels(path, settings, fmt, rgba)
+    data = pixels(path, settings, fmt, rgba, mips)
     readable = settings.get('isReadable') == '1'
     if readable:
         image, streamed = data, {'offset': 0, 'size': 0, 'path': ''}
@@ -242,7 +306,7 @@ def texture(asset, file_name, stream, project=PROJECT):
         'm_Height': height,
         'm_CompleteImageSize': len(data),
         'm_TextureFormat': fmt,
-        'm_MipCount': 1,
+        'm_MipCount': mips,
         'm_IsReadable': readable,
         'm_StreamingMipmaps': settings.get('streamingMipmaps', '0') == '1',
         'm_StreamingMipmapsPriority': int(settings.get('streamingMipmapsPriority', 0)),
