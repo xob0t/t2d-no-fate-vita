@@ -1,0 +1,6 @@
+<linker>
+  <!-- TexTest reads the free memory through reflection. -->
+  <assembly fullname="UnityEngine.PSVitaModule">
+    <type fullname="UnityEngine.PSVita.Diagnostics" preserve="all" />
+  </assembly>
+</linker>
