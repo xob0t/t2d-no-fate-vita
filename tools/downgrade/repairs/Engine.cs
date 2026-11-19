@@ -572,6 +572,15 @@ namespace Repairs
             return this;
         }
 
+        // The family patterns (Patterns.cs) on the markers of theirs this rule leaves: for a method with gaps of a
+        // family and gaps a rule must repair, which the patterns alone would not take. Call it after the sites.
+        public MethodRepair Families()
+        {
+            if (Method == null) return this;
+            Patterns.ApplyFamilies(this);
+            return this;
+        }
+
         // The rule repairs only some markers; the rest are left for later (and reported).
         public MethodRepair Partial()
         {

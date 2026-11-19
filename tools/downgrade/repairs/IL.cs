@@ -89,6 +89,7 @@ namespace Repairs
 
         public IL Newarr(string elementType) { return Emit(Instruction.Create(OpCodes.Newarr, Module.ImportReference(Types.Parse(Module, elementType)))); }
         public IL Castclass(string type) { return Emit(Instruction.Create(OpCodes.Castclass, Module.ImportReference(Types.Parse(Module, type)))); }
+        public IL Isinst(string type) { return Emit(Instruction.Create(OpCodes.Isinst, Module.ImportReference(Types.Parse(Module, type)))); }
 
         public IL Br(Instruction target) { return Emit(Instruction.Create(OpCodes.Br, target)); }
         public IL Brtrue(Instruction target) { return Emit(Instruction.Create(OpCodes.Brtrue, target)); }
