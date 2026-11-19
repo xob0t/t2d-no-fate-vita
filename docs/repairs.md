@@ -8,7 +8,7 @@ It may not hold the game's code, recovered or rewritten, and that includes whole
 The short version.
 A repair is a rule in `tools/downgrade/repairs/rules/*.cs` that names one game method, keys each marker by its kind and a short prefix of its text, checks a hash of the IL around it, and replaces only the marker with IL from a small builder.
 Where the marker's own text already says what was lost, the rule gives only facts ("t0 is the `double[]` in local 0") and the engine compiles Rewind's text at build time.
-Gaps of one known shape are fixed by patterns that name no game method.
+Gaps of one known shape are fixed by patterns that name no game method: the write barrier, inlined string compares, inlined boxing and unboxing, and markers after a call that can't return ([The family patterns](#the-family-patterns)).
 The engine runs inside the rewriter, first, before anything renames or retargets the assembly.
 Any drift between a rule and Rewind's output fails the build.
 
@@ -67,10 +67,11 @@ A rule may produce only what its marker stands for.
 | `Edit.cs` | Replacing a run of instructions in place, unreachable-code removal, the stack-depth check |
 | `IL.cs` | The builder: `This`, `Arg`, `Ldloc`, `I4`, `R8`, `Call`, `Callvirt`, `Ldfld`, `Newarr`, `Halves`, `BitsToDouble`... |
 | `Expr.cs` | Compiles a marker's own text with the rule's bindings |
-| `Support.cs` | `__Repairs.Bits.ToDouble(long)`, added to the repaired assembly, because the game's stripped mscorlib has no `BitConverter.Int64BitsToDouble` |
-| `Patterns.cs` | Shape-based repairs, run after the rules on methods no rule took |
+| `Support.cs` | `__Repairs.Bits.ToDouble(long)` and `FromDouble(double)`, added to the repaired assembly, because the game's stripped mscorlib has no `BitConverter.Int64BitsToDouble` |
+| `Patterns.cs` | Shape-based repairs, run after the rules on methods no rule took ([The family patterns](#the-family-patterns)) |
+| `KnownBits.cs` | Which bits of each integer value are known at each instruction, for the box pattern |
 | `RewriterHook.cs` | The engine as the rewriter's first step |
-| `RepairsMain.cs` | A standalone driver for authoring: `apply`, `markers`, `gaps` |
+| `RepairsMain.cs` | A standalone driver for authoring: `apply`, `patterns` (a dry run of the patterns on every method), `markers`, `gaps` |
 | `rules/*.cs` | The rules, as static methods of `partial class Rules` |
 | `native/listing.py` | A method's native code with its markers beside it |
 | `verify.py` | Markers and ILVerify errors per method, before and after |
@@ -159,7 +160,7 @@ Rules key Rewind's own names and hash Rewind's own IL, so the engine has to run 
 These files are owned by the pipeline, so the hookup is theirs to make:
 
 1. In `Rewrite()`, first line after `ModuleDefinition module = assembly.MainModule;`, add `string repaired = RepairRewindGaps(assembly);`, and append `repaired` to the stats string it returns.
-2. In `pipeline.py`, add to `REWRITER_SOURCES` the files `repairs/Engine.cs`, `Edit.cs`, `IL.cs`, `Support.cs`, `Expr.cs`, `Patterns.cs`, `RewriterHook.cs` and `repairs/rules/*.cs`, but not `RepairsMain.cs`, which has its own `Main`.
+2. In `pipeline.py`, add to `REWRITER_SOURCES` the files `repairs/Engine.cs`, `Edit.cs`, `IL.cs`, `Support.cs`, `Expr.cs`, `KnownBits.cs`, `Patterns.cs`, `RewriterHook.cs` and `repairs/rules/*.cs`, but not `RepairsMain.cs`, which has its own `Main`.
 3. Make `REPAIR ERROR` lines fail the code stage. The hook adds each error to the rewriter's `problems`, which print as `UNRESOLVED` and exit 3, and the pipeline tolerates exit 3 while the game's references don't resolve yet. A repair error should not hide among those.
 
 `RewindGaps.cs` stays as it is and counts what the repairs left.
@@ -201,6 +202,53 @@ So those rules are retired: `rules/Player.cs`, `rules/VirtualCalls.cs`, `rules/D
 `Sound.createSoundFromFile` (`rules/Barriers.cs`) still applies with its hashes unchanged, so nothing needed re-pinning.
 With that rule and the write-barrier pattern (5 methods), Assembly-CSharp goes from 271 gap methods to 265, and the code stage passes with no `REPAIR ERROR`.
 The fixed60 tables below are kept as the record of how the rules were written.
+
+## The family patterns
+
+`Patterns.cs` holds five families, each a shape of IL2CPP's inlining or of Rewind's output, none naming a game method.
+A method is tried only when every marker it has belongs to one of them.
+One trial applies every family the method has, removes the code no path reaches, and keeps the result only if no marker is left and the stack checks; otherwise the method is put back as Rewind left it.
+A method whose markers all belong to the families but whose IL isn't the shape a family expects is put back with a `REPAIR WARNING pattern refused <method>: <family>: <reason>` line, so a new variant from Rewind shows in the code stage's log instead of being repaired by guess.
+Patterns check shapes, not hashes: they have no rule text to drift from, and a family drops out on its own once Rewind stops writing its shape.
+`Repairs patterns <dll>` tries every method with a family marker, other gaps or not, keeps nothing, and lists each as complete, partial (with what is left) or REFUSED (with the reason).
+
+| Family | Shape | Repair |
+| --- | --- | --- |
+| `barrier` | The inlined GC write barrier's flag test | `SkipBarrier`, as before |
+| `string` | `string.Equals(a, b)` inlined down to `SpanHelpers.SequenceEqual`'s loops over `&a._firstChar` and `&b._firstChar` (`__load1`, `__load8` markers) | The "same address" test, behind Equals' length test on the same two strings, becomes `String.Equals(a, b)` stored to the local the loops store their result to, then a branch to their merge; the loops die. Where the game uses `a != b`, the local takes 0 on "same"; the pattern then stores the negation, and checks that the loops' last compare is negated too. |
+| `box` | il2cpp's `Box(Int32, &slot)` inlined: a valuetype test (`__undefined()` < 0), a nullable test, `GetUninitializedObject` and `__Memcpy(o + 16, __frame(), size - 16)` | `box Int32` of the value into the block's result local, which becomes `object`; the block dies, with any write barrier inside it. The value is the low half of what Rewind computes on the block's reference-type path, `*(object*)&slot`, read by `KnownBits`. The result local must be read only where an object is taken (an object array's element, an `Object` parameter or field). |
+| `unbox` | `__loadN(__address(__reference_arithmetic((x + 16L))))`, a read of a boxed value | Behind `x is T`, `unbox.any T`: Int32 for 4 bytes, Boolean for 1, Double for 8 (as raw bits through `__Repairs.Bits.FromDouble` where Rewind typed the read as an int64). Behind only `x != null`, a 1-byte read is a Haxe Bool; a wider one is refused, its type undecided. |
+| `unreachable` | `__unreachable()` or `__noreturn()` right after a call | Deleted when the callee's body has no reachable `ret` (every path throws). After an unrecovered call (`__native_...`) it is refused. |
+
+### Checked against the native code
+
+Read with rizin on the Steam `GameAssembly.dll`, as a linear `pD` over each method's extent from the metadata tables (rizin's `af` hangs on some of these functions).
+
+- `box`, all 84 inlined boxes in the 40 methods: each is `mov dword [slot], R; cmp dword [klass+0x28], R; jl ...` with `klass` il2cpp's `int32_class` (0x1810CB748). The compare tests the valuetype bit (bit 31 of the type's attributes) against zero, so `R` is 0. The two in `Biker..ctor` compare with an immediate 0, and `R` (r15) is zeroed on both paths into them. Every inlined box boxes 0, which is what the pattern reads from Rewind's IL at all 84; other values go through the out-of-line `Box` call, which Rewind recovers as `box`.
+- `string`: `Main.draw`, `Main.toggleFullScreen` (the negated form: `setnz bl`, then `bl` to `SaveSettings.setFullScreen`) and `Utils.systemLanguageSteam` (against literals). Each has the reference test, the null tests, the length test, `lea r8, [a+0x14]; cmp r8, r9`, a byte loop under 8 bytes and an 8-byte loop with a last overlapping compare: ordinal `String.Equals`.
+- `unbox`: `Runtime.toInt` and `Menu.closeLayer` (`int32_class`, then `mov eax, dword [obj+0x10]`), `Runtime.toBool` and `BmpFont.drawNumber` (`boolean_class` 0x1810CB728, `movzx eax, byte [obj+0x10]`), `Script.pause` and `HighscoreTable.update` (`double_class` 0x1810CB780, `movsd xmm, [obj+0x10]`). Each compares the object's class with the type before the read and raises an invalid cast otherwise, which is `unbox.any`.
+- `unreachable`: `UnityMain.Start`, `SoundChannel.stop`, `BmpFont.getStringWidth` and `Std.parseInt`. Each call to `UnityEngine.Bindings.ThrowHelper.ThrowNullReferenceException` (0x180C9FE50) or `System.ThrowHelper.ThrowIndexOutOfRangeException` (0x180B4FD70) is followed by `int3`.
+
+### Results
+
+On the Rewind output the triage was made from (`work/recover` of 2026-11-19 06:57), the code stage goes from 253 gap methods and 1,640 marker sites in `Recovered.T2D` to 171 and 1,172, with no repair error.
+
+| Group (tools/assess/triage) | Sites before | Sites after | Methods finished that had it |
+| --- | ---: | ---: | ---: |
+| `string` | 168 | 24 | 20 |
+| `box` | 336 | 52 | 37 |
+| `unbox` | 22 | 12 | 10 |
+| `unreachable` | 48 | 22 | 15 |
+
+Every site left in these groups is in a method with gaps of another kind.
+In the dry run each family removes all its sites but four: two `__noreturn()` after an unrecovered native call (`EndScreen.draw`, `MissionBriefing.draw`), and two unbox reads in `FW3Boss.hit` whose object is an array element in the marker's text (`this.legs.__a[1] + 16L`), a shape the family doesn't take.
+`Biker..ctor` keeps its 16 box sites for four `__fieldinfo()` markers (and, on this output, write barriers on field addresses).
+`HospitalGuard..ctor`, `Cutscene.setupText`, `Game.initGame` and `SoundChannel.setSoundTransform` are put back with a warning, for write barriers the barrier family doesn't take (on a field's address, or with the flag in a local it doesn't follow).
+On the later output of the same day (08:45), made with Rewind patches for the barriers, the code stage goes from 190 methods and 1,138 sites to 102 and 626, with no warning.
+
+ILVerify (dotnet-ilverify 10.0.15) on Assembly-CSharp after the engine, master's engine against these patterns: 1,106 errors against 983 on the first output, and 1,036 against 909 on the second.
+In the methods the patterns finish (87 and 93), 185 errors become 62, and 212 become 85; no method has an error it didn't have before.
+The one message new to ILVerify, in `CyberdyneHQBot..ctor`, is patch 0019's `ldloca` of an int64 read back with `ldobj System.Double`: it was there before, and ILVerify reaches it now that the box block before it is gone.
 
 ## Prototype results
 
