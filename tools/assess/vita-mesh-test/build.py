@@ -37,6 +37,10 @@ def make_project(tb):
     tb.write_if_changed(assets / 'MeshTest.cs', (HERE / 'unity' / 'MeshTest.cs').read_bytes())
     tb.write_if_changed(assets / 'MeshTestSprite.shader', (HERE / 'unity' / 'MeshTestSprite.shader').read_bytes())
     tb.write_if_changed(assets / 'link.xml', (HERE / 'unity' / 'link.xml').read_bytes())
+    # The port's sprite renderer as the pipeline compiles it into T2DCompat, with a stand-in for its Atlas.
+    spritebatch = ROOT / 'tools' / 'downgrade' / 'spritebatch' / 'compat' / 'SpriteBatch.cs'
+    tb.write_if_changed(assets / 'SpriteBatch.cs', spritebatch.read_bytes())
+    tb.write_if_changed(assets / 'AtlasStub.cs', (HERE / 'unity' / 'AtlasStub.cs').read_bytes())
     tb.write_if_changed(assets / 'Editor' / 'MeshTestBuild.cs', (HERE / 'unity' / 'MeshTestBuild.cs').read_bytes())
     (assets / 'Resources').mkdir(parents=True, exist_ok=True)
     modules = ['imageconversion', 'imgui', 'jsonserialize']

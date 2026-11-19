@@ -107,7 +107,8 @@ partial class DowngradeAssemblies
     // show them by group, and a pass that changed nothing in any assembly fails the run.
     // Passes that may change nothing in every assembly: rules for native callbacks and reimplemented
     // interfaces cost nothing to keep, and ListRewindGaps finds nothing once every gap is repaired.
-    static readonly HashSet<string> OptionalPasses = new HashSet<string> { "MarkNativeCallbacks", "ReimplementedInterfaces", "ListRewindGaps", "TypeGapValues" };
+    // AtlasDraws (R5) finds nothing once the sprite batch's R8 has taken both draw methods (docs/drawing.md).
+    static readonly HashSet<string> OptionalPasses = new HashSet<string> { "MarkNativeCallbacks", "ReimplementedInterfaces", "ListRewindGaps", "TypeGapValues", "AtlasDraws" };
 
     static readonly Pass[] Passes =
     {
@@ -115,6 +116,12 @@ partial class DowngradeAssemblies
         new Pass("redirect", Scope.All, MarkNativeCallbacks),
         // Runtime.cs
         new Pass("runtime", Scope.All, ReimplementedInterfaces),
+        // spritebatch/rewriter/SpriteBatchPatches.cs: the batched sprite renderer (docs/drawing.md), R8, R7, R9.
+        // Before the gap passes, as R7 and R8 replace bodies that have gaps (TypeGapValues needn't type what R8 throws
+        // away, and R8 checks the old body's draws), and before the atlas passes (AtlasDraws skips R8's).
+        new Pass("spritebatch", Scope.Game, SpriteBatchDraws),
+        new Pass("spritebatch", Scope.Game, SpriteBatchMeshes),
+        new Pass("spritebatch", Scope.Game, SpriteBatchFlush),
         // GapTyping.cs: well-typed stand-ins for values of the wrong kind left in gap methods, before they are counted.
         new Pass("rewind", Scope.Game, TypeGapValues),
         // RewindGaps.cs: counts, changes nothing.

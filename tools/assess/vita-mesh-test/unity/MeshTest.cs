@@ -25,8 +25,12 @@ using UnityEngine.Rendering;
 //   free                              destroy kept meshes
 //   draw <method> <K,K,...> [run=R]   frame time with K sprites per frame; method: drawmesh (the game's screen
 //                                     path), drawnow (the game's off-screen path), batch (one dynamic mesh, one
-//                                     submesh per texture run), instanced (DrawMeshInstanced). The texture changes
-//                                     every R sprites (default 16) among 4 atlases.
+//                                     submesh per texture run), instanced (DrawMeshInstanced), spritebatch (the
+//                                     port's T2DCompat.SpriteBatch: Target, Source and Draw per sprite as the
+//                                     rewritten unityDraw calls them, one Flush per frame), drawmeshsb (drawmesh with
+//                                     the game's exact quads, from SpriteBatch.FrameQuad). The texture changes
+//                                     every R sprites (default 16) among 4 atlases. still: the sprites don't move,
+//                                     so shot-spritebatch-still.png and shot-drawmeshsb-still.png can be compared.
 //   idle <s>                          log memory and frame time for s seconds
 // Writes ux0:data/t2dmesh/log.txt (lines "T2D ..."), screenshots shot-<method>.png there, then quits.
 public class MeshTest : MonoBehaviour
@@ -181,6 +185,7 @@ public class MeshTest : MonoBehaviour
             {
                 int run = 16;
                 foreach (string w in words.Skip(3)) if (w.StartsWith("run=")) run = int.Parse(w.Substring(4), Inv);
+                still = words.Skip(3).Contains("still");
                 yield return Draw(words[1], Ints(words[2]), run);
             }
             else if (words[0] == "idle") yield return Idle(float.Parse(words[1], Inv));
@@ -221,6 +226,20 @@ public class MeshTest : MonoBehaviour
         f.U = r.Next(0, Atlas - f.W) / (float)Atlas; f.V = r.Next(0, Atlas - f.H) / (float)Atlas;
         f.Uw = f.W / (float)Atlas; f.Vh = f.H / (float)Atlas;
         return f;
+    }
+
+    // The game's exact quad for a frame and flip, from the port's SpriteBatch.FrameQuad (checked against the recovered
+    // CreateMultiMeshFrames on the PC), as a Mesh made the game's way.
+    static Mesh MakeGameMesh(Frame f, int flip)
+    {
+        var mesh = new Mesh();
+        mesh.MarkDynamic();
+        T2DCompat.SpriteBatch.FrameQuad(f.W, f.H, f.Ox, f.Oy, f.Sw, f.Sh, f.U, f.V, f.Uw, f.Vh, flip, SetVert, SetUv);
+        mesh.vertices = SetVert;
+        mesh.uv = SetUv;
+        mesh.triangles = Tris;
+        mesh.RecalculateNormals();
+        return mesh;
     }
 
     // CreateMultiMeshFrames' four meshes: 0 plain, 1 hflip, 2 vflip, 3 both (UVs mirrored as the game does).
@@ -389,6 +408,13 @@ public class MeshTest : MonoBehaviour
 
     struct Sprite { public Frame F; public int Flip, Tex; public Vector2 Pos, Vel; }
 
+    // A sprite's source as the rewritten unityDraw hands it to SpriteBatch.Source: the BitmapData's frame arrays
+    // (one frame here), its sheet cell and size.
+    class Source { public int[] Page, Frw, Frh, Ofx, Ofy; public double[] Uvx, Uvy, Uvw, Uvh; }
+
+    Source[] sources;
+    bool still;
+
     string method = "";
     int count;
     Sprite[] sprites;
@@ -405,7 +431,7 @@ public class MeshTest : MonoBehaviour
     {
         var tex = new Texture2D(Atlas, Atlas, TextureFormat.RGBA32, false);
         tex.filterMode = FilterMode.Point;
-        tex.wrapMode = TextureWrapMode.Clamp;
+        tex.wrapMode = TextureWrapMode.Repeat;  // as the game's pages: two of the four flips sample at uv - 1
         var px = new Color32[Atlas * Atlas];
         var tint = new[] { new Color32(255, 80, 80, 255), new Color32(80, 255, 80, 255), new Color32(80, 120, 255, 255), new Color32(255, 230, 60, 255) }[k];
         for (int y = 0; y < Atlas; y++)
@@ -433,7 +459,9 @@ public class MeshTest : MonoBehaviour
         int max = ks.Max();
         var rnd = new System.Random(99);
         sprites = new Sprite[max];
-        pool = how == "drawmesh" || how == "drawnow" ? new Mesh[max * 4] : null;
+        pool = how == "drawmesh" || how == "drawnow" || how == "drawmeshsb" ? new Mesh[max * 4] : null;
+        sources = how == "spritebatch" ? new Source[max] : null;
+        T2DCompat.Atlas.Pages = atlases;
         for (int i = 0; i < max; i++)
         {
             Frame f = MakeFrame(rnd);
@@ -443,7 +471,13 @@ public class MeshTest : MonoBehaviour
                 Pos = new Vector2(rnd.Next(-Width / 2, Width / 2), rnd.Next(-Height / 2, Height / 2)),
                 Vel = new Vector2((float)rnd.NextDouble() * 2 - 1, (float)rnd.NextDouble() * 2 - 1),
             };
-            if (pool != null) for (int k = 0; k < 4; k++) pool[i * 4 + k] = MakeMesh(f, k, true, true, false);
+            if (pool != null) for (int k = 0; k < 4; k++) pool[i * 4 + k] = how == "drawmeshsb" ? MakeGameMesh(f, k) : MakeMesh(f, k, true, true, false);
+            if (sources != null)
+                sources[i] = new Source
+                {
+                    Page = new[] { sprites[i].Tex }, Frw = new[] { f.W }, Frh = new[] { f.H }, Ofx = new[] { f.Ox }, Ofy = new[] { f.Oy },
+                    Uvx = new double[] { f.U }, Uvy = new double[] { f.V }, Uvw = new double[] { f.Uw }, Uvh = new double[] { f.Vh },
+                };
         }
         if (how == "instanced")
         {
@@ -453,7 +487,7 @@ public class MeshTest : MonoBehaviour
             quad.triangles = Tris;
             quad.UploadMeshData(true);
         }
-        Log("DRAW " + how + " setup sprites=" + max + " run=" + run + " " + Read());
+        Log("DRAW " + how + " setup sprites=" + max + " run=" + run + (still ? " still" : "") + " " + Read());
         int vsync = QualitySettings.vSyncCount, target = Application.targetFrameRate;
         QualitySettings.vSyncCount = 0;
         Application.targetFrameRate = 1000;
@@ -474,7 +508,7 @@ public class MeshTest : MonoBehaviour
             Log(string.Format(Inv, "DRAW {0} k={1} run={2} draws={3} frameMs mean={4:F2} p50={5:F2} p90={6:F2} submitMs mean={7:F2} p50={8:F2} p90={9:F2}",
                 how, k, run, Draws(how, k), frames.Average(), frames[frames.Count / 2], frames[frames.Count * 9 / 10],
                 submits.Average(), submits[submits.Count / 2], submits[submits.Count * 9 / 10]));
-            if (k == 1000) yield return SaveFrame(Path.Combine(Folder, "shot-" + how + ".png"));
+            if (k == 1000) yield return SaveFrame(Path.Combine(Folder, "shot-" + how + (still ? "-still" : "") + (run != 16 ? "-run" + run : "") + ".png"));
         }
         method = "";
         count = 0;
@@ -485,7 +519,7 @@ public class MeshTest : MonoBehaviour
         if (pool != null) foreach (Mesh m in pool) Destroy(m);
         if (batchMesh != null) Destroy(batchMesh);
         if (quad != null) Destroy(quad);
-        pool = null; batchMesh = null; quad = null; sprites = null;
+        pool = null; batchMesh = null; quad = null; sprites = null; sources = null;
         yield return Settle();
         Log("DRAW " + how + " released " + Read() + " (start " + start + ")");
     }
@@ -493,6 +527,7 @@ public class MeshTest : MonoBehaviour
     string Draws(string how, int k)
     {
         if (how == "batch") return runs.Count.ToString(Inv);
+        if (how == "spritebatch") return (k == 0 ? 0 : T2DCompat.SpriteBatch.LastRuns).ToString(Inv);
         if (how == "instanced") return runs.Sum(r => (r[1] + 1022) / 1023).ToString(Inv);
         return k.ToString(Inv);
     }
@@ -537,14 +572,15 @@ public class MeshTest : MonoBehaviour
         submit.Reset();
         if (count == 0 || method == "") return;
         submit.Start();
-        for (int i = 0; i < count; i++)
+        for (int i = 0; i < count && !still; i++)
         {
             Vector2 p = sprites[i].Pos + sprites[i].Vel;
             if (p.x < -Width / 2) p.x += Width; else if (p.x > Width / 2) p.x -= Width;
             if (p.y < -Height / 2) p.y += Height; else if (p.y > Height / 2) p.y -= Height;
             sprites[i].Pos = p;
         }
-        if (method == "drawmesh") DrawMeshPath();
+        if (method == "drawmesh" || method == "drawmeshsb") DrawMeshPath();
+        else if (method == "spritebatch") SpriteBatchPath();
         else if (method == "drawnow") DrawNowPath();
         else if (method == "batch") BatchPath();
         else if (method == "instanced") InstancedPath();
@@ -570,6 +606,27 @@ public class MeshTest : MonoBehaviour
             Graphics.DrawMesh(pool[i * 4 + s.Flip], m, spriteMat, 0, renderCam, 0, mpb, ShadowCastingMode.Off, false, null, LightProbeUsage.Off);
             zorder -= 0.25;
         }
+    }
+
+    // The port's path: per sprite, what the rewritten BitmapData.unityDraw calls (R8), then one Flush (R9). x and y are
+    // the game's (top-left origin, y down), chosen so the quad lands where DrawMeshPath's TRS puts the same mesh.
+    void SpriteBatchPath()
+    {
+        double zorder = 999.0;
+        for (int i = 0; i < count; i++)
+        {
+            Sprite s = sprites[i];
+            Source src = sources[i];
+            Frame f = s.F;
+            double hw = f.Sw * 0.5, hh = f.Sh * 0.5;
+            T2DCompat.SpriteBatch.Target(true, null, Width * 0.5, Height * 0.5);
+            T2DCompat.SpriteBatch.Source(null, src.Page, src.Uvx, src.Uvy, src.Uvw, src.Uvh, src.Frw, src.Frh, src.Ofx, src.Ofy,
+                                         f.Sw, f.Sh, hw, hh, f.Sw, f.Sh);
+            double x = s.Pos.x + (Width * 0.5 - hw), y = hh + Height * 0.5 - f.Sh - s.Pos.y;
+            zorder = T2DCompat.SpriteBatch.Draw(x, y, 0, 1, 1, -1, false, (s.Flip & 1) != 0, (s.Flip & 2) != 0, -1, -1, 0.0, 1.0, 1.0,
+                                                spriteMat, spriteMat, zorder);
+        }
+        T2DCompat.SpriteBatch.Flush(renderCam);
     }
 
     // BitmapData.unityDraw, off-screen target: RenderTexture.active, LoadPixelMatrix, SetPass on change, DrawMeshNow.
