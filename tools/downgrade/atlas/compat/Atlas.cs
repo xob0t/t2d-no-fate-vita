@@ -77,6 +77,10 @@ namespace T2DCompat
         // and the apps between them and the level that keep what was prefetched (story mode's controls tutorial).
         public static readonly string[] PrefetchApps = { "MissionBriefing" };
         public static readonly string[] PrefetchKeep = { "LevelControls" };
+        // Scenes whose pages load at their first draw, not at the Enter: the four attract demos are one scene of 33
+        // pages, 190 MB (the usage analysis merges them), and loading them all froze the demo's first frames for 17 to
+        // 19 s and took CDRAM to 0.5 MB and main memory to 55 MB. Each demo draws a part of them.
+        public static readonly string[] LazyScenes = { "Demo / attract gameplay" };
         // Prefetch with Resources.LoadAsync (the probe's -t2d-atlas-sync turns it off). The loading thread then reads
         // the texels, and the first draw only uploads them: Future War 1's 19 pages took the briefing 7.8 s with no frame
         // over 0.4 s, against a 6.7 s freeze with Resources.Load.
@@ -146,7 +150,7 @@ namespace T2DCompat
         static readonly Dictionary<int, float> asyncStarted = new Dictionary<int, float>();
         static long asyncBytes;
         static bool[] viaAsync;     // loaded with LoadAsync, for the slow-frame log
-        static bool[] wanted;
+        static bool[] wanted, eager;
         static string sceneLabel = "(start)";
 
         static int misses;
@@ -183,6 +187,9 @@ namespace T2DCompat
                 if (t == null)
                 {
                     Miss(page);
+                    // Wanted until the next Switch, as the scenes' own pages: an eviction made it load again on its
+                    // next draw, every few frames with CDRAM full (the Factory's p007, p043, p065).
+                    wanted[page] = true;
                     t = LoadPage(page);
                 }
             }
@@ -411,12 +418,17 @@ namespace T2DCompat
         static void Switch(string key)
         {
             float start = Time.realtimeSinceStartup;
-            for (int i = 0; i < wanted.Length; i++) wanted[i] = false;
+            for (int i = 0; i < wanted.Length; i++) wanted[i] = eager[i] = false;
             var label = new StringBuilder();
             foreach (int[] set in new[] { appScenes, levelScenes, prefetchScenes, aheadScenes })
                 foreach (int s in set)
                 {
-                    foreach (int p in scenePages[s]) wanted[p] = true;
+                    bool lazy = Array.IndexOf(LazyScenes, sceneNames[s]) >= 0;
+                    foreach (int p in scenePages[s])
+                    {
+                        wanted[p] = true;
+                        if (!lazy) eager[p] = true;
+                    }
                     // The next App's scene by number only: drive.py's waits (until app:MainMenu, until MissionBriefing)
                     // read the log for the App's name, and must not find it before the App starts.
                     if (set == aheadScenes)
@@ -440,7 +452,7 @@ namespace T2DCompat
             // The scenes' own pages now; the prefetch's and the next App's in the background, smallest first.
             var later = new List<int>();
             for (int p = 0; p < pages.Length; p++)
-                if (wanted[p] && pages[p] == null && !asyncLoads.ContainsKey(p) && !bgQueue.Contains(p))
+                if (eager[p] && pages[p] == null && !asyncLoads.ContainsKey(p) && !bgQueue.Contains(p))
                 {
                     bool own = InScenes(p, appScenes) || InScenes(p, levelScenes);
                     if (async && !own) later.Add(p);
@@ -909,6 +921,7 @@ namespace T2DCompat
             viaAsync = new bool[pageW.Length];
             lastUse = new int[pageW.Length];
             wanted = new bool[pageW.Length];
+            eager = new bool[pageW.Length];
             Debug.Log("T2D atlas: " + realPages + " pages" + (pageW.Length > realPages ? " (" + (pageW.Length - realPages) + " tiles of the big ones)" : "") +
                 ", " + tex.Length + " images, " + sceneNames.Length + " scenes");
         }

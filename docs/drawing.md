@@ -79,6 +79,9 @@ So the sort puts runs, and the game's draws between them, in the order the game 
 The bounds are set to cover any quad, since Unity would otherwise take them from the vertices it last had and cull the mesh.
 
 There are two sets of meshes, used on alternate frames, so a mesh the render thread may still read isn't rewritten.
+
+A run whose texture was released between its queueing and the flush (Unity's null) is skipped and logged (`T2D spritebatch: a run of n sprites lost its texture`), and the flush empties its queue in a `finally`.
+Before, `MaterialPropertyBlock.SetTexture` threw `ArgumentNullException`, the runs after it stayed queued, and every frame after threw at the same run: in the attract demo the menu ran at 30 fps from then on (runs `idle1`, `idle2t`).
 When a mesh's runs and its arrays have the same sizes as the last time its set was used, its indices stand, and only the vertices and UVs are written.
 
 ### Render textures

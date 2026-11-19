@@ -154,6 +154,22 @@ With `LoadAsync` the loading thread reads the texels, and the draw only uploads 
 In Future War 1 two of the pages land in main memory (a 32 MB and an 8 MB one, by the log); its frame time is the same, p50 16.7 ms and p90 17.3 to 17.4 ms.
 An unloaded page leaves the table at once, but its texture is released two sprite-batch flushes later (`ReleaseUnloaded`, from `SpriteBatch.Flush`): screen sprites queued earlier in the frame still draw with it when the camera renders. Released at once, it made `MaterialPropertyBlock.SetTexture` throw `ArgumentNullException` in the flush, and the frame lost all its sprites: on the console, the first level stayed black.
 
+The player puts a page in CDRAM while it has room, whatever the budget says, so the budget alone doesn't keep CDRAM free: in Cyberdyne Factory (108 MB of pages) the prefetch took it to 0.5 MB.
+Two things hold some back:
+
+- The prefetch's `LoadAsync` pages go through `Evict` like the others and count as loading (`asyncBytes`), so the pages that don't fit are logged (`video memory full ... goes to main memory`) and unwanted pages go first.
+- A ballast: while pages wait for their first draw, a 2048x1024 ARGB32 render texture (`BallastBytes`, 8 MB, more by the free-memory count) holds CDRAM, so the pages that don't fit beside it go to main memory. It goes two flushes after the last page is drawn, or at once when CDRAM is down to half the reserve outside a prefetch, and is taken only with room for it and the reserve. In a prefetch it stays: released then, it gave back room that the next pages took.
+
+The ballast doesn't hold CDRAM above the reserve in every case: the Factory's prefetch still reaches 0.5 MB before it lets go, and the level then plays with 6.5 to 12.5 MB free.
+The Factory's hang at its first frame, first taken for the player running out of CDRAM, was a game loop ([rewind-issues.md](rewind-issues.md), issue 31).
+
+The attract demos (`LazyScenes`) are one scene of 33 pages, 190 MB, since the usage analysis merges the four demos.
+Loading them at the demo's Enter froze its first frames for 17 to 19 s and took CDRAM to 0.5 MB and main memory to 55 MB (run `idle1`); now its pages load at their first draw, which the miss log lists.
+The first demo, map 10, then draws about 100 MB of them, its worst frame 7.4 s (`idle2t`): splitting the scene by map is the fix still to make.
+
+Pages in main memory cost no frame time that the heartbeat shows: Future War 2, 3 and 4, Freeway, Steel Mill, the story's Future War 1 and the Factory each have 24 to 40 MB of pages in main memory and run at p90 17.2 to 17.5 ms, as the levels with none do ([build.md](build.md#levels)).
+
+
 ## The rules
 
 `tools/downgrade/atlas/rewriter/AtlasPatches.cs` holds five rewriter passes.
