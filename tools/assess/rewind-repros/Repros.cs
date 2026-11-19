@@ -800,4 +800,56 @@ namespace Repros
     {
         public static int Issue4_Mod4(int ticks) => ticks % 4;
     }
+
+    // ---- 29: a switch through a byte-indexed jump table ----
+    // Many case values sharing few bodies: MSVC writes a byte per value (the index of its body) and a table of the
+    // bodies' addresses, "movzx eax, byte [base + value + bytes]; mov ecx, [base + rax*4 + table]; jmp".
+
+    public static class Issue29
+    {
+        public static int Count;
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static void Walk(int v) { Count += v; }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static void Climb(int v) { Count -= v; }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static void Swim(int v) { Count ^= v; }
+
+        // 30 values, 3 bodies and the default.
+        public static void Issue29_ByteTable(int tile)
+        {
+            switch (tile)
+            {
+                case 0: case 1: case 2: case 5: case 8: case 9: case 13: case 21: case 22: case 29:
+                    Walk(tile);
+                    break;
+                case 3: case 4: case 10: case 11: case 17: case 18: case 25:
+                    Climb(tile);
+                    break;
+                case 6: case 7: case 14: case 15: case 16: case 23: case 24: case 28:
+                    Swim(tile);
+                    break;
+            }
+        }
+
+        // The same from 400: the byte table is indexed by id - 400.
+        public static void Issue29_ByteTableFrom400(int id)
+        {
+            switch (id)
+            {
+                case 400: case 401: case 404: case 405: case 409: case 412: case 413: case 420: case 427:
+                    Walk(id);
+                    break;
+                case 402: case 403: case 410: case 411: case 418: case 419: case 426:
+                    Climb(id);
+                    break;
+                case 406: case 407: case 414: case 415: case 416: case 422: case 423: case 429:
+                    Swim(id);
+                    break;
+            }
+        }
+    }
 }
