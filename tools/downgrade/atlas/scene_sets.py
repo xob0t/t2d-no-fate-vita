@@ -32,6 +32,9 @@ EXTRA_IMAGES = {
     'IMAGE_HAZMAT_GUY': ['L12 Cyberdyne Factory', 'L13 Cyberdyne Research'],
     'IMAGE_HAZMAT_ALT_GUY': ['L12 Cyberdyne Factory', 'L13 Cyberdyne Research'],
 }
+# A Future War bike's parts as it breaks up: the engine missed in Future War 1 (runs f3, g3 of the Sarah-level work,
+# and the first playtest); the other parts fly off with it.
+EXTRA_IMAGES.update({'IMAGE_FUTURE_BIKE_' + part: ['L00/16 Future War 1'] for part in ('ENGINE', 'EXHAUST', 'VISOR', 'DEBRIS')})
 # A crate's debris pieces, picked by number: the analysis finds 0 and 4 only.
 EXTRA_IMAGES.update({'IMAGE_DESERT_CRATE_DEBRIS_%d' % i: ['L11 Desert Town'] for i in range(9)})
 
