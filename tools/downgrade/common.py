@@ -700,6 +700,8 @@ class Switch(NamedTuple):
 BUILD_SWITCHES = {
     # The PS Vita player's graphics jobs, in Media/boot.config (pipeline.boot_config).
     'T2D_GFX_JOBS': Switch('player', 'on off', 'on', 'on', ('vita',)),
+    # The texture pages as PNGs imported as RGBA 4444, or as raw texels Atlas.cs loads (atlas/step.py).
+    'T2D_ATLAS_PAGES': Switch('project', 'png raw', 'png', 'png'),
 }
 
 
