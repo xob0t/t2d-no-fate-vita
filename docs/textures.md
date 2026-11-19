@@ -78,14 +78,41 @@ It needs Pillow, numpy and dnfile, all in the project's dependencies.
 The output is deterministic: two runs, one from `resources.assets` and one from the export, give identical files.
 A run takes 35 to 60 seconds.
 
-Pages come in two forms.
+Pages come in two forms, with the same texels.
+The repacker rounds each channel to 4 bits, and its check compares every frame against the rounded original.
 
-- PNG pages, the default for `repack.py`, with a `.meta` that imports them as RGBA 4444 for the PS Vita and the default platform, point filtering, Repeat wrapping, no mipmaps, not readable.
-- Raw pages with `--raw`, the default in the pipeline step. Each `pNNN.bytes` holds RGBA 4444 texels in Unity's layout, rows bottom first, a little-endian u16 per texel with R in the top nibble. The repacker rounds each channel to 4 bits, and the check compares against the rounded original. Atlas.cs makes the texture with `LoadRawTextureData` and `Apply(false, true)`.
+- PNG pages, the default for `repack.py` and the pipeline. Each channel is stored as its 4-bit value times 17, and a `.meta` imports the page as RGBA 4444 for the PS Vita and the default platform, point filtering, Repeat wrapping, no mipmaps, not readable. The import keeps each channel's top 4 bits, which gives back the rounded value. The pages are real Texture2D assets: the player streams them from `resources.assets.resS` with no managed copy.
+- Raw pages with `--raw`, the fallback (`T2D_ATLAS_PAGES=raw`). Each `pNNN.bytes` holds RGBA 4444 texels in Unity's layout, rows bottom first, a little-endian u16 per texel with R in the top nibble. Atlas.cs makes the texture with `LoadRawTextureData` and `Apply(false, true)`.
 
-The pipeline uses raw pages because `tools/builder/textures.py` imports textures only as RGB24, RGBA32, DXT1 and DXT5, and raises on format 13.
-When the builder learns RGBA 4444, `atlas_overlay(..., raw=False)` switches to PNG pages.
-Atlas.cs loads either.
+Atlas.cs loads either: it tries `Resources.Load<Texture2D>` first, then the TextAsset.
+The PNG pages take 30 MB in the project, the raw ones 513 MB; in the player both are 512 MB of texels.
+
+### RGBA 4444 in the editor and the builder
+
+Unity 2018.2's PS Vita importer stores RGBA 4444 like the uncompressed formats, with no swizzling or tiling.
+
+- Rows bottom first, one little-endian u16 per texel, R in the top nibble and A in the bottom.
+- Each channel is the 8-bit value's top 4 bits, `v >> 4`: truncated, not rounded. That is why the PNG pages store `n * 17`.
+- Any size, power of two or not. With "alpha is transparency" on, the importer fills the colour of see-through texels first, as for RGBA32.
+- In `.resS`, each texture starts at a multiple of 4 bytes. An AssetBundle's `.resS` also ends at one.
+- Mip levels follow one another, largest first, `floor(log2(max(w, h))) + 1` of them. Unity filters them with a box in float32, from `v * (1 / 255)`, with RGB in linear light for sRGB textures and alpha linear. It halves each level from the unrounded one before it, horizontally then vertically, and rounds half up. The builder makes them for uncompressed power-of-two textures. Odd sizes use another filter, so it refuses non-power-of-two textures with mipmaps.
+- Unset sampler settings (`-1`, mip bias `-100`) are built as bilinear, anisotropy 1, bias 0, Repeat.
+
+`tools/builder/textures.py` does the same, and `tools/builder/check_textures.py` checks it against the editor:
+
+```sh
+uv run tools/builder/check_textures.py reference   # the editor builds the generated reference (about 2 minutes)
+uv run tools/builder/check_textures.py --compare   # the builder writes the same textures; byte for byte
+uv run tools/builder/check_textures.py --pages <repack.py --out> <repack.py --out --raw>
+```
+
+`reference` generates 22 images from a fixed seed, no game pixels, each with one case's import settings: the atlas pages' `.meta` at 1024², 256×2048 and quantized, mipmaps sRGB and linear, sizes 1×1, 3×1, 4×4 and 300×200, alpha is transparency, readable, the default platform's format and the unset sampler settings, and RGBA32 and RGB24 with mipmaps.
+Three more go into an AssetBundle.
+The installed Unity 2018.2.19f1 editor with its PS Vita module builds them, under `work/builder/texture-reference`, as a PC Hosted player and a bundle.
+`--compare` makes each Texture2D with `textures.texture()` in the reference's path ID order and compares its fields, its serialized bytes, its image data and the whole `.resS`.
+On 2026-11-19: 21 identical, 0 differ, and the 4 non-power-of-two mipmapped textures not supported. Both `.resS` files are identical, 5,792,524 bytes in the player and 524,980 in the bundle.
+With `--project` and `--media` it reads another editor build. On the texture test (`tools/assess/vita-texture-test`), TexturePack0 at 4096² comes out identical as RGBA 4444 and as RGBA32.
+`--pages` imports every PNG page through the builder and compares it with the raw page of the same packing. All 106 pages are identical.
 
 ### Formats
 
@@ -164,7 +191,7 @@ On 1,532 frames, 1,500 random plus every frame of three chosen images, all 6,128
 These changes are in the commit "Wire the texture pages into the pipeline", apart from the atlas files so they can be taken on their own.
 
 - `pipeline.asset_overlay` calls `atlas.step.atlas_overlay(exported, RECOVERED / 'Assembly-CSharp.dll', WORK / 'atlas', ARTIFACTS / 'atlas', log=log)` after the shader overlay. It merges the returned overlay, the pages and tables under `Assets/Resources/atlas`, and adds the returned paths to the exclusions, the export's `Resources/texturepack` folder.
-- `atlas_overlay` reruns `repack.py --raw` only when the recovered assembly, the packs, `scenes.json` or the atlas scripts change, by a stamp in `work/atlas`.
+- `atlas_overlay` reruns `repack.py` (with `--raw` when `T2D_ATLAS_PAGES=raw`) only when the recovered assembly, the packs, `scenes.json` or the atlas scripts change, by a stamp in `work/atlas`.
 - It reads Rewind's assembly, not the rewritten one, because R1 replaces the very tables the repacker reads.
 - `pipeline.compat_sources()` adds `atlas/compat/*.cs` to T2DCompat.
 - `pipeline.REWRITER_SOURCES` adds `atlas/rewriter/AtlasPatches.cs`.
@@ -177,13 +204,14 @@ With this wiring, `uv run tools/downgrade/pipeline.py project` runs through in 4
 The rewriter's log shows `atlas: AtlasTables=6 AtlasSplash=3 AtlasPackLoads=1 AtlasDraws=4 AtlasSceneHooks=4`.
 Its problem count stays at 245, none of them in a method the rules change.
 The project gets `Assets/Resources/atlas` with 106 pages, the two tables and their metas, and no `texturepack` folder.
+The pages are PNGs; `T2D_ATLAS_PAGES=raw` makes them raw `.bytes` TextAssets instead.
 
 ## What is untested
 
-Nothing here has run on the console or in the editor.
+Nothing here has run on the console, and the editor has built only the reference textures, not the port.
 
-- RGBA 4444 PNG pages through the editor's or the builder's import. The builder doesn't import format 13 yet, hence the raw pages. The texture test built with the editor, but a search of its `.resS` for the RGBA 4444 texture's rows as plain linear data found none, so the layout the builder must write is still to be found.
-- Raw pages cost a managed copy of each page while it loads: 2 MB for a normal page, 32 MB for a 4096×4096 one. The managed heap grows to the largest of these and doesn't shrink.
+- A builder-written page on the console. The builder's bytes equal the editor's, and the texture test showed an editor-built RGBA 4444 4096² texture on the console, but no build of the port with PNG pages has run there yet.
+- Raw pages, now only the fallback, cost a managed copy of each page while it loads: 2 MB for a normal page, 32 MB for a 4096×4096 one. The managed heap grows to the largest of these and doesn't shrink.
 - Load time per page on the console. A 1024×1024 raw page is 2 MB to read and upload, against 5 seconds to decode a pack.
 - Whether the Vita's GPU wraps non-power-of-two textures. All pages are powers of two, which costs 30% on the oversize layers; NPOT sizes would bring the Factory to about 90 MB.
 - The scene data comes from static analysis. About 250 images, a quarter of a pack, are reachable only in ways it can't follow, through arithmetic on ids, ids in int[] tables, native jump tables that inline a constructor. Those draws miss and load at once. Play through every scene with the miss log on and feed `MissReport` back into `scenes.json`.

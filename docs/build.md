@@ -171,6 +171,7 @@ The list is `BUILD_SWITCHES` in `tools/downgrade/common.py`:
 | Variable | Values | Default | Read by | What it does |
 | --- | --- | --- | --- | --- |
 | `T2D_GFX_JOBS` | `on`, `off` | `on` | `build` | Writes `gfx-enable-gfx-jobs=1` into the PS Vita build's `Media/boot.config`, so Unity's job workers record the camera's draws beside the render thread. |
+| `T2D_ATLAS_PAGES` | `png`, `raw` | `png` | `project` | The texture pages as PNGs that import as RGBA 4444 Texture2D assets, or `raw`, the fallback, as RGBA 4444 texels in TextAssets that Atlas.cs makes into textures at load time ([textures](textures.md#the-build-step)). |
 
 ## Where it stands
 
