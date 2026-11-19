@@ -249,4 +249,23 @@ static partial class Rules
             il.I4(3).Null().I4(0).R8(1.0).R8(1.0).Null().Callvirt(DrawNumber);
         });
     }
+
+    // DialogBox.draw (0x1802A3FF0), its lines through the slot invoker 0x180002E30 (drawString), x [rsp+0x100] (the
+    // box's left, + 8 + the portrait's width with a portrait: V0, carried into the loop as V3), y r12d (the top, 16
+    // more a line: V2), alignment 9:
+    //   0x1802A432B  the line being typed, V21 (bmpFontSmallWhite, onlyApplyCtToLastCharacter set).drawString(V23
+    //                (CANVAS_BD), the line so far (V6; "" for no character yet), x, y, 9, this.currentCharacterCt (+0x50))
+    //   0x1802A4439  a line typed out, bmpFontSmallWhite.drawString(CANVAS_BD, this.strings[line V1] (V31), x, y, 9, null)
+    static void DialogBoxDraw(Engine e)
+    {
+        const string drawString = FontType + "::drawString(BitmapData,String,Double,Double,Int32,ColorTransform)";
+        MethodRepair m = e.Method("com.bitmapbureau.terminator.ui.DialogBox::draw()", "e85fe191");
+        m.Site("__native_0x180002E30(", 0, "da6bd8b4").With(il =>
+            il.Ldloc(21).Ldloc(23).Ldloc(6).Ldloc(3).Op(OpCodes.Conv_R8).Ldloc(2).Op(OpCodes.Conv_R8).I4(9)
+              .This().Ldfld("com.bitmapbureau.terminator.ui.DialogBox::currentCharacterCt").Callvirt(drawString));
+        m.Site("__native_0x180002E30(", 0, "651c5352").With(il =>
+            il.Ldsfld("com.bitmapbureau.terminator.ui.Fonts::bmpFontSmallWhite").Ldsfld("com.bitmapbureau.terminator.Main::CANVAS_BD")
+              .Ldloc(31).Ldloc(1).Op(OpCodes.Ldelem_Ref).Ldloc(3).Op(OpCodes.Conv_R8).Ldloc(2).Op(OpCodes.Conv_R8).I4(9).Null()
+              .Callvirt(drawString));
+    }
 }

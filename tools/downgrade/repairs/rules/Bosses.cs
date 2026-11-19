@@ -55,4 +55,19 @@ static partial class Rules
         }, 37, 10, "721a2af3");
         m.Families();
     }
+
+    // BikerBarPatron..ctor: NUM_FRAMES_PER_ANIM per patron, four initializers merged as in Biker..ctor (0x1802C9968),
+    // the handle V16, the merged value V2. Each native path's FieldInfo usage, matched to the IL's paths by the fields
+    // each stores first: 0x1802C9627 FI_759 (int[3]), 0x1802C9655 FI_2463 (int[5]), 0x1802C9769 FI_4205 (int[3], vo 33),
+    // 0x1802C9958 FI_4386 (int[3], vo 32, layer 4).
+    static void BikerBarPatronCtor(Engine e)
+    {
+        MethodRepair m = e.Method("com.bitmapbureau.terminator.sprites.objects.BikerBarPatron::.ctor(Int32)", "f463171c");
+        MergedInitializeArray(m, m.Sites("__fieldinfo()", 4, "f6dd7bc7 9f3a9ed9 6f0be422 70216a34"), new[] {
+            "1BCFD1727A92E832B31F6ED4E4CF5B6251CD3418F5DA45CAA562FA735F4F531E", // int[3]
+            "5FAB0E079E0FE2D2EBFF33D2F71C88E32CFBCE14E4D7E12690073B13BDA322E6", // int[5]
+            "A8998E92D1256D83DBF33404053858F2E1D92D06AE2662767397308EE493B47C", // int[3], vo 33
+            "AF7B923C5FFB0F9F02CAB6317346322D51FC24FEE404C7782776523D7A5D1666", // int[3], vo 32
+        }, 16, 2, "2884273c");
+    }
 }
