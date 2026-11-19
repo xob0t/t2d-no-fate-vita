@@ -259,7 +259,7 @@ uv run tools/downgrade/pipeline.py code                # the real thing
 `compile.sh` compiles `compat/*.cs` with the .NET 10 SDK's Roslyn at `-langversion:5` and `-nostdlib`, against Unity 2018.2's unityaot `mscorlib`, `System` and `System.Core` and the engine modules the pipeline gives T2DCompat, once with `T2D_VITA` and once without.
 Extra files after the output folder are compiled in too; with the pipeline's `Compat2018.cs` and `Unity6Shims.cs` it shows no name clashes.
 
-`build.sh` builds `PlatformCheck.exe` as the rewriter is built (the .NET Framework's csc, C# 5, Mono.Cecil 0.10.0-beta6), and runs `PlatformCheck.exe rules` against each player's T2DCompat.dll.
+`build.sh` builds `PlatformCheck.exe` as the rewriter is built (the .NET Framework's csc, C# 5, Mono.Cecil 0.10.0-beta6), compiles T2DCompat with `compile.sh` and the pipeline's other T2DCompat sources (`Compat2018.cs`, `Unity6Shims.cs`, the atlas, sprite batch and audio runtimes), and runs `PlatformCheck.exe rules` against each player's T2DCompat.dll.
 The check:
 
 1. finds every type, method, field, callee and instruction run a rule names in Rewind's Assembly-CSharp, and every T2DCompat method a rule names in T2DCompat.dll, with the replaced call's parameters and result;
