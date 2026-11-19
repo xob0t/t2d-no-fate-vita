@@ -160,7 +160,7 @@ namespace T2DCompat
         public static double[][] Uvy() { Load(); return uvy; }
         public static double[][] Uvw() { Load(); return uvw; }
         public static double[][] Uvh() { Load(); return uvh; }
-        public static int PageCount() { Load(); return pageW.Length; }
+        public static int PageCount() { Load(); return realPages; }
 
         // ---- pages (R4, R5) ----------------------------------------------------------------------
 
@@ -170,6 +170,12 @@ namespace T2DCompat
             if (Trace.On) Trace.Enter("Atlas.Get");
             Load();
             if (page < 0 || page >= pages.Length) return null;
+            if (page < realPages && tileFirst[page] >= 0)
+            {
+                // SpriteBatch draws a tiled page's frames from its tiles (Tiles); a caller that doesn't gets the first.
+                if (tiledGets++ == 0) Debug.LogWarning("T2D atlas: Get of " + PageName(page) + ", which is drawn from tiles");
+                page = tileFirst[page];
+            }
             Texture2D t = pages[page];
             if (t == null)
             {
@@ -219,12 +225,18 @@ namespace T2DCompat
             return pages[page];
         }
 
-        static int waits;
+        static int waits, tiledGets;
 
         // loadTexturePacks(n): the game's own preloads, by pack number; a page now, harmless.
         public static void Preload(int page)
         {
             Load();
+            int cols, rows, first = Tiles(page, out cols, out rows);
+            if (first >= 0)
+            {
+                for (int k = 0; k < cols * rows; k++) Preload(first + k);
+                return;
+            }
             if (page >= 0 && page < pages.Length && pages[page] == null) LoadPage(page);
         }
 
@@ -656,7 +668,9 @@ namespace T2DCompat
         static void Adopt(int page, Texture2D t)
         {
             t.filterMode = FilterMode.Point;
-            t.wrapMode = TextureWrapMode.Repeat;
+            // Pages wrap (the flipped meshes read at uv - 1); tiles clamp, since SpriteBatch moves those UVs into the
+            // tile (SubmitTiled).
+            t.wrapMode = page >= realPages ? TextureWrapMode.Clamp : TextureWrapMode.Repeat;
             pages[page] = t;
             residentBytes += PageBytes(page);
             drawn[page] = false;
@@ -877,7 +891,7 @@ namespace T2DCompat
 
         static long PageBytes(int page) { return (long)pageW[page] * pageH[page] * 2; }
 
-        static string PageName(int page) { return "p" + page.ToString("000"); }
+        static string PageName(int page) { return page >= realPages && realPages > 0 ? tileNames[page - realPages] : "p" + page.ToString("000"); }
 
         // ---- the data ----------------------------------------------------------------------------
 
@@ -886,14 +900,87 @@ namespace T2DCompat
             if (loaded) return;
             loaded = true;
             ReadFrames(Bytes("frames"));
+            realPages = pageW.Length;
             ReadScenes(Bytes("scenes"));
+            ReadTiles();
             pages = new Texture2D[pageW.Length];
             made = new bool[pageW.Length];
             drawn = new bool[pageW.Length];
             viaAsync = new bool[pageW.Length];
             lastUse = new int[pageW.Length];
             wanted = new bool[pageW.Length];
-            Debug.Log("T2D atlas: " + pageW.Length + " pages, " + tex.Length + " images, " + sceneNames.Length + " scenes");
+            Debug.Log("T2D atlas: " + realPages + " pages" + (pageW.Length > realPages ? " (" + (pageW.Length - realPages) + " tiles of the big ones)" : "") +
+                ", " + tex.Length + " images, " + sceneNames.Length + " scenes");
+        }
+
+        // ---- tiles -------------------------------------------------------------------------------
+
+        // A page larger than the tile size (tiles.bytes: u16) is in the build as tiles of at most that size, pNNN_K,
+        // K row by row from the bottom (atlas/step.py): the player integrates a 4096x4096 page in one 0.7 s frame, a
+        // 1024x1024 one in a few ms. Each tile is a page of its own here, numbered after the real ones, and a scene
+        // wants a big page's tiles; SpriteBatch draws a frame of a big page across its tiles (Tiles).
+        static int realPages;
+        static int[] tileFirst, tileCols, tileRows;
+        static string[] tileNames;
+
+        static void ReadTiles()
+        {
+            TextAsset asset = Resources.Load<TextAsset>(Folder + "tiles");
+            tileFirst = new int[realPages];
+            tileCols = new int[realPages];
+            tileRows = new int[realPages];
+            for (int p = 0; p < realPages; p++) tileFirst[p] = -1;
+            if (asset == null) return;
+            byte[] data = asset.bytes;
+            Resources.UnloadAsset(asset);
+            int size = data[0] | data[1] << 8;
+            var w = new List<int>(pageW);
+            var h = new List<int>(pageH);
+            var names = new List<string>();
+            for (int p = 0; p < realPages; p++)
+            {
+                if (pageW[p] <= size && pageH[p] <= size) continue;
+                int tw = Math.Min(pageW[p], size), th = Math.Min(pageH[p], size);
+                tileCols[p] = pageW[p] / tw;
+                tileRows[p] = pageH[p] / th;
+                tileFirst[p] = w.Count;
+                for (int k = 0; k < tileCols[p] * tileRows[p]; k++)
+                {
+                    w.Add(tw);
+                    h.Add(th);
+                    names.Add(PageName(p) + "_" + k);
+                }
+            }
+            pageW = w.ToArray();
+            pageH = h.ToArray();
+            tileNames = names.ToArray();
+            // A scene wants a big page's tiles instead of the page; a sticky page's tiles stay as it would.
+            for (int s = 0; s < scenePages.Length; s++)
+            {
+                var list = new List<int>();
+                foreach (int p in scenePages[s])
+                    if (tileFirst[p] < 0) list.Add(p);
+                    else for (int k = 0; k < tileCols[p] * tileRows[p]; k++) list.Add(tileFirst[p] + k);
+                scenePages[s] = list.ToArray();
+            }
+            var stickyAll = new bool[pageW.Length];
+            for (int p = 0; p < realPages; p++)
+            {
+                if (!sticky[p]) continue;
+                if (tileFirst[p] < 0) stickyAll[p] = true;
+                else for (int k = 0; k < tileCols[p] * tileRows[p]; k++) stickyAll[tileFirst[p] + k] = true;
+            }
+            sticky = stickyAll;
+        }
+
+        // The first tile of a page drawn from tiles (cols x rows of them, row by row from the bottom), or -1.
+        public static int Tiles(int page, out int cols, out int rows)
+        {
+            Load();
+            if (page < 0 || page >= realPages || tileFirst[page] < 0) { cols = rows = 1; return -1; }
+            cols = tileCols[page];
+            rows = tileRows[page];
+            return tileFirst[page];
         }
 
         static byte[] Bytes(string name)
