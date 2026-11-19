@@ -2,6 +2,7 @@
 
 This page says how to build Terminator 2D: NO FATE's sound for the Unity 2018.2 PS Vita port, and what it costs there.
 The rule is `tools/downgrade/audio/audio_rules.py`; the console test is `tools/downgrade/audio/vita-audio-test`.
+The start-up rules are `tools/downgrade/audio/rewriter/AudioPatches.cs` with `tools/downgrade/audio/compat/SoundLoads.cs`, and the builder's side is `tools/builder/audio.py`.
 Prose here is one sentence per line.
 Nothing derived from the game is committed: reports and the test project go under `work/`.
 
@@ -170,27 +171,123 @@ Playing (each case 6 s, after `load`; voices retrigger a random in-memory effect
 
 ## How the pipeline applies it
 
-`audio_rules.audio_overlay(exported_project)` returns `{Path('Assets/Resources/audio/<clip>.meta'): bytes}` for every clip, the same shape as huntdown-vita's `asset_rules.audio_overlay`; the pipeline writes it over the export.
+The project stage applies the rule: `pipeline.asset_overlay` writes `audio_rules.audio_overlay(exported_project)` over the export, after the shaders and before the texture pages, and logs `Sound: import settings of 930 clips`.
+The overlay is `{Path('Assets/Resources/audio/<clip>.meta'): bytes}` for every clip, the same shape as huntdown-vita's `asset_rules.audio_overlay`.
 It changes `defaultSettings` (loadType, compressionFormat, sampleRateSetting, sampleRateOverride) and the importer's `forceToMono`, `normalize` (off), `preloadAudioData` and `loadInBackground` (off).
 The clips keep their paths and GUIDs, so `Resources.Load` finds them as before.
+In the project the stage writes, 619 clips are forced to mono and 81 stream.
 
 - Built by the editor (as the test app is): the editor's PS Vita import applies all of it.
-- Built by `tools/builder` (huntdown's builder, which writes the FSB5 banks itself): its `audio.settings` stops on `forceToMono` and `sampleRateSetting` (`NotImplementedError`), because huntdown never needed them. It needs a mono downmix (the mean of the channels) and a resampler before `hevag.encode`, and `m_Frequency`, `m_Channels` and `m_Length` from the converted clip. The test's banks (`work/vita-audio-test/build/Media/resources.resource`) are the reference for what the editor makes.
+- Built by `tools/builder`: the builder makes the same conversion ([The builder](#the-builder)).
 
 For the code side:
 
-- `Sound.createSoundFromFile`: on the PS Vita there are no loose WAV files, so the `UnityWebRequest` branch never runs; replacing the method with `Resources.Load<AudioClip>(name)` also drops 835 `File.Exists` calls at start-up. That is the platform layer's to decide (tools/downgrade/compat), and it needs nothing from the audio rule. If the platform layer ever wants loose files, they would have to be WAV at the full PCM size and loaded on the main thread.
-- `UnityWebRequest.Result` and the inlined binding calls in that method are the API rules' business ([assessment.md](assessment.md#api-gaps-against-unity-20182)).
-- `AssetsEmbed.staticInit`: its loop that loads all 930 clips takes about 16 s on the console, all in the first frame, before anything is on screen. A rewriter rule should replace it with `Resources.LoadAsync` of every clip started at boot (UI and menu sounds first, then music, then the rest), a few requests in flight, finished in about 15 s while the logo and the menus run at 60 fps (a2). `loadSound` then takes the clip from its request when done; a clip asked for earlier needs a synchronous `Resources.Load`, and whether that waits for the requests ahead of it was not measured. Loading each clip on first use instead would cost 16 to 90 ms the first time each effect plays in a level.
+- `Sound.createSoundFromFile`: the platform layer's rule (`compat/rewriter/PlatformPasses.cs`, `PlatformSoundLoader`) makes it `Resources.Load` only, through `T2DCompat.Sounds.Clip`. The audio check confirms it on the written assembly: Rewind's method has one `File.Exists` and ten `UnityWebRequest` references, the written one none, so the 835 `File.Exists` calls at start-up are gone. The game's only `File.Exists` calls left are in `SaveSettings.loadSettings` and `SaveStats.loadStats`.
+- `AssetsEmbed.staticInit`: rules A1 and A2 load the sounds in the background ([Start-up](#start-up)).
 - `AudioManager`: keep 32 real voices. The game asks for a 1024-sample DSP buffer; the PS Vita player kept its 512 when the test asked for 1024 (`AudioSettings.Reset`).
+
+## The builder
+
+`tools/builder/audio.py` converts each clip as the editor's PS Vita import does before it encodes:
+
+- `forceToMono` mixes the channels down to their mean, truncated toward zero: `trunc((L + R) / 2)`.
+- A sample rate override makes `n * rate_out // rate` samples out of `n`, and sample `j` is taken at `j * n / n_out` in the source.
+- The clip's `m_Frequency` and `m_Channels` are the converted clip's, `m_Length` is `n_out / rate_out`, and the HEVAG frames are `ceil(n_out / 28)`, before the stretch to whole frames.
+- The resampler is the editor's own kernel for 44.1 kHz to 32 kHz, as a table (`tools/builder/audio_kernel.py`).
+
+The editor's PCM output made all of this measurable.
+`tools/downgrade/audio/importer-reference/make.py` builds 42 synthetic clips (noise, sweeps, impulses, tones, a clip that clips, a 101-sample clip; nothing of the game) with the installed editor in batch mode into one PS Vita asset bundle, in PCM and HEVAG, mono and stereo, at several rates.
+A PCM bank holds the importer's converted samples exactly, with no encoder in the way.
+
+- The mono mix is exact: the five PCM clips forced to mono at their own rate are byte for byte the editor's.
+- The lengths are exact for every probe and every game clip.
+- The kernel is no windowed sinc. With Kaiser, Blackman, Hann, Hamming, Nuttall, Gaussian and Lanczos windows, or any smooth window as a spline, the best fit leaves 29 dB, and quantised phases change nothing. A table of the kernel itself, 641 entries 1/16 of a source sample apart out to 40, fitted by least squares on the stereo probes (`fit_resampler.py`), leaves 1.0 LSB rms.
+- Against the editor's output: sweep 62.5 dB (mono, held out of the fit: 61.9 dB), tones 61.3 dB, impulses 69.1 dB (mono 70.4 dB), noise 47.6 dB. Most interior samples are identical (76% of the sweep's); what is left is at the ends.
+- The ends differ in the first and last 30 or so output samples. The editor's handling there is none of zeros, a repeated end sample, a mirror or a loop; the builder uses zeros. The 101-sample clip is all ends: 23 dB.
+- The clip that clips: 56 dB, as the editor clips the filtered peaks its own way.
+
+The builder makes only the conversions the rule asks for, and stops on the others (`NotImplementedError`):
+
+- A rate conversion other than 44.1 kHz to 32 kHz. The same kernel scaled to other ratios came within 11 to 29 dB of the editor's (22.05 kHz, 11.025 kHz, 48 to 44.1 kHz, upsampling). Another ratio takes a probe at that ratio and a run of `fit_resampler.py`.
+- `normalize` with `forceToMono`: the editor scales the mono mix to full scale, which is not modelled.
+- Optimize Sample Rate.
+
+The PCM banks' padding was wrong for stereo: the data takes 8 samples per channel more before the 32-byte alignment (16 bytes mono, 32 stereo; `fsb5.bank`), not 16 bytes.
+The rule uses no PCM.
+
+`uv run tools/builder/check_audio.py --compare` checks the builder against the importer reference and against the audio test's editor build of the 930 game clips:
+
+| | Clips | Fields and bank headers (but FMOD's content hash) | Data |
+| --- | --- | --- | --- |
+| Importer reference | 30 (the builder refuses 12 more) | all identical | PCM without resampling identical (5 of 5); resampled PCM and HEVAG not |
+| The game's clips, as the rule imports them | 930 | all identical, bank sizes too, so the `.resource` layout is the editor's | HEVAG not identical |
+
+No HEVAG bank is byte for byte the editor's, and none can be: the encoder is not Sony's (`hevag.py`), which holds at the source's rate too.
+The error, decoded as the console decodes:
+
+| Game clips | Count | Ours against Unity's, median (p10) | Ours against the source | Unity's against the source |
+| --- | --- | --- | --- | --- |
+| Mono, 32 kHz | 619 | 23.5 dB (16.7) | 30.5 dB | 24.7 dB |
+| Stereo, 32 kHz | 216 | 22.0 dB (15.0) | 29.2 dB | 22.9 dB |
+| Music, stereo, 44.1 kHz | 95 | 30.0 dB (27.0) | 35.5 dB | 31.3 dB |
+
+Ours is closer to the source than Unity's by 4 to 6 dB (medians), as huntdown-vita found for its game.
+
+### The cache
+
+Encoded clips go to `work/builder/audio-cache`, one pickle per clip.
+The key is SHA-256 of the source file's bytes, the clip's name (the bank holds a hash of it), its importer settings, and the bytes of `audio.py`, `audio_kernel.py`, `hevag.py` and `fsb5.py`.
+A build whose audio didn't change encodes nothing: the compare's second run took 1.2 s for the 930 clips, all from the cache.
+Encoding all 930 with the rule takes 122 s on 4 workers, down from 12.5 minutes, since the effects are mono and at 32 kHz.
+An edit of any of the four files encodes everything again.
+The encoded bytes can differ between CPU families (`audio.one_blas_thread`), one more reason the cache stays under `work/`.
+
+## Start-up
+
+As the game does it, loading the sound takes 15.75 s before the first frame.
+Two rewriter rules and a T2DCompat helper load it in the background instead:
+
+- A1 (`tools/downgrade/audio/rewriter/AudioPatches.cs`, `AudioStartupLoads`): in `AssetsEmbed.staticInit`, the loop's `call loadSound(i); pop` becomes `call t2dQueueSound(i); nop`, in place. `t2dQueueSound` is a method the rule adds to `AssetsEmbed`, with `loadSound`'s bounds check and name lookup (the `string[]` field whose element `loadSound` passes to `createSoundFromFile`): `if (i >= 0 && i < names.Length) SoundLoads.Queue(names[i])`.
+- A2 (`AudioClipLoads`): `Sound.createSoundFromFile`'s call of `T2DCompat.Sounds.Clip` goes to `SoundLoads.Clip`.
+- `T2DCompat.SoundLoads` (`tools/downgrade/audio/compat/SoundLoads.cs`): `Queue` asks for the clip with `Resources.LoadAsync`, four at a time, UI sounds first, then music, then the rest; each request's `completed` event starts the next. `Clip` returns the loaded clip at once. A clip still loading is waited for (that request only), and a clip not started is loaded there and then with `Sounds.Clip`. So a sound the game plays is never silent; at worst it starts late.
+
+`loadSound` is otherwise as it was: the first time the game asks for a sound it makes the `Sound`, now from a clip that is usually loaded already.
+Every clip stays loaded for the whole game, as before.
+
+The rules find their sites by the shape of the IL, as the texture rules do, and throw on any other shape.
+A1 and the texture rule R3 both change `staticInit`, each only the instructions of its own pattern.
+`tools/downgrade/audio/check/check_rules.py` checks them with Mono.Cecil:
+
+- On Rewind's assembly, the texture rules and A1 in both orders give the same `staticInit` and `t2dQueueSound`, and their stacks balance. A1 run twice, A1 without the loop's call, and A2 without the platform pass's `Sounds.Clip` each throw.
+- On the code stage's written `Recovered.T2D`, `staticInit` queues the sounds, enters the splash's pages, and loads neither a sound nor a pack. `createSoundFromFile` takes its clip from `SoundLoads.Clip` and has no `File.Exists`, `UnityWebRequest` or `Sounds.Clip`. The two calls into `SoundLoads` resolve against `T2DCompat.dll`, and the stacks of `AssetsEmbed`'s and `Sound`'s 17 methods balance.
+
+The code stage reports `audio: AudioStartupLoads=2 AudioClipLoads=1` and nothing unresolved, with and without the repairs.
+`staticInit` still has Rewind's gaps around its arrays (the `soundMap` allocation among them), which the repairs must fill before it runs; the rules don't depend on them.
+
+On the console, the audio test's `rule` step builds in the real `SoundLoads.cs` and queues the 930 clips as the rewritten `staticInit` does.
+Every 20 frames it asks for a sound effect that isn't loaded yet, and plays it (runs r1 and r2, 2026-11-19):
+
+| Loads in flight | Queueing the 930 | All loaded | Frame p50 | Frames over 20 ms | Asks | Wait, median | Wait, longest | Silent |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 4 (the default) | 47 ms | 19.4 s | 16.7 ms | 59 of 1161 | 58 | 25.7 ms | 63 ms | 0 |
+| 16 | 50 ms | 16.0 s | 16.7 ms | 46 of 952 | 47 | 24.9 ms | 81 ms | 0 |
+
+- The first frame comes about 50 ms after the queueing starts, instead of 15.75 s.
+- The frames over 20 ms are the asks. A play that has to wait costs a frame about as long as the clip's own load (12 ms plus its size at 8 MB/s) plus what is in flight ahead of it. Without asks the frames stay at the 60 Hz vsync while the clips load.
+- Fewer loads in flight make the longest wait shorter and the whole load longer.
+- The test asks only for clips not loaded yet, three times a second: the worst case. In the game the UI sounds and the music load first, so the menus should not wait; a level started within the first 20 s or so may wait on its first plays.
+- Main memory afterwards: 34 MB, as with the game's own loading.
+- Not measured: a synchronous load during the background loads, such as a texture page at a scene change, may wait for the loads in flight.
+
+`SoundLoads` logs one line when every clip is loaded (`T2D sounds: 930 loaded in ...`), and each wait over 20 ms.
 
 ## Open problems
 
-- Start-up: as the game does it, loading the sound takes 16 s before the first screen. The fix is in the game's code (above), not in the import settings: neither the format nor async loading made the per-clip cost smaller. Load in Background (`loadInBackground`) was not tried; huntdown-vita saw clips hang with it when they were unloaded, which this game never does.
-- Memory: 31 MiB stay resident for the whole game. Loading each level's effects when it starts (the effects are in per-level folders: `sfx/biker_bar`, `sfx/hospital`, …) and unloading them after would cut that to a few MiB, but changes `AssetsEmbed.loadSound` and needs a list of which level plays which clip.
+- Start-up waits: a sound first played before its clip has loaded waits 10 to 80 ms on the main thread (above), during the first 20 s or so.
+- Memory: 31 MiB stay resident for the whole game. Loading each level's effects when it starts (the effects are in per-level folders: `sfx/biker_bar`, `sfx/hospital`, …) and unloading them after would cut that to a few MiB, but needs a list of which level plays which clip.
 - Music starts: each stream's `Play` blocks the main thread for 16 to 78 ms, and an intro of 10 s or more starts with its loop (two opens), layered music with up to three. Most happen behind a transition; in-level changes (boss music, the pause music) will drop a few frames each time. Opening a stream ahead of `Play` (`AudioClip.LoadAudioData` on a streamed clip) was not tried; keeping the intros in memory would cost 12 MiB more.
 - Concurrency: the worst case (six streams, 25 voices) was measured with the test's own sources and clips, not in the game, and with the PS Vita's 512-sample DSP buffer, which the player keeps whatever the game asks.
-- The builder route needs mono and resampling (above).
+- The builder's resampler differs from the editor's at the clips' ends, and the builder makes no rate conversion but 44.1 kHz to 32 kHz.
 - Effects forced to mono lose the little width they had; nobody has listened to all 532.
 
 ## Reproducing
@@ -198,13 +295,21 @@ For the code side:
 ```sh
 # The inventory, the settings and the report (work/audio/clips.tsv, report.json)
 python -I tools/downgrade/audio/audio_rules.py
+# The importer reference (the installed editor, batch mode), the kernel table, and the builder's compare
+uv run tools/downgrade/audio/importer-reference/make.py
+uv run --with scipy tools/downgrade/audio/importer-reference/fit_resampler.py
+uv run tools/builder/check_audio.py --compare
+# The rules A1 and A2, after the code stage
+uv run tools/downgrade/pipeline.py code
+python -I tools/downgrade/audio/check/check_rules.py
 # The console test: build, check what the importer made, run inside the shared lock
 python -I tools/downgrade/audio/vita-audio-test/build.py
 uv run --with unitypy==1.25.3 --with numpy python -I tools/downgrade/audio/vita-audio-test/check_build.py
 python ~/.t3/projects/butcher-vita/tools/downgrade/lock.py run vita-device "t2d: audio" --wait 1800 -- \
   bash -c "python -I tools/downgrade/audio/vita-audio-test/va.py install && \
            python -I tools/downgrade/audio/vita-audio-test/va.py run a1 'load; play 0 0 6; play 0 24 6; play 2 24 6; play 4 24 6; play 6 25 6; play 8 0 4' && \
-           python -I tools/downgrade/audio/vita-audio-test/va.py run a2 'loadasync 16'"
+           python -I tools/downgrade/audio/vita-audio-test/va.py run a2 'loadasync 16' && \
+           python -I tools/downgrade/audio/vita-audio-test/va.py run r1 'vol 0.2; rule 4 20'"
 ```
 
 The check of the folders against the code's audio types read `Assets.audiotype` (an `InitializeArray` blob) from Rewind's `Assembly-CSharp.dll` with dnfile, and `Assets.soundfilename` from Rewind's `Assets.cs`; neither is committed.

@@ -125,6 +125,9 @@ partial class DowngradeAssemblies
         new Pass("atlas", Scope.Game, AtlasPackLoads),
         new Pass("atlas", Scope.Game, AtlasDraws),
         new Pass("atlas", Scope.Game, AtlasSceneHooks),
+        // audio/rewriter/AudioPatches.cs: the sounds load in the background (docs/audio.md), A1 and A2.
+        new Pass("audio", Scope.Game, AudioStartupLoads),
+        new Pass("audio", Scope.Game, AudioClipLoads),
     };
 
     // Sites changed per rule (a pass, a row of a rule table, a game type a pass looks for),
