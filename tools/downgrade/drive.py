@@ -84,7 +84,7 @@ def main():
     if '--sync' in sys.argv:
         vita('sync')
     vita('args', '--', *flags.split())
-    before = (vita('log', quiet=True).splitlines() or [''])[0]
+    before = vita('log', quiet=True)  # the run before's whole log: a new run's differs
     held = None
     launched = False
     try:
@@ -111,8 +111,7 @@ def main():
                 end = time.time() + limit
                 while time.time() < end:
                     text = vita('log', quiet=True)
-                    first = (text.splitlines() or [''])[0]
-                    if first and first != before and pattern.search(text):
+                    if text.strip() and text != before and pattern.search(text):
                         print(f'{time.time() - started:6.1f} until {rest[0]}: matched', flush=True)
                         break
                     time.sleep(5)
@@ -127,7 +126,7 @@ def main():
             print(f'drive: released {held}', flush=True)
         text = vita('log', quiet=True)
         (out / 'log.txt').write_text(text, encoding='utf-8')
-        if launched and (text.splitlines() or [''])[0] == before:
+        if launched and text == before:
             print("drive: WARNING the log is the previous run's; this launch wrote no log", flush=True)
         vita('quit')
         # The flags are one launch's: if the launch never read them, they go now.

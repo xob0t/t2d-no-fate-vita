@@ -147,6 +147,35 @@ def settings_overlay(exported: Path, platform: str):
     return overlay
 
 
+# ---------------------------------------------------------------- the fixed timestep
+
+# Unity 6 keeps TimeManager's fixed timestep as a rational (m_Count over m_Rate, 2351999 / 141120000 s in this
+# release: 1/60 s), which the export writes as `Fixed Timestep: 0`. A 2018.2 player with a zero step never leaves its
+# fixed-update loop (the first console run: FixedUpdate, the game's main loop, ran over and over and no frame ended).
+# The step is read from the game's own globalgamemanagers (the rip's input copy).
+
+
+def time_overlay(exported: Path, game_data: Path):
+    import UnityPy
+
+    relative = Path('ProjectSettings') / 'TimeManager.asset'
+    text = (exported / relative).read_text(encoding='utf-8')
+    managers = UnityPy.load(str(game_data / 'globalgamemanagers'))
+    found = [o.read_typetree() for o in managers.objects if o.type.name == 'TimeManager']
+    if len(found) != 1:
+        sys.exit(f"The game's globalgamemanagers has {len(found)} TimeManagers")
+    step = found[0]['Fixed Timestep']
+    if isinstance(step, dict):  # Unity 6: {m_Count, m_Rate: {m_Numerator, m_Denominator}}
+        rate = step['m_Rate']
+        step = step['m_Count'] * rate['m_Denominator'] / rate['m_Numerator']
+    if not 0.001 <= step <= 0.2:
+        sys.exit(f"The game's fixed timestep reads as {step} s")
+    text, count = re.subn(r'^(  Fixed Timestep:).*$', rf'\g<1> {float(step)!r}', text, flags=re.MULTILINE)
+    if count != 1:
+        sys.exit('TimeManager.asset has no Fixed Timestep line')
+    return {relative: text.encode('utf-8')}
+
+
 # ---------------------------------------------------------------- lighting and Unity 6 managers
 
 # The scene's LightingDataAsset is serializedVersion 4 (Unity 6); 2018.2 reads its own, older layout. The

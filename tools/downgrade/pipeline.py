@@ -48,6 +48,7 @@ from asset_rules import (
     link_xml,
     settings_overlay,
     shader_overlay,
+    time_overlay,
 )
 from common import (
     ARTIFACTS,
@@ -715,6 +716,7 @@ def asset_overlay(exported: Path, platform: str, assemblies: list):
     exported paths left out)."""
     overlay, excluded = {}, set()
     overlay.update(settings_overlay(exported, platform))
+    overlay.update(time_overlay(exported, RIP_INPUT / f'{GAME_NAME}_Data'))
     lighting, lighting_excluded = lighting_overlay(exported)
     overlay.update(lighting)
     excluded |= lighting_excluded
