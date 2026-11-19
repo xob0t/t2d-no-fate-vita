@@ -485,7 +485,11 @@ def code_report(output: str, out: Path, platform: str):
     for g in gaps:
         if g[2] not in stubbed:
             sites[g[2]] += int(g[4].rsplit('sites=', 1)[1])
-    kinds = Counter(line.split(':', 2)[1].split()[0] if ':' in line else line.split()[0] for line in problems)
+    # "UNRESOLVED <assembly>: <what> ...": counted by assembly and what (type, member, field, verify ...).
+    kinds = Counter(
+        ' '.join([line.split()[1].rstrip(':'), line.split(':', 1)[1].split()[0]]) if ':' in line else line.split()[0]
+        for line in problems
+    )
     report = [
         f'Rewritten into {out}: {", ".join(sorted(p.name for p in out.glob("*.dll")))}',
         '',

@@ -288,14 +288,9 @@ partial class DowngradeAssemblies
         return name == "mscorlib" ? 0 : name == "System" ? 1 : name == "System.Core" ? 2 : 3;
     }
 
-    // Namespaces of the game's own assemblies that T2DCompat replaces where the other assemblies use them:
-    // FMOD Studio's managed API in firstpass, whose native library has no PS Vita build, plays on T2DCompat's
-    // AudioSources (compat/FmodApi.cs). Firstpass keeps its own copies, stubbed (pipeline.STUBBED_ON), for the
-    // components the assets reference (StudioListener, FMODAsset).
-    static readonly Dictionary<string, string[]> ReplacedGameNamespaces = new Dictionary<string, string[]>
-    {
-        { "Recovered.Firstpass", new[] { "FMOD", "FMOD.Studio", "FMODUnity" } },
-    };
+    // Namespaces of the game's own assemblies that T2DCompat replaces where the other assemblies use them
+    // (butcher-vita's FMOD Studio API); none here yet.
+    static readonly Dictionary<string, string[]> ReplacedGameNamespaces = new Dictionary<string, string[]>();
 
     static bool IsReplacedGameType(TypeReference type)
     {
@@ -370,7 +365,7 @@ partial class DowngradeAssemblies
             }
             else problems.Add(module.Name + ": type " + type.FullName);
         }
-        Count("rule ReplacedGameNamespaces", replacedGameTypes);
+        if (ReplacedGameNamespaces.Count > 0) Count("rule ReplacedGameNamespaces", replacedGameTypes);
         int attributeTypes = RetargetAttributeTypes(module);
         // Before the passes: references unused after the retargeting are read from the file's own
         // type references, which do not list what a pass imports.

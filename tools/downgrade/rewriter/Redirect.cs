@@ -244,8 +244,12 @@ partial class DowngradeAssemblies
     static readonly string[] CursorCalls = { "set_lockState" };
 
     // Redirect rules kept from the earlier ports that this game's code may not need: it has no
-    // BinaryFormatter, and its fullscreen and cursor calls go through UnityMain alone.
-    static readonly HashSet<string> OptionalRules = new HashSet<string> { "BinaryFormatter binder", "Screen fullscreen and resolution" };
+    // BinaryFormatter and no Type.GetType call (Haxe's Type.resolveClass came back inlined), and its
+    // fullscreen and cursor calls go through UnityMain alone.
+    static readonly HashSet<string> OptionalRules = new HashSet<string>
+    {
+        "Type.GetType", "BinaryFormatter binder", "Screen fullscreen and resolution",
+    };
 
     static int RedirectMembers(ModuleDefinition module)
     {
@@ -254,7 +258,7 @@ partial class DowngradeAssemblies
         // BinaryFormatter's binder is kept for saves that name Assembly-CSharp (OptionalRules).
         // The platform layer (compat/: Saves, Window) is written apart from the rewriter: a rule whose
         // T2DCompat class isn't there yet is left out, and not counted.
-        bool saves = compat.ContainsKey("T2DCompat.Saves"), window = compat.ContainsKey("T2DCompat.Window");
+        bool saves = compat.ContainsKey("T2DCompat.Saves"), windowed = compat.ContainsKey("T2DCompat.Window");
         var sites = new int[5];
         int count = 0;
         foreach (TypeDefinition type in AllTypes(module.Types))
@@ -274,7 +278,7 @@ partial class DowngradeAssemblies
                     count++;
                     continue;
                 }
-                if (window && ((called.DeclaringType.FullName == "UnityEngine.Screen" && ScreenCalls.Contains(called.Name))
+                if (windowed && ((called.DeclaringType.FullName == "UnityEngine.Screen" && ScreenCalls.Contains(called.Name))
                     || (called.DeclaringType.FullName == "UnityEngine.Cursor" && CursorCalls.Contains(called.Name))))
                 {
                     MethodDefinition window = compat["T2DCompat.Window"].Methods.FirstOrDefault(m =>
@@ -351,7 +355,7 @@ partial class DowngradeAssemblies
             }
         }
         string[] rules = { "Type.GetType", "Screen fullscreen and resolution", "BinaryFormatter binder", "DateTime.Now", "persistentDataPath" };
-        bool[] present = { true, window, true, saves, saves };
+        bool[] present = { true, windowed, true, saves, saves };
         for (int i = 0; i < sites.Length; i++)
             if (present[i] && (sites[i] > 0 || !OptionalRules.Contains(rules[i]))) Count("redirect " + rules[i], sites[i]);
         return count;
