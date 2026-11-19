@@ -403,6 +403,8 @@ COMPAT_MODULES = [
 REWRITER_SOURCES = [
     HERE / 'DowngradeAssemblies.cs',
     *(HERE / 'rewriter' / f'{name}.cs' for name in ('Redirect', 'Runtime', 'RewindGaps', 'Stack')),
+    # The platform layer's pass and its rules (docs/platform.md); compat_sources() takes only compat/*.cs.
+    *(COMPAT_FOLDER / 'rewriter' / f'{name}.cs' for name in ('PlatformRules', 'PlatformPasses')),
 ]
 
 
@@ -437,10 +439,13 @@ def compile_tools(version, platform):
 
 
 # Managed wrappers of native libraries the PS Vita lacks; their methods become no-ops returning defaults, so
-# the game's own "not available" paths run instead. Steamworks.NET calls steam_api64.dll.
+# the game's own "not available" paths run instead. Steamworks.NET calls steam_api64.dll. Unused while the roots
+# leave Steamworks out (below); kept for a release whose code the platform layer doesn't cover.
 STUBBED_ON = {'vita': ['Steamworks'], 'windows': ['Steamworks']}
-# The roots: the game's code and the libraries it ships.
-ROOTS = GAME_ASSEMBLIES
+# The roots: the game's code. InControl and Steamworks.NET are left out ("-"): the rewriter sends their types to
+# T2DCompat's (compat/InControl.cs, the input API the game uses over Unity's Input; compat/Steamworks.cs, the types
+# left once the platform pass has taken Steam out of the game's code). docs/platform.md.
+ROOTS = ['Assembly-CSharp', '-InControl', '-Steamworks']
 # The rewriter's lines that are problems: what doesn't resolve, rules that matched nothing, roots not found.
 PROBLEMS = ('UNRESOLVED', 'NO MATCH', 'MISSING')
 CODE_REPORT = 'code-report.txt'

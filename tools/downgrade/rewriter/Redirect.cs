@@ -249,6 +249,8 @@ partial class DowngradeAssemblies
     static readonly HashSet<string> OptionalRules = new HashSet<string>
     {
         "Type.GetType", "BinaryFormatter binder", "Screen fullscreen and resolution",
+        // T2DCompat Saves (the platform layer) has Now and UtcNow, but the game's code never reads the clock.
+        "DateTime.Now",
     };
 
     static int RedirectMembers(ModuleDefinition module)
