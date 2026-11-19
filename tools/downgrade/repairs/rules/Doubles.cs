@@ -10,8 +10,8 @@ static partial class Rules
     // of bossSpawnPoint.y or zeros on the other path (V10/V11).
     static void ContinueScreenUpdate(Engine e)
     {
-        MethodRepair m = e.Method("com.bitmapbureau.terminator.apps.ContinueScreen::update()", null);
-        m.Site("__bits_to_double(", 0, null).With(il => il.HalvesToDouble(8, 9));
-        m.Site("__bits_to_double(", 0, null).With(il => il.HalvesToDouble(10, 11));
+        MethodRepair m = e.Method("com.bitmapbureau.terminator.apps.ContinueScreen::update()", "da5efe50");
+        m.Site("__bits_to_double(", 0, "17f98874").With(il => il.HalvesToDouble(8, 9));
+        m.Site("__bits_to_double(", 0, "7e0421f9").With(il => il.HalvesToDouble(10, 11));
     }
 }

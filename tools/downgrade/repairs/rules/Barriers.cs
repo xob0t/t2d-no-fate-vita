@@ -7,15 +7,15 @@ static partial class Rules
     // EpicManager.getInstance: s_instance's store at 0x18014B527, barrier at 0x18014B52A..57F.
     static void EpicManagerGetInstance(Engine e)
     {
-        MethodRepair m = e.Method("com.twissgreen.unity.EpicManager::getInstance()", null);
-        m.Site("__load4(", null).SkipBarrier();
+        MethodRepair m = e.Method("com.twissgreen.unity.EpicManager::getInstance()", "3e5e91c8");
+        m.Site("__load4(", "098f0200").SkipBarrier();
     }
 
     // Sound.createSoundFromFile: the barrier after UnityWebRequestAsyncOperation.webRequest's store,
     // inside the try whose finally disposes the request.
     static void SoundCreateSoundFromFile(Engine e)
     {
-        MethodRepair m = e.Method("com.twissgreen.engine.media.Sound::createSoundFromFile(String)", null);
-        m.Site("__load4(", null).SkipBarrier();
+        MethodRepair m = e.Method("com.twissgreen.engine.media.Sound::createSoundFromFile(String)", "2eb23527");
+        m.Site("__load4(", "67db8607").SkipBarrier();
     }
 }

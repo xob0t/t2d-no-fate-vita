@@ -6,10 +6,10 @@ using Repairs;
 
 // The engine on its own, for writing and checking rules; the pipeline runs Engine.Run inside the rewriter.
 //
-//   Repairs apply <Assembly-CSharp.dll> <out.dll> [--only <rule>[,<rule>...]] [--pin]
+//   Repairs apply <Assembly-CSharp.dll> <out.dll> [--only <rule>[,<rule>...]] [--pin] [--patterns]
 //       Applies the rules and writes the result. Errors (stale or drifted rules, markers left, a bad
 //       stack) fail it with exit code 1 and nothing written. --pin also accepts rules without hashes
-//       and prints the hashes to paste in.
+//       and prints the hashes to paste in. --patterns also runs Patterns.cs on the methods no rule took.
 //   Repairs markers <Assembly-CSharp.dll> <filter>
 //       Every marker of the methods whose name contains filter, with its index, kind, IL offset and
 //       context hash, one per line (native/listing.py reads this), plus each method's body hash.
@@ -55,10 +55,11 @@ static class RepairsMain
                     only = n => names.Contains(n);
                 }
                 var watch = System.Diagnostics.Stopwatch.StartNew();
-                Engine engine = Engine.Run(module, pin ? Mode.Pin : Mode.Strict, only);
+                Engine engine = Engine.Run(module, pin ? Mode.Pin : Mode.Strict, only, args.Contains("--patterns"));
                 foreach (string p in engine.Pins) Console.WriteLine("PIN " + p);
                 foreach (string w in engine.Warnings) Console.WriteLine("WARNING " + w);
                 foreach (string e in engine.Errors) Console.WriteLine("ERROR " + e);
+                if (args.Contains("--patterns")) Console.WriteLine("patterns: write barriers removed in " + engine.PatternsKept + " methods, " + engine.PatternsDropped + " tried and put back");
                 Console.WriteLine(engine.RuleCount + " rules, " + engine.SiteCount + " sites, " + engine.Errors.Count + " errors, " + watch.ElapsedMilliseconds + " ms");
                 if (engine.Errors.Count > 0 || (engine.Pins.Count > 0 && !pin)) return 1;
                 if (engine.Pins.Count > 0) Console.WriteLine("(pin mode: written, but rules without hashes must get them before a build accepts them)");

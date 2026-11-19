@@ -265,6 +265,11 @@ namespace Repairs
         // Runs every rule (the static methods of Rules taking an Engine), then Finish.
         public static Engine Run(ModuleDefinition module, Mode mode, Func<string, bool> only)
         {
+            return Run(module, mode, only, false);
+        }
+
+        public static Engine Run(ModuleDefinition module, Mode mode, Func<string, bool> only, bool patterns)
+        {
             var engine = new Engine(module, mode);
             foreach (System.Reflection.MethodInfo rule in typeof(Rules).GetMethods(System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic)
                          .Where(m => m.GetParameters().Length == 1 && m.GetParameters()[0].ParameterType == typeof(Engine)).OrderBy(m => m.Name))
@@ -280,9 +285,27 @@ namespace Repairs
                     engine.Errors.Add(rule.Name + ": " + (e.InnerException is RepairException ? e.InnerException.Message : e.InnerException.ToString()));
                 }
             }
+            if (patterns) Patterns.WriteBarriers(engine);
             engine.Finish();
             return engine;
         }
+
+        public bool Taken(MethodDefinition method)
+        {
+            return repairs.ContainsKey(method);
+        }
+
+        // Starts a pattern repair: Finish keeps it only if the method ends with no marker, and
+        // otherwise puts the method back as it was (and counts it in PatternsDropped).
+        internal MethodRepair Pattern(MethodDefinition method)
+        {
+            Cleanup.LongBranches(method.Body);
+            MethodRepair r = Method(Name(method), Fingerprint.Of(method));
+            r.Snapshot = Snapshot.Of(method.Body);
+            return r;
+        }
+
+        public int PatternsKept, PatternsDropped;
 
         internal void Fail(string key, string message)
         {
@@ -297,6 +320,20 @@ namespace Repairs
             {
                 MethodDefinition method = pair.Key;
                 MethodRepair r = pair.Value;
+                if (r.Snapshot != null)
+                {
+                    // a pattern: all or nothing
+                    List<string> gone = Cleanup.RemoveUnreachable(method);
+                    if (gone.Any(t => !r.MayDie(t)) || Markers.Find(method).Count > 0 || StackCheck.Check(method) != null)
+                    {
+                        r.Snapshot.Restore(method.Body);
+                        PatternsDropped++;
+                        continue;
+                    }
+                    Cleanup.RemoveNotes(method);
+                    PatternsKept++;
+                    continue;
+                }
                 List<string> dead = Cleanup.RemoveUnreachable(method);
                 foreach (string text in dead)
                 {
@@ -323,6 +360,8 @@ namespace Repairs
         readonly HashSet<int> used = new HashSet<int>();
         readonly List<Regex> mayDie = new List<Regex>();
         public bool IsPartial;
+        internal Snapshot Snapshot;
+        bool obsolete;
 
         internal MethodRepair(Engine engine, MethodDefinition method, string key)
         {
@@ -346,8 +385,21 @@ namespace Repairs
 
         public Site Site(string prefix, int nth, string hash)
         {
+            return Site(prefix, nth, hash, false);
+        }
+
+        // pattern: a pattern repair's site, checked by its shape instead of a hash.
+        internal Site Site(string prefix, int nth, string hash, bool pattern)
+        {
             if (Method == null) return Repairs.Site.Null(this);
             var found = markers.Where(m => Fingerprint.Text(m.Text).StartsWith(Fingerprint.Text(prefix)) && !used.Contains(m.Index)).ToList();
+            if (found.Count <= nth && markers.Count == 0)
+            {
+                // the whole method came back from Rewind: one message, not one per site
+                if (!obsolete) engine.Fail(key, "no markers left in the method: Rewind recovers it now; check it against the native code and delete the rule");
+                obsolete = true;
+                return Repairs.Site.Null(this);
+            }
             if (found.Count <= nth)
             {
                 engine.Fail(key, "no marker \"" + prefix + "\" #" + nth + " (stale rule: Rewind may recover it now; check and delete the site)");
@@ -356,6 +408,7 @@ namespace Repairs
             Marker marker = found[nth];
             used.Add(marker.Index);
             string now = hashes[marker.Index];
+            if (pattern) return new Site(this, marker, now);
             if (hash == null) engine.Pins.Add(key + ": site \"" + prefix + "\" #" + nth + " (marker " + marker.Index + ") " + now);
             else if (hash != now)
             {
@@ -367,10 +420,13 @@ namespace Repairs
 
         // Every remaining marker whose text starts with prefix: for repeated plumbing (a vtable
         // load used only by a tail-merged call). count is how many the rule expects.
-        public Site[] Sites(string prefix, int count, string hash)
+        // hashes: one per site, space-separated, in IL order (null while pinning).
+        public Site[] Sites(string prefix, int count, string hashes)
         {
+            string[] each = hashes == null ? null : hashes.Split(' ');
+            if (each != null && each.Length != count) throw new RepairException(key + ": " + each.Length + " hashes for " + count + " sites \"" + prefix + "\"");
             var list = new List<Site>();
-            for (int i = 0; i < count; i++) list.Add(Site(prefix, 0, hash));
+            for (int i = 0; i < count; i++) list.Add(Site(prefix, 0, each == null ? null : each[i]));
             if (Method != null && markers.Any(m => Fingerprint.Text(m.Text).StartsWith(Fingerprint.Text(prefix)) && !used.Contains(m.Index)))
                 engine.Fail(key, "more than " + count + " markers \"" + prefix + "\"");
             return list.ToArray();
@@ -469,9 +525,9 @@ namespace Repairs
         }
 
         // Compiles every marker not taken yet whose text starts with prefix (Expr.cs); count is how many.
-        public MethodRepair CompileAll(string prefix, int count, string hash)
+        public MethodRepair CompileAll(string prefix, int count, string hashes)
         {
-            foreach (Site s in Sites(prefix, count, hash)) s.Compile();
+            foreach (Site s in Sites(prefix, count, hashes)) s.Compile();
             return this;
         }
 
@@ -586,6 +642,55 @@ namespace Repairs
             if (!(next.OpCode.Name.StartsWith("stloc") || next.OpCode == OpCodes.Pop))
                 throw new RepairException(repair.Key + ": marker " + Marker.Index + "'s value is used by " + next.OpCode.Name + ", not stored: say what it is");
             return Replace(0, 1, il => { });
+        }
+    }
+
+    // A method body as it was, to put back a pattern repair that didn't finish the method.
+    public sealed class Snapshot
+    {
+        Instruction[] order;
+        OpCode[] ops;
+        object[] operands;
+        Instruction[][] bounds;
+        ExceptionHandler[] handlers;
+        VariableDefinition[] variables;
+        TypeReference[] variableTypes;
+
+        public static Snapshot Of(MethodBody body)
+        {
+            var s = new Snapshot();
+            s.order = body.Instructions.ToArray();
+            s.ops = s.order.Select(i => i.OpCode).ToArray();
+            s.operands = s.order.Select(i => i.Operand is Instruction[] ? ((Instruction[])i.Operand).Clone() : i.Operand).ToArray();
+            s.handlers = body.ExceptionHandlers.ToArray();
+            s.bounds = s.handlers.Select(h => new[] { h.TryStart, h.TryEnd, h.HandlerStart, h.HandlerEnd, h.FilterStart }).ToArray();
+            s.variables = body.Variables.ToArray();
+            s.variableTypes = s.variables.Select(v => v.VariableType).ToArray();
+            return s;
+        }
+
+        public void Restore(MethodBody body)
+        {
+            body.Instructions.Clear();
+            for (int i = 0; i < order.Length; i++)
+            {
+                order[i].OpCode = ops[i];
+                order[i].Operand = operands[i];
+                body.Instructions.Add(order[i]);
+            }
+            body.ExceptionHandlers.Clear();
+            for (int i = 0; i < handlers.Length; i++)
+            {
+                ExceptionHandler h = handlers[i];
+                h.TryStart = bounds[i][0]; h.TryEnd = bounds[i][1]; h.HandlerStart = bounds[i][2]; h.HandlerEnd = bounds[i][3]; h.FilterStart = bounds[i][4];
+                body.ExceptionHandlers.Add(h);
+            }
+            body.Variables.Clear();
+            for (int i = 0; i < variables.Length; i++)
+            {
+                variables[i].VariableType = variableTypes[i];
+                body.Variables.Add(variables[i]);
+            }
         }
     }
 

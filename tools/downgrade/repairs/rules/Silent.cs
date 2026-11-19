@@ -10,11 +10,11 @@ static partial class Rules
     // of the double's bits (V3) instead. A double local takes V3's place.
     static void ExplosiveBarrelHit(Engine e)
     {
-        MethodRepair m = e.Method("com.bitmapbureau.terminator.sprites.objects.ExplosiveBarrel::hit(GameObject)", null);
+        MethodRepair m = e.Method("com.bitmapbureau.terminator.sprites.objects.ExplosiveBarrel::hit(GameObject)", "21bf837e");
         VariableDefinition vy = m.NewLocal("System.Double");
-        Site zero = m.Anchor(new[] { "ldc.i4.0", "stloc.3", "br" }, 0, null);
+        Site zero = m.Anchor(new[] { "ldc.i4.0", "stloc.3", "br" }, 0, "3c52421c");
         zero.Replace(0, 0, il => il.R8(-5.0).Stloc(vy).Br((Instruction)zero.Last.Operand));
-        m.Anchor(new[] { "call System.BitConverter::DoubleToInt64Bits", "conv.i4", "stloc.3" }, 0, null).Replace(0, 0, il => il.Op(OpCodes.Neg).Stloc(vy));
-        m.Anchor(new[] { "ldloc.1", "ldloc.3", "ldc.r8" }, 0, null).Replace(0, 0, il => il.Ldloc(1).Ldloc(vy).R8(0));
+        m.Anchor(new[] { "call System.BitConverter::DoubleToInt64Bits", "conv.i4", "stloc.3" }, 0, "e5a8020e").Replace(0, 0, il => il.Op(OpCodes.Neg).Stloc(vy));
+        m.Anchor(new[] { "ldloc.1", "ldloc.3", "ldc.r8" }, 0, "31a78a88").Replace(0, 0, il => il.Ldloc(1).Ldloc(vy).R8(0));
     }
 }
