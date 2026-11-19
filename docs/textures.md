@@ -137,7 +137,21 @@ Each Enter makes the resident set the pages of the App's scene and of the level'
 It unloads what the new set doesn't hold before it loads the rest, so the peak is one scene, not two.
 Pages a miss loaded go at the next Enter.
 Sticky pages, the other languages' fonts, stay once loaded, so a player in Japanese pays one hitch, not one per scene.
-Past `BudgetBytes`, 150 MB, a miss first unloads the least recently used pages no current scene wants.
+`Resources.Load` of a page takes about a millisecond: the PS Vita player reads a page's texels at its first draw, into video memory (CDRAM) while it has room and into main memory after, so a scene's pages cost nothing at the Enter and stall its first frames instead (the texture test: 2.6 s for a 32 MB page).
+
+- The budget follows free video memory. `BudgetBytes` is the bytes of pages that fit in CDRAM now: those resident and drawn, those unloaded but not released yet, and what CDRAM has free beyond `CdramReserveBytes` (6 MB); on a player that doesn't report free memory (Windows), `FixedBudgetBytes`, 150 MB. Before a page loads, pages no current scene wants go, least recently used first, until the page fits beside the pages loaded but not drawn yet. Pages the scenes want load anyway, and the player puts them in main memory, which is slower to sample; the log says so (`video memory full in ...`). Free CDRAM comes from `UnityEngine.PSVita.Diagnostics` (`compat/FreeMemory.cs`).
+- A mission briefing prefetches its level (`PrefetchApps`). `MissionBriefing.start` names the level through `Game.loadScriptByLevelID` (`EnterLevel` outside a level), and the atlas loads that level's pages beside the briefing's with `Resources.LoadAsync`; `SpriteBatch.Flush` then draws one a frame, smallest first, as one texel of the ColorTransform material with colour 0 and offset 0 (`NextWarm`), so the blend leaves the screen as it was while the player uploads the page. Draws are paced by `WarmBytesPerSecond` (14 MB/s). The prefetched pages stay wanted through the apps between the briefing and the level (`PrefetchKeep`: story mode's controls tutorial) and become the level's at its Enter. The probe's `-t2d-atlas-sync` loads them with `Resources.Load` instead.
+
+Measured entering Future War 1 from arcade mode's briefing (17 pages, 80 MB; runs `fw1m`, `r1a`, `r3a`, `r3b`):
+
+| | Frames over 1 s | Worst frame | Level's Enter |
+| --- | --- | --- | --- |
+| Before: pages loaded at the level's Enter | 2 (5.4 s, 4.6 s in `r1a`; 5.1 s and 1.3 s in `fw1m`) | 5.4 s | `+17 pages`, 72 MB not drawn yet |
+| Prefetch with `Resources.Load`, paced | 1 (6.7 s, at the briefing's start) | 6.7 s | `+0 pages, 0.0 not drawn yet` |
+| Prefetch with `Resources.LoadAsync` (the default) | 0 | 0.39 s, during the briefing | `+0 pages, 0.0 not drawn yet` |
+
+With `LoadAsync` the loading thread reads the texels, and the draw only uploads them: the 19 pages took the briefing 7.8 s, at 44 to 60 fps, and the level starts at once.
+In Future War 1 two of the pages land in main memory (a 32 MB and an 8 MB one, by the log); its frame time is the same, p50 16.7 ms and p90 17.3 to 17.4 ms.
 An unloaded page leaves the table at once, but its texture is released two sprite-batch flushes later (`ReleaseUnloaded`, from `SpriteBatch.Flush`): screen sprites queued earlier in the frame still draw with it when the camera renders. Released at once, it made `MaterialPropertyBlock.SetTexture` throw `ArgumentNullException` in the flush, and the frame lost all its sprites: on the console, the first level stayed black.
 
 ## The rules
@@ -213,11 +227,10 @@ The pages are PNGs; `T2D_ATLAS_PAGES=raw` makes them raw `.bytes` TextAssets ins
 
 ## What is untested
 
-Nothing here has run on the console, and the editor has built only the reference textures, not the port.
+The PNG pages run on the console in every level played so far ([build.md](build.md#on-the-console)).
 
-- A builder-written page on the console. The builder's bytes equal the editor's, and the texture test showed an editor-built RGBA 4444 4096² texture on the console, but no build of the port with PNG pages has run there yet.
 - Raw pages, now only the fallback, cost a managed copy of each page while it loads: 2 MB for a normal page, 32 MB for a 4096×4096 one. The managed heap grows to the largest of these and doesn't shrink.
-- Load time per page on the console. A 1024×1024 raw page is 2 MB to read and upload, against 5 seconds to decode a pack.
+- Load time per page for raw pages on the console; PNG pages are measured above.
 - Whether the Vita's GPU wraps non-power-of-two textures. All pages are powers of two, which costs 30% on the oversize layers; NPOT sizes would bring the Factory to about 90 MB.
 - The scene data comes from static analysis. About 250 images, a quarter of a pack, are reachable only in ways it can't follow, through arithmetic on ids, ids in int[] tables, native jump tables that inline a constructor. Those draws miss and load at once. Play through every scene with the miss log on and feed `MissReport` back into `scenes.json`.
 - Tanker Chase has no hook of its own; level 8 loads Freeway Chase's and Tanker Chase's pages together, 72 MB.
