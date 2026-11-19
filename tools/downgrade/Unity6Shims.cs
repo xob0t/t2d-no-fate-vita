@@ -8,10 +8,9 @@ using UnityEngine;
 // a missing member Namespace.Type::M a static T2DCompat.Namespace_Type.M with the instance first (by ref
 // for structs), constructors as static methods named "ctor".
 //
-// Only the easy items are here. Left for the code repair, and reported by pipeline.py code as UNRESOLVED:
-// the engine's inlined binding calls (*_Injected, GetCachedPtr), RenderTextureDescriptor's graphics
-// formats (UnityMain.OnPreRender), UnityWebRequest.Result (a nested type), and
-// Convert.ToBase64String(ReadOnlySpan<byte>) (InControl).
+// Also the shims and stand-ins of the fold-back passes (foldback/README.md): the engine's binding calls whose
+// member 2018.2 lacks or keeps private, and the class library internals IL2CPP inlined into the game (stand-ins of
+// internal types under their own names, accessors of missing fields, get_<Field>/set_<Field>).
 //
 // Part of T2DCompat (pipeline.COMPAT_SOURCES). The platform layer (input, saves, store stubs) is in
 // compat/*.cs; keep the type names here out of there.
@@ -143,6 +142,134 @@ namespace T2DCompat
         public static float Int32BitsToSingle(int value)
         {
             return BitConverter.ToSingle(BitConverter.GetBytes(value), 0);
+        }
+    }
+
+    // ---- The fold-back passes' shims (foldback/Bindings.cs): binding calls whose member 2018.2 lacks or keeps private.
+
+    public static class UnityEngine_AudioSource
+    {
+        // Unity 6's private AudioSource.Play(double): 0 plays now, a positive value at that DSP time (PlayScheduled),
+        // a negative one after that many seconds (PlayDelayed).
+        public static void Play(AudioSource source, double delay)
+        {
+            if (delay == 0.0) source.Play();
+            else if (delay > 0.0) source.PlayScheduled(delay);
+            else source.PlayDelayed((float)-delay);
+        }
+
+        // Unity 6's static PlayHelper(source, delay) behind Play(ulong delay), which 2018.2 has public.
+        public static void PlayHelper(AudioSource source, ulong delay)
+        {
+            source.Play(delay);
+        }
+
+        // Unity 6's Stop(bool stopOneShots): Stop() is Stop(true). 2018.2's Stop() also ends one-shots; it has no way
+        // to keep them, so false stops them too.
+        public static void Stop(AudioSource source, bool stopOneShots)
+        {
+            source.Stop();
+        }
+    }
+
+    public static class UnityEngine_MaterialPropertyBlock
+    {
+        // Unity 6's private Clear(bool keepMemory), behind Clear() (keepMemory true); 2018.2 keeps its own private.
+        public static void Clear(MaterialPropertyBlock block, bool keepMemory)
+        {
+            block.Clear();
+        }
+    }
+
+    // UnityEngine.Bindings.ThrowHelper: the binding wrappers' null checks, where an engine object's native pointer
+    // is zero (destroyed, or null).
+    public static class UnityEngine_Bindings_ThrowHelper
+    {
+        public static void ThrowNullReferenceException(object obj)
+        {
+            throw new NullReferenceException();
+        }
+
+        public static void ThrowArgumentNullException(object obj, string parameterName)
+        {
+            throw new ArgumentNullException(parameterName);
+        }
+    }
+
+    // ---- The fold-back passes' class library stand-ins (foldback/ClassLibrary.cs): internal types of .NET's class
+    // libraries under their own names, missing members of public ones, missing fields as accessors.
+
+    public static class System_ThrowHelper
+    {
+        public static void ThrowIndexOutOfRangeException()
+        {
+            throw new IndexOutOfRangeException();
+        }
+
+        public static void ThrowArgumentOutOfRangeException()
+        {
+            throw new ArgumentOutOfRangeException();
+        }
+
+        public static void ThrowArgumentOutOfRange_IndexException()
+        {
+            throw new ArgumentOutOfRangeException("index");
+        }
+
+        public static void ThrowInvalidOperationException_InvalidOperation_NoValue()
+        {
+            throw new InvalidOperationException("Nullable object must have a value.");
+        }
+    }
+
+    public static class System_SpanHelpers
+    {
+        // Byte by byte, as .NET's does in effect: two runs of length bytes.
+        public static unsafe bool SequenceEqual(ref byte first, ref byte second, ulong length)
+        {
+            fixed (byte* a = &first)
+            fixed (byte* b = &second)
+            {
+                if (a == b) return true;
+                for (ulong i = 0; i < length; i++)
+                    if (a[i] != b[i]) return false;
+            }
+            return true;
+        }
+    }
+
+    public static class System_Random
+    {
+        static int seeds = Environment.TickCount;
+
+        // .NET's Random() seeds from GenerateSeed, a fresh value per instance.
+        public static int GenerateSeed()
+        {
+            return System.Threading.Interlocked.Increment(ref seeds) * 1103515245;
+        }
+    }
+
+    public static class System_Globalization_CompareInfo
+    {
+        // The static field CompareInfo.Invariant.
+        public static System.Globalization.CompareInfo get_Invariant()
+        {
+            return System.Globalization.CultureInfo.InvariantCulture.CompareInfo;
+        }
+
+        public static int IndexOfOrdinal(System.Globalization.CompareInfo info, string source, string value, int startIndex, int count, bool ignoreCase)
+        {
+            return source.IndexOf(value, startIndex, count, ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        }
+    }
+
+    public static class System_Decimal
+    {
+        // .NET's decimal keeps the low and middle 32 bits as one ulong, ulomid; Mono's as lo and mid.
+        public static void set_ulomidLE(ref decimal value, ulong bits)
+        {
+            int[] parts = decimal.GetBits(value);
+            value = new decimal((int)bits, (int)(bits >> 32), parts[2], parts[3] < 0, (byte)((parts[3] >> 16) & 0xFF));
         }
     }
 }

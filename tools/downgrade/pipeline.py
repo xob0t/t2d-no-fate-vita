@@ -412,12 +412,21 @@ REWRITER_SOURCES = [
     # The platform layer's pass and its rules (docs/platform.md); compat_sources() takes only compat/*.cs.
     *(COMPAT_FOLDER / 'rewriter' / f'{name}.cs' for name in ('PlatformRules', 'PlatformPasses')),
     HERE / 'atlas' / 'rewriter' / 'AtlasPatches.cs',  # the texture rules R1-R6 (docs/textures.md)
+    # The repair engine and its rules (docs/repairs.md), which Rewrite() runs first. RepairsMain.cs is the
+    # standalone authoring driver, with a Main of its own.
+    *(HERE / 'repairs' / f'{name}.cs' for name in ('Engine', 'Edit', 'IL', 'Support', 'Expr', 'Patterns', 'RewriterHook')),
+    *sorted((HERE / 'repairs' / 'rules').glob('*.cs')),
+    # The fold-back passes (foldback/README.md): inlined engine bindings and class library internals back to 2018.2's API.
+    *sorted((HERE / 'foldback').glob('*.cs')),
 ]
+# Files in the rewriter's folders that are not rewriter parts.
+NOT_REWRITER_PARTS = {HERE / 'repairs' / 'RepairsMain.cs'}
 
 
 def check_parts():
     """Stops if a rewriter part is missing from REWRITER_SOURCES: the compile would leave it out without a word."""
-    unlisted = sorted(p.name for p in (HERE / 'rewriter').glob('*.cs') if p not in REWRITER_SOURCES)
+    parts = [*(HERE / 'rewriter').glob('*.cs'), *(HERE / 'repairs').glob('*.cs')]
+    unlisted = sorted(p.name for p in parts if p not in REWRITER_SOURCES and p not in NOT_REWRITER_PARTS)
     if unlisted:
         sys.exit(f'sources missing from REWRITER_SOURCES: {", ".join(unlisted)}')
 
@@ -485,6 +494,13 @@ def rewrite_assemblies(recovered: Path, out: Path, version: str, platform: str, 
             stubbed.replace(target)
     code_report(output, out, platform)
     (out / REWRITER_EXIT).write_text(f'{code}\n', encoding='utf-8')
+    # A repair rule that no longer fits Rewind's output (drift, a stale rule) is never tolerated, unlike the
+    # references that don't resolve yet: it would hide among them (docs/repairs.md, "Drift policy").
+    repair_errors = [line for line in output.splitlines() if line.startswith('REPAIR ERROR')]
+    if repair_errors:
+        for line in repair_errors[:20]:
+            log(line)
+        sys.exit(f'{len(repair_errors)} repair errors (REPAIR ERROR lines); see {log_path} and docs/repairs.md')
     return code
 
 
