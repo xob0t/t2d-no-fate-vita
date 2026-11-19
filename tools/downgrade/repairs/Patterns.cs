@@ -129,7 +129,7 @@ namespace Repairs
         static void Apply(MethodRepair r)
         {
             MethodDefinition method = r.Method;
-            List<Marker> markers = r.AllMarkers.ToList();
+            List<Marker> markers = r.FreeMarkers.ToList();
             foreach (Marker m in markers.Where(m => Family(m) == "unreachable")) Unreachable(r, m);
             foreach (Marker m in markers.Where(m => Family(m) == "unbox")) Unbox(r, m);
             if (markers.Any(m => Family(m) == "string")) StringEquals(r);
@@ -144,10 +144,11 @@ namespace Repairs
                 foreach (BoxBlock b in blocks) b.Replace(r);
                 boxed = blocks.Select(b => b.Result).Distinct().ToList();
             }
-            Dead(method, "string/box", t => FamilyOfText(t) == "string" || IsBoxText(t) || IsBarrierText(t));
+            // a rule's own plumbing (MayRemove) may go with the families' too
+            Dead(method, "string/box", t => FamilyOfText(t) == "string" || IsBoxText(t) || IsBarrierText(t) || r.MayDie(t));
             foreach (VariableDefinition v in boxed) RetypeBoxed(r, v);
             foreach (Marker m in Markers.Find(method).Where(IsFlagTest)) r.SiteOf(m).SkipBarrier();
-            Dead(method, "barrier", IsBarrierText);
+            Dead(method, "barrier", t => IsBarrierText(t) || r.MayDie(t));
         }
 
         // Removes what no path reaches; a marker it takes must be one of the families' plumbing.

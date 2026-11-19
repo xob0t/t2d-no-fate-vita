@@ -404,6 +404,8 @@ namespace Repairs
 
         public Engine Engine { get { return engine; } }
         internal IList<Marker> AllMarkers { get { return markers; } }
+        // The markers no site of the rule has taken: what Families() works on.
+        internal IEnumerable<Marker> FreeMarkers { get { return markers.Where(m => !used.Contains(m.Index)); } }
 
         // A pattern's site: the marker itself (one found before or after earlier edits, by its call),
         // checked by its shape instead of a hash.

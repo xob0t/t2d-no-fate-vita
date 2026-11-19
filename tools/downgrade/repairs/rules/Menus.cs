@@ -13,4 +13,12 @@ static partial class Rules
             il.Ldloc(0).Castclass("com.bitmapbureau.terminator.ui.Button").I4(0)
               .Callvirt("com.bitmapbureau.terminator.ui.Button::select(Boolean)"));
     }
+
+    // LevelSelect.draw: the font's vtable read for the virtual drawString that follows (recovered; the level's name at
+    // 125, 210), shifted, narrowed and popped, as in Script.drawSummary: the read goes with what consumes it.
+    static void LevelSelectDraw(Engine e)
+    {
+        MethodRepair m = e.Method("com.bitmapbureau.terminator.apps.LevelSelect::draw()", "430dbd67");
+        m.Site("__vtable()", "ffdf65f7").Replace(0, 4, il => { });
+    }
 }
