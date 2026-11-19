@@ -1,5 +1,13 @@
-work/
+# Downloaded and built tools (Rewind, AssetRipper, the .NET SDKs, Unity's files)
 tools/external/
+# Pipeline outputs: recovered code, exports, Unity projects, logs. work/ also holds the build locks.
+work/
+builds/
+artifacts/
 __pycache__/
+.venv/
 tools/assess/**/bin/
 tools/assess/**/obj/
+# Local assistant session files
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
