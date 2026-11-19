@@ -336,6 +336,7 @@ def digests(build: Path):
 
 
 def seed(build: Path):
+    pipeline.require_complete(build)
     MANIFEST.parent.mkdir(parents=True, exist_ok=True)
     MANIFEST.write_text(json.dumps({name: digest for name, _, digest in digests(build)}, indent=0))
     log(f'Recorded {build} as installed')
@@ -421,6 +422,7 @@ def forget_replaced(synced: dict):
 
 
 def sync_files(build: Path):
+    pipeline.require_complete(build)
     synced = json.loads(MANIFEST.read_text()) if MANIFEST.exists() else {}
     forget_replaced(synced)
     connection = ftp()

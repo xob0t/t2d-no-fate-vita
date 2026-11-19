@@ -518,6 +518,23 @@ def folder_meta(folder: Path):
 LINK = 'link'
 
 
+def build_incomplete(build: Path) -> Path:
+    """<build>.incomplete, beside a PS Vita build folder: the builder writes it before its first write into the
+    folder and make.py removes it when the build is whole (data, code module, the pipeline's touches). While it is
+    there, package and vita.py's install, sync and seed refuse the folder: a build that stopped at IL2CPP leaves
+    the new player data beside the last build's code module."""
+    return build.with_name(build.name + '.incomplete')
+
+
+def require_complete(build: Path):
+    marker = build_incomplete(build)
+    if marker.exists():
+        sys.exit(
+            f'{build} is incomplete: {marker.read_text(encoding="utf-8").strip()} and did not finish, so its data and '
+            f'code module may not match. Build it again (pipeline.py build), or delete {marker.name} if you know better.'
+        )
+
+
 def walk(folder: Path, links=False):
     """{path relative to folder: (size, modification time in ns) of a file, or None for a folder} of
     everything under folder. One directory listing per folder: on Windows a listing has every file's

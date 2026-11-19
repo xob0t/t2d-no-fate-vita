@@ -76,6 +76,7 @@ from common import (
     meta_of,
     mono_cecil,
     project_folder,
+    require_complete,
     rewritten_folder,
     run,
     stable_meta,
@@ -990,6 +991,7 @@ def package_vita(build: Path) -> Path:
         sys.exit(f'No PS Vita build in {build}; build it first: pipeline.py build')
     if not (build / 'Media' / 'Modules' / 'il2CppAssemblies.suprx').exists():
         sys.exit(f'{build} has no code module (Media/Modules/il2CppAssemblies.suprx): its build stopped before IL2CPP')
+    require_complete(build)
     vpk = build.with_name(build.name + '.vpk')  # with_suffix would cut the version at its dots
     files = list(vita_app_files(build))
     total = sum(len(source) if isinstance(source, bytes) else source.stat().st_size for _, source in files)
