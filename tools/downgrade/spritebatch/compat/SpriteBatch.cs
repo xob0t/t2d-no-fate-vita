@@ -298,10 +298,12 @@ namespace T2DCompat
             public float Z;
         }
 
+        // A mesh's worth of quads. The arrays grow by doubling and go to the mesh whole (2018.2 has no ranged
+        // SetVertices); the corners past Quads are left over from earlier frames, and no index refers to them.
         class Segment
         {
-            public readonly List<Vector3> Vertices = new List<Vector3>(4096);
-            public readonly List<Vector2> Uvs = new List<Vector2>(4096);
+            public Vector3[] Vertices = new Vector3[256];
+            public Vector2[] Uvs = new Vector2[256];
             public int Quads;
         }
 
@@ -318,19 +320,13 @@ namespace T2DCompat
             {
                 if (segmentCount == segments.Count) segments.Add(new Segment());
                 segment = segments[segmentCount++];
-                segment.Vertices.Clear();
-                segment.Uvs.Clear();
                 segment.Quads = 0;
             }
-            bool same = runCount > 0;
-            if (same)
-            {
-                Run last = runs[runCount - 1];
-                same = last.Segment == segmentCount - 1 && (object)last.Material == (object)material && (object)last.Texture == (object)tex &&
-                       last.Colored == colored && zorder == lastZ - 0.25 &&
-                       (!colored || Same(last.Mul, ctMul) && Same(last.Off, ctOff));
-            }
-            if (same) runs[runCount - 1].Quads++;
+            int last = runCount - 1;
+            if (last >= 0 && zorder == lastZ - 0.25 && runs[last].Segment == segmentCount - 1 &&
+                (object)runs[last].Material == (object)material && (object)runs[last].Texture == (object)tex &&
+                runs[last].Colored == colored && (!colored || Same(ref runs[last].Mul, ref ctMul) && Same(ref runs[last].Off, ref ctOff)))
+                runs[last].Quads++;
             else
             {
                 if (runCount == runs.Length) Array.Resize(ref runs, runs.Length * 2);
@@ -342,19 +338,30 @@ namespace T2DCompat
             }
             lastZ = zorder;
             float z0 = runs[runCount - 1].Z;
-            for (int k = 0; k < 4; k++)
+            int at = segment.Quads * 4;
+            if (at + 4 > segment.Vertices.Length)
             {
-                Vector3 c = quadV[k];
-                c.z -= z0;  // relative to the run's draw, at z0
-                segment.Vertices.Add(c);
-                segment.Uvs.Add(quadT[k]);
+                Array.Resize(ref segment.Vertices, segment.Vertices.Length * 2);
+                Array.Resize(ref segment.Uvs, segment.Uvs.Length * 2);
             }
+            Vector3[] v = segment.Vertices;
+            Vector2[] t = segment.Uvs;
+            Vector3[] q = quadV;
+            // z relative to the run's draw, at z0
+            v[at] = new Vector3(q[0].x, q[0].y, q[0].z - z0);
+            v[at + 1] = new Vector3(q[1].x, q[1].y, q[1].z - z0);
+            v[at + 2] = new Vector3(q[2].x, q[2].y, q[2].z - z0);
+            v[at + 3] = new Vector3(q[3].x, q[3].y, q[3].z - z0);
+            t[at] = quadT[0];
+            t[at + 1] = quadT[1];
+            t[at + 2] = quadT[2];
+            t[at + 3] = quadT[3];
             segment.Quads++;
         }
 
         // Exact, unlike Color's and Vector4's == (which allow a small distance).
-        static bool Same(Color a, Color b) { return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a; }
-        static bool Same(Vector4 a, Vector4 b) { return a.x == b.x && a.y == b.y && a.z == b.z && a.w == b.w; }
+        static bool Same(ref Color a, ref Color b) { return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a; }
+        static bool Same(ref Vector4 a, ref Vector4 b) { return a.x == b.x && a.y == b.y && a.z == b.z && a.w == b.w; }
 
         // Two sets of meshes, used on alternate frames, so a mesh the render thread may still read is not rewritten.
         static readonly List<Mesh>[] meshes = { new List<Mesh>(), new List<Mesh>() };
@@ -392,17 +399,17 @@ namespace T2DCompat
                     Mesh mesh = pool[s];
                     int first = r;
                     while (r < runCount && runs[r].Segment == s) r++;
-                    if (SameLayout(parity, s, first, r))
+                    if (SameLayout(parity, s, first, r, segment.Vertices.Length))
                     {
                         // The same runs as this mesh had two frames ago: the indices stand, only the corners move.
-                        mesh.SetVertices(segment.Vertices);
-                        mesh.SetUVs(0, segment.Uvs);
+                        mesh.vertices = segment.Vertices;
+                        mesh.uv = segment.Uvs;
                     }
                     else
                     {
                         mesh.Clear(true);
-                        mesh.SetVertices(segment.Vertices);
-                        mesh.SetUVs(0, segment.Uvs);
+                        mesh.vertices = segment.Vertices;
+                        mesh.uv = segment.Uvs;
                         mesh.subMeshCount = r - first;
                         for (int k = first; k < r; k++)
                         {
@@ -446,16 +453,17 @@ namespace T2DCompat
         // Per mesh of each set, the quads of its runs when its indices were last written.
         static readonly List<List<int>>[] layouts = { new List<List<int>>(), new List<List<int>>() };
 
-        // Whether mesh s of set p has runs first..end-1's sizes; if not, records them.
-        static bool SameLayout(int p, int s, int first, int end)
+        // Whether mesh s of set p has runs first..end-1's sizes and the vertex count given; if not, records them.
+        static bool SameLayout(int p, int s, int first, int end, int vertices)
         {
             List<List<int>> sets = layouts[p];
             while (sets.Count <= s) sets.Add(new List<int>());
             List<int> had = sets[s];
-            bool same = had.Count == end - first;
-            for (int k = first; same && k < end; k++) same = had[k - first] == runs[k].Quads;
+            bool same = had.Count == end - first + 1 && had[0] == vertices;
+            for (int k = first; same && k < end; k++) same = had[k - first + 1] == runs[k].Quads;
             if (same) return true;
             had.Clear();
+            had.Add(vertices);
             for (int k = first; k < end; k++) had.Add(runs[k].Quads);
             return false;
         }

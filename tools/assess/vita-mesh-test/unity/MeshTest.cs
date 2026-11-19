@@ -30,7 +30,7 @@ using UnityEngine.Rendering;
 //                                     rewritten unityDraw calls them, one Flush per frame), drawmeshsb (drawmesh with
 //                                     the game's exact quads, from SpriteBatch.FrameQuad). The texture changes
 //                                     every R sprites (default 16) among 4 atlases. still: the sprites don't move,
-//                                     so shot-spritebatch.png and shot-drawmeshsb.png can be compared pixel for pixel.
+//                                     so shot-spritebatch-still.png and shot-drawmeshsb-still.png can be compared.
 //   idle <s>                          log memory and frame time for s seconds
 // Writes ux0:data/t2dmesh/log.txt (lines "T2D ..."), screenshots shot-<method>.png there, then quits.
 public class MeshTest : MonoBehaviour
@@ -508,7 +508,7 @@ public class MeshTest : MonoBehaviour
             Log(string.Format(Inv, "DRAW {0} k={1} run={2} draws={3} frameMs mean={4:F2} p50={5:F2} p90={6:F2} submitMs mean={7:F2} p50={8:F2} p90={9:F2}",
                 how, k, run, Draws(how, k), frames.Average(), frames[frames.Count / 2], frames[frames.Count * 9 / 10],
                 submits.Average(), submits[submits.Count / 2], submits[submits.Count * 9 / 10]));
-            if (k == 1000) yield return SaveFrame(Path.Combine(Folder, "shot-" + how + ".png"));
+            if (k == 1000) yield return SaveFrame(Path.Combine(Folder, "shot-" + how + (still ? "-still" : "") + (run != 16 ? "-run" + run : "") + ".png"));
         }
         method = "";
         count = 0;
@@ -527,7 +527,7 @@ public class MeshTest : MonoBehaviour
     string Draws(string how, int k)
     {
         if (how == "batch") return runs.Count.ToString(Inv);
-        if (how == "spritebatch") return T2DCompat.SpriteBatch.LastRuns.ToString(Inv);
+        if (how == "spritebatch") return (k == 0 ? 0 : T2DCompat.SpriteBatch.LastRuns).ToString(Inv);
         if (how == "instanced") return runs.Sum(r => (r[1] + 1022) / 1023).ToString(Inv);
         return k.ToString(Inv);
     }
