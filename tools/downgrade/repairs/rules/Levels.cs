@@ -101,4 +101,22 @@ static partial class Rules
             if (i.OpCode == OpCodes.Brtrue || i.OpCode == OpCodes.Brtrue_S) return (Instruction)i.Operand;
         throw new RepairException("no brtrue after " + s.Marker.Text);
     }
+
+    // ArcadeEnding.drawBackground: the strips side by side as in TruckChase.drawForeground, `this + (i & 1) * 8 + 288`
+    // with i in V3: background0 (0x120) or background1 (0x128), into V6 (retyped from int64), and its width (+20).
+    static void ArcadeEndingDrawBackground(Engine e)
+    {
+        const string ending = "com.bitmapbureau.terminator.cutscenes.ArcadeEnding::";
+        MethodRepair m = e.Method("com.bitmapbureau.terminator.cutscenes.ArcadeEnding::drawBackground()", "5d755ea2");
+        m.Site("__load8(__address((__address(__reference_arithmetic((this +", "fe1d5bec").Replace(0, 1, il =>
+        {
+            Instruction odd = il.NewLabel(), done = il.NewLabel();
+            il.Ldloc(3).I4(1).Op(OpCodes.And).Brtrue(odd)
+              .This().Ldfld(ending + "background0").Stloc(6).Br(done)
+              .Place(odd).This().Ldfld(ending + "background1").Stloc(6).Place(done);
+        });
+        foreach (Site s in m.Sites("__load4((t# + 20L))", 2, "afa83496 f37fd32d"))
+            s.With(il => il.Ldloc(6).Ldfld("com.twissgreen.engine.display.BitmapData::width"));
+        m.RetypeLocal(6, "com.twissgreen.engine.display.BitmapData");
+    }
 }

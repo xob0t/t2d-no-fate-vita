@@ -1,3 +1,4 @@
+using Mono.Cecil.Cil;
 using Repairs;
 
 // Haxe's dynamic runtime (haxe.lang.Runtime).
@@ -70,5 +71,16 @@ static partial class Rules
         if (after == null) throw new RepairException(m.Key + ": no unbox of V" + obj + " into V" + value + " to join");
         s.With(il => il.Ldloc(obj).Isinst("System.IConvertible").Null().Callvirt("System.IConvertible::ToDouble(IFormatProvider)")
                        .Stloc(value).Br(after));
+    }
+
+    // Std.parseInt: the "0x" test reads the string's second character, `x + 22` (the first char is at 0x14), behind the
+    // length test: x[1], narrowed to the int16 Rewind keeps it as. The marker after IL2CPP's IndexOutOfRange throw
+    // (which doesn't return; int3 follows it in the native code) goes.
+    static void StdParseInt(Engine e)
+    {
+        MethodRepair m = e.Method("haxe.root.Std::parseInt(String)", "425a1e34");
+        m.Site("__load2(__address(__reference_arithmetic((x + 22L))))", "8d70579e").With(il =>
+            il.Arg(0).I4(1).Callvirt("System.String::get_Chars(Int32)").Op(OpCodes.Conv_I2));
+        m.Site("__unreachable()", "69d19492").Delete();
     }
 }
