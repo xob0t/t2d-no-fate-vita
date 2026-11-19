@@ -287,4 +287,40 @@ static partial class Rules
               .Ldloc(42).Ldloc(2).Op(OpCodes.Ldelem_Ref).R8(164.0).Ldloc(3).Op(OpCodes.Conv_R8).I4(9)
               .This().Ldfld(demo + "textCt").Callvirt(drawString));
     }
+
+    // CyberdyneHQ.draw (0x1803F2150), through the slot invoker 0x180002E30 (drawString):
+    // - the mini-game's two lines, font V15 (bmpFontMediumWhite), ct this.miniGameTextCt (V36), centred on 199 by the
+    //   wider: x = 199 - ((int)max(width of line 1 (V25), width of line 2 (V24)) >> 1), the max kept in xmm6 by a
+    //   compare and move Rewind didn't keep (both widths are ints, so the native NaN test never picks):
+    //     0x1803F2B7B  line 1 (V16, Text 154), y 80.0 (xmm8)      0x1803F2BCF  line 2 (V35, the cops counted), y 92.0
+    // - the comedy cop's line, bmpFontSmallWhite to CANVAS_BD, at the cop less the camera (comedyCop.x - Cam.left,
+    //   comedyCop.y - Cam.top - n), alignment 20, ct null (r13, zero throughout): Text 263 at 60 up; in language 5
+    //   in two lines, 263 at 76 up (0x1803F3012) and 264 at 60 up (0x1803F30B4, the call the other path jumps to).
+    static void CyberdyneHQDraw(Engine e)
+    {
+        const string drawString = FontType + "::drawString(BitmapData,String,Double,Double,Int32,ColorTransform)";
+        MethodRepair m = e.Method("com.bitmapbureau.terminator.scripts.CyberdyneHQ::draw()", "4b2574f2");
+        VariableDefinition x = m.Method == null ? null : m.NewLocal("System.Double");
+        m.Site("__native_0x180002E30(", 0, "710e7a1e").With(il =>
+        {
+            il.I4(199).Ldloc(25).Ldloc(24).Call("System.Math::Max(Double,Double)").Op(OpCodes.Conv_I4).I4(1).Op(OpCodes.Shr)
+              .Op(OpCodes.Sub).Op(OpCodes.Conv_R8).Stloc(x);
+            il.Ldloc(15).Ldsfld("com.bitmapbureau.terminator.Main::CANVAS_BD").Ldloc(16).Ldloc(x).R8(80.0).I4(9).Ldloc(36).Callvirt(drawString);
+        });
+        m.Site("__native_0x180002E30(", 0, "4adf8ec7").With(il =>
+            il.Ldloc(15).Ldsfld("com.bitmapbureau.terminator.Main::CANVAS_BD").Ldloc(35).Ldloc(x).R8(92.0).I4(9).Ldloc(36).Callvirt(drawString));
+        m.Site("__native_0x180002E30(", 0, "393e7c40").With(il => CopLine(il, 46, 47, 48, 60.0));
+        m.Site("__native_0x180002E30(", 0, "ecd7de5e").With(il => CopLine(il, 49, 50, 51, 76.0));
+        m.Site("__native_0x180002E30(", 0, "5d5d3954").With(il => CopLine(il, 52, 53, 54, 60.0));
+    }
+
+    static void CopLine(IL il, int font, int target, int text, double up)
+    {
+        const string cop = "com.bitmapbureau.terminator.scripts.CyberdyneHQ::comedyCop";
+        il.Ldloc(font).Ldloc(target).Ldloc(text)
+          .This().Ldfld(cop).Ldfld(GameObjectType + "::x").Ldsfld("com.bitmapbureau.terminator.game.Cam::left").Op(OpCodes.Sub)
+          .This().Ldfld(cop).Ldfld(GameObjectType + "::y").Ldsfld("com.bitmapbureau.terminator.game.Cam::top").Op(OpCodes.Sub)
+          .R8(up).Op(OpCodes.Sub).I4(20).Null()
+          .Callvirt(FontType + "::drawString(BitmapData,String,Double,Double,Int32,ColorTransform)");
+    }
 }

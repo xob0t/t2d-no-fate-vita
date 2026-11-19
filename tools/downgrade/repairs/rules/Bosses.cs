@@ -127,4 +127,33 @@ static partial class Rules
         m.Site("__native_0x180002B50(8L, this,", "b4731e98").With(il => il.This().I4(41).Callvirt(GameObjectType + "::changeImage(Int32)"));
         m.Site("__native_0x180002B50(14L, this,", "97408cb6").With(il => il.This().I4(59).Callvirt(GameObjectType + "::changeState(Int32)"));
     }
+
+    // HKBomber.shoot: each turret's shot from it to its target, the turret (BomberTurret)this.turrets.__a[V0] (V1 is
+    // __a; the method casts the element to BomberTurret for its x): target (+968, 0x3C8, a Point) .x (+16) and .y
+    // (+24), and the turret's y (+312, 0x138), each kept as its bits as Rewind's int64 locals have them; then the same y
+    // of the element in V9.
+    static void HKBomberShoot(Engine e)
+    {
+        const string turret = "com.bitmapbureau.terminator.sprites.enemies.BomberTurret";
+        const string point = "com.twissgreen.engine.geom.Point::";
+        MethodRepair m = e.Method("com.bitmapbureau.terminator.sprites.enemies.HKBomber::shoot()", "f2fd6742");
+        m.Site("__load8((__load8(__address(__reference_arithmetic((t#[m#] + 968L)))) + 16L))", "c8702518").With(il =>
+            il.Ldloc(1).Ldloc(0).Op(OpCodes.Ldelem_Ref).Castclass(turret).Ldfld(turret + "::target").Ldfld(point + "x").DoubleToBits());
+        m.Site("__load8(__address(__reference_arithmetic((t#[m#] + 312L))))", "05200b88").With(il =>
+            il.Ldloc(1).Ldloc(0).Op(OpCodes.Ldelem_Ref).Castclass(turret).Ldfld(GameObjectType + "::y").DoubleToBits());
+        m.Site("__load8((__load8(__address(__reference_arithmetic((this.turrets.__a[m#] + 968L)))) + 24L))", "fd3b727b").With(il =>
+            il.This().Ldfld("com.bitmapbureau.terminator.sprites.enemies.HKBomber::turrets").Ldfld("haxe.root.Array::__a").Ldloc(0)
+              .Op(OpCodes.Ldelem_Ref).Castclass(turret).Ldfld(turret + "::target").Ldfld(point + "y").DoubleToBits());
+        m.Site("__load8(__address(__reference_arithmetic((t# + 312L))))", "05a84b23").With(il =>
+            il.Ldloc(9).Castclass(GameObjectType).Ldfld(GameObjectType + "::y").DoubleToBits());
+    }
+
+    // HKBomber.draw: each turret drawn, ((BomberTurret)this.turrets.__a[i] (V24)).draw(), the native class check then
+    // the call through slot 29 (0x18038D08B), GameObject.draw in the il2cpp dump.
+    static void HKBomberDraw(Engine e)
+    {
+        MethodRepair m = e.Method("com.bitmapbureau.terminator.sprites.enemies.HKBomber::draw()", "c09f05c2");
+        m.Site("__call_indirect(__vtable(), t#, __vtable(), __klass(), __objklass())", "f99bd775").With(il =>
+            il.Ldloc(24).Castclass("com.bitmapbureau.terminator.sprites.enemies.BomberTurret").Callvirt(GameObjectType + "::draw()"));
+    }
 }

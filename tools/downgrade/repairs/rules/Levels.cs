@@ -79,4 +79,26 @@ static partial class Rules
             il.This().Ldfld("com.bitmapbureau.terminator.scripts.Script::hazards").Ldfld("haxe.root.Array::__a").Ldloc(16)
               .Op(OpCodes.Ldelem_Ref).Castclass(GameObjectType).Ldfld(GameObjectType + "::width"));
     }
+
+    // TankerChase.setupScene: `Sprites.sprite[i] = truck`, with IL2CPP's array-store type check inlined (the object's
+    // class assignable to the array's element class: IsAssignableFrom, then the class's flags and kinds at +280 and +42,
+    // its interfaces at +112 and the slow helper 0x1800A2580); the store follows when it passes. truck is the
+    // GameObject field stored into a GameObject[], so it always passes: the first test branches to the store, and the
+    // rest of the check, with the throw past it, is reached no more.
+    static void TankerChaseSetupScene(Engine e)
+    {
+        MethodRepair m = e.Method("com.bitmapbureau.terminator.scripts.TankerChase::setupScene(Int32)", "f72ae2a1");
+        Site check = m.Site("__IsAssignableFrom(__objklass())", "8081aa87");
+        Instruction store = m.Method == null ? null : FirstBranchTarget(check);
+        check.Replace(0, 1, il => il.Br(store));
+        m.MayRemove("__load1((__undefined()", "__load8((__undefined()", "__load8((__load8((__undefined()", "__native_0x1800A2580(");
+    }
+
+    // The target of the first brtrue after a site's marker.
+    static Instruction FirstBranchTarget(Site s)
+    {
+        for (Instruction i = s.Marker.Call; i != null; i = i.Next)
+            if (i.OpCode == OpCodes.Brtrue || i.OpCode == OpCodes.Brtrue_S) return (Instruction)i.Operand;
+        throw new RepairException("no brtrue after " + s.Marker.Text);
+    }
 }
