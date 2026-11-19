@@ -515,18 +515,25 @@ def folder_meta(folder: Path):
     return {meta_of(folder): stable_meta('folder', folder, 'DefaultImporter').encode()}
 
 
-def walk(folder: Path):
+LINK = 'link'
+
+
+def walk(folder: Path, links=False):
     """{path relative to folder: (size, modification time in ns) of a file, or None for a folder} of
     everything under folder. One directory listing per folder: on Windows a listing has every file's
     size and time, so no file is opened or stat'ed (a second for the export's 185,000 paths, where
-    rglob with a stat of each took 13)."""
+    rglob with a stat of each took 13). links: a symbolic link or junction is one entry, LINK, and
+    walk doesn't go into it (for a folder that will be deleted from: is_dir(follow_symlinks=False)
+    is true for a junction, and deleting what is under one deletes its target's files)."""
     found, folders = {}, [Path()]
     while folders:
         relative = folders.pop()
         with os.scandir(folder / relative) as entries:
             for entry in entries:
                 path = relative / entry.name
-                if entry.is_dir(follow_symlinks=False):
+                if links and (entry.is_symlink() or entry.is_junction()):
+                    found[path] = LINK
+                elif entry.is_dir(follow_symlinks=False):
                     found[path] = None
                     folders.append(path)
                 else:

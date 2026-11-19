@@ -59,6 +59,7 @@ from common import (
     GAME_EXE,
     GAME_NAME,
     HERE,
+    LINK,
     REWIND_EXE,
     REWIND_SIGNATURES,
     REWIND_STAMP,
@@ -594,8 +595,18 @@ def sync_tree(source: Path, destination: Path, overlay: dict, excluded: set, kno
     file the editor generated (for a folder or file that has none in the source) stays, so its GUID
     doesn't change on every run. known: copy_if_changed's record, kept by the caller between runs.
     step: a progress step, its bar set to the files to go through and advanced per file."""
+    if destination.is_symlink() or destination.is_junction():
+        raise SystemExit(f'{destination} is a link; the mirror would delete in its target. Remove the link first.')
     destination.mkdir(parents=True, exist_ok=True)
-    present = walk(destination)  # listed once: one stat per file was most of the time
+    present = walk(destination, links=True)  # listed once: one stat per file was most of the time
+    # A link or junction in the destination is removed, never gone into: its target isn't the mirror's.
+    for relative in [relative for relative, stat in present.items() if stat == LINK]:
+        path = destination / relative
+        try:
+            path.unlink()  # a junction, or a link to a file
+        except OSError:
+            os.rmdir(path)  # a link to a folder, which rmdir removes without going into it
+        del present[relative]
     known = {} if known is None else known
     wanted = set()
     files = walk(source)
