@@ -57,6 +57,16 @@ namespace Repairs
         public IL Pop() { return Op(OpCodes.Pop); }
         public IL Dup() { return Op(OpCodes.Dup); }
 
+        // int64 bits on the stack to the double they encode (Rewind's __bits_to_double).
+        public IL BitsToDouble() { return Emit(Instruction.Create(OpCodes.Call, Support.BitsToDouble(Module))); }
+
+        // The double whose low and high 32-bit halves two int32 locals hold (Rewind splits a double
+        // moved through integer registers that way): (ulong)(uint)lo | (ulong)(uint)hi << 32.
+        public IL HalvesToDouble(int lo, int hi)
+        {
+            return Ldloc(lo).Op(OpCodes.Conv_U8).Ldloc(hi).Op(OpCodes.Conv_U8).I4(32).Op(OpCodes.Shl).Op(OpCodes.Or).BitsToDouble();
+        }
+
         public IL Call(string method) { return Emit(Instruction.Create(OpCodes.Call, ResolveMethod(method))); }
         public IL Callvirt(string method) { return Emit(Instruction.Create(OpCodes.Callvirt, ResolveMethod(method))); }
         public IL Newobj(string ctor) { return Emit(Instruction.Create(OpCodes.Newobj, ResolveMethod(ctor))); }

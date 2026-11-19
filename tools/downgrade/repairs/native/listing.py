@@ -165,7 +165,7 @@ def main():
                     elif op.type == capstone.x86.X86_OP_MEM and ins.mnemonic in ('call', 'jmp') and op.mem.disp >= 0x138:
                         slot = (op.mem.disp - 0x138) // 16
                         if (op.mem.disp - 0x138) % 16 == 0 and slot in slots:
-                            note.append('slot %d %s' % (slot, slots[slot][:110]))
+                            note.append('slot %d, if on this: %s' % (slot, slots[slot][:100]))
                 text = ins.op_str
                 # markers that name this instruction's call target, vtable offset or the GC flag
                 if ins.mnemonic == 'call' and ins.operands and ins.operands[0].type == capstone.x86.X86_OP_IMM:

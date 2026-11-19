@@ -127,12 +127,18 @@ namespace Repairs
     }
 
     // Hashes of normalized IL: a marker's context (the instructions around it) and a whole body.
-    // Offsets, Rewind's temporary names (t12, m3, %45, o7) and local slot numbers don't count, so a
+    // Offsets and Rewind's temporary names (t12, m3, %45, o7) don't count, so a
     // marker keeps its hash when Rewind renumbers; any change to the code around it changes it.
     public static class Fingerprint
     {
         public const int Window = 6;
         static readonly Regex temps = new Regex(@"\b([tmo])\d+\b|%\d+");
+
+        // A marker's text with Rewind's temporary names numbered away: "__load8((m0 + 560L))" is "__load8((m# + 560L))".
+        public static string Text(string text)
+        {
+            return temps.Replace(text, "$1#");
+        }
 
         public static string Norm(Instruction ins, IList<Instruction> all, MethodBody body)
         {
@@ -142,7 +148,7 @@ namespace Repairs
             else if (op is Instruction) s = "@" + (all.IndexOf((Instruction)op) - all.IndexOf(ins));
             else if (op is Instruction[]) s = string.Join(",", ((Instruction[])op).Select(t => (all.IndexOf(t) - all.IndexOf(ins)).ToString()));
             else if (op is string) s = "\"" + temps.Replace((string)op, "$1#") + "\"";
-            else if (op is VariableDefinition) s = "V:" + ((VariableDefinition)op).VariableType.FullName;
+            else if (op is VariableDefinition) s = "V" + ((VariableDefinition)op).Index + ":" + ((VariableDefinition)op).VariableType.FullName;
             else if (op is ParameterDefinition) s = "A:" + ((ParameterDefinition)op).Index;
             else if (op is MemberReference) s = ((MemberReference)op).FullName;
             else if (op is double) s = ((double)op).ToString("R", System.Globalization.CultureInfo.InvariantCulture);
@@ -153,7 +159,8 @@ namespace Repairs
             if (name.StartsWith("ldloc") || name.StartsWith("stloc") || name.StartsWith("ldloca"))
             {
                 VariableDefinition v = Local(ins, body);
-                if (v != null) s = "V:" + v.VariableType.FullName;
+                // the slot counts: a rule that loads V23 must notice when Rewind renumbers its locals
+                if (v != null) s = "V" + v.Index + ":" + v.VariableType.FullName;
                 name = name.Split('.')[0];
             }
             return name + " " + s;
@@ -340,7 +347,7 @@ namespace Repairs
         public Site Site(string prefix, int nth, string hash)
         {
             if (Method == null) return Repairs.Site.Null(this);
-            var found = markers.Where(m => m.Text.StartsWith(prefix) && !used.Contains(m.Index)).ToList();
+            var found = markers.Where(m => Fingerprint.Text(m.Text).StartsWith(Fingerprint.Text(prefix)) && !used.Contains(m.Index)).ToList();
             if (found.Count <= nth)
             {
                 engine.Fail(key, "no marker \"" + prefix + "\" #" + nth + " (stale rule: Rewind may recover it now; check and delete the site)");
@@ -364,7 +371,7 @@ namespace Repairs
         {
             var list = new List<Site>();
             for (int i = 0; i < count; i++) list.Add(Site(prefix, 0, hash));
-            if (Method != null && markers.Any(m => m.Text.StartsWith(prefix) && !used.Contains(m.Index)))
+            if (Method != null && markers.Any(m => Fingerprint.Text(m.Text).StartsWith(Fingerprint.Text(prefix)) && !used.Contains(m.Index)))
                 engine.Fail(key, "more than " + count + " markers \"" + prefix + "\"");
             return list.ToArray();
         }
@@ -430,13 +437,13 @@ namespace Repairs
         // branch); prefixes, as for Site.
         public MethodRepair MayRemove(params string[] prefixes)
         {
-            foreach (string p in prefixes) mayDie.Add(new Regex("^" + Regex.Escape(p)));
+            foreach (string p in prefixes) mayDie.Add(new Regex("^" + Regex.Escape(Fingerprint.Text(p))));
             return this;
         }
 
         internal bool MayDie(string text)
         {
-            return mayDie.Any(r => r.IsMatch(text));
+            return mayDie.Any(r => r.IsMatch(Fingerprint.Text(text)));
         }
 
         // The rule repairs only some markers; the rest are left for later (and reported).
