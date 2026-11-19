@@ -1,0 +1,78 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xob0t <32616886+xob0t@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 05:32:05 +0300
+Subject: [PATCH 10/22] The address of a struct's first field where the field
+ is wanted
+
+A struct's address is also the address of its first field. Where a call wants
+the field ("m_SteamID.ToString()" in a wrapper struct's ToString, a method of
+the field's type called on a field of a struct argument), the location given
+was the struct itself: "ldarg.0; call UInt64::ToString()" with no ldflda, IL
+that hands a CSteamID& where a UInt64& is expected. Where the type wanted
+differs from the struct's, the location is now the field at the start of
+exactly that type (through nested structs; in a union the one of that size),
+and unchanged when there is none. REWIND_NO_FIRST_FIELDS turns this off.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../Recover/HirBuilder.Calls.cs               | 32 +++++++++++++++++--
+ 1 file changed, 29 insertions(+), 3 deletions(-)
+
+diff --git a/src/Rewind.Analysis/Recover/HirBuilder.Calls.cs b/src/Rewind.Analysis/Recover/HirBuilder.Calls.cs
+index 2b9b5f8..a65fc0d 100644
+--- a/src/Rewind.Analysis/Recover/HirBuilder.Calls.cs
++++ b/src/Rewind.Analysis/Recover/HirBuilder.Calls.cs
+@@ -428,6 +428,32 @@ public sealed partial class HirBuilder
+         }
+     }
+ 
++    private static readonly bool NoFirstFields = Environment.GetEnvironmentVariable("REWIND_NO_FIRST_FIELDS") != null;
++
++    /// <summary>
++    /// A struct's address is also the address of its first field (and of that field's first field): where
++    /// something of the field's type is wanted there ("m_SteamID.ToString()" called with the address of the
++    /// struct that holds it), the location is that field. Unchanged when no field at the start is of exactly
++    /// that type.
++    /// </summary>
++    private HExpr AtStart(HExpr location, TypeSig? held, TypeSig? expected)
++    {
++        if (NoFirstFields || held == null || expected == null || Open(expected) || held.Key == expected.Key) return location;
++        int wanted = _p.Layouts.SizeOf(expected).Size;
++        HExpr current = location;
++        TypeSig type = held;
++        for (int depth = 0; depth < 8 && IsStructType(type) && !Open(type); depth++)
++        {
++            // (In a union, the field of the wanted size is the one meant.)
++            FieldSlot? first = _p.Layouts.FieldExactly(type, 0, wanted) is { } exact && exact.Type.Key == expected.Key ? exact : _p.Layouts.FieldAt(type, 0);
++            if (first is not { Offset: 0 } slot) break;
++            current = new HField { Object = current, Field = slot.Field, DeclaringType = type, Type = slot.Type };
++            type = slot.Type;
++            if (type.Key == expected.Key) return current;
++        }
++        return location;
++    }
++
+     /// <summary>The storage location a pointer argument refers to.</summary>
+     private HExpr? LocationOf(Node pointer, TypeSig? expected)
+     {
+@@ -437,7 +463,7 @@ public sealed partial class HirBuilder
+         switch (s)
+         {
+             case SRef r:
+-                return r.Location;
++                return AtStart(r.Location, r.Type, expected);
+             case SFrame f when BufferAddress(f.Offset) is { } buffer:
+             {
+                 // In a stackalloc'd buffer: what the pointer points at.
+@@ -486,9 +512,9 @@ public sealed partial class HirBuilder
+                 return new HField { Object = null, Field = first, DeclaringType = statics.Type, Type = fieldType };
+             }
+             case SVal { Type: ByRefSig byRef } v:
+-                return new HDeref(v.Expr) { Type = byRef.ElementType };
++                return AtStart(new HDeref(v.Expr) { Type = byRef.ElementType }, byRef.ElementType, expected);
+             case SVal { Type: PointerSig pointerType } v:
+-                return new HDeref(v.Expr) { Type = pointerType.ElementType };
++                return AtStart(new HDeref(v.Expr) { Type = pointerType.ElementType }, pointerType.ElementType, expected);
+             default:
+                 return null;
+         }

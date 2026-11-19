@@ -1,0 +1,231 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xob0t <32616886+xob0t@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 05:46:59 +0300
+Subject: [PATCH 14/22] Inlined constructors: temporaries of the constructor
+ written out; constructor calls IL does not accept are marked with a note
+
+- ConstructorFolding compares the statements after a raw allocation with the
+  constructor's. A constructor that keeps a value computed from its parameters in a
+  temporary ("double norm = offset / 255; this.offsetNorm = norm;") never matched a
+  site where the compiler knew the arguments: there the value is a constant stored
+  straight into the field. The constructor's statements are now also compared with
+  such temporaries written where they are read (REWIND_NO_CONSTRUCTOR_TEMP_PROPAGATION
+  turns this off); the existing argument solving then finds the constant.
+- Where the class's own constructor still is not put back but a base class's
+  constructor was, as a call on the raw object, the code does what the original did
+  but is no IL a verifier accepts (CallCtor). The method is now reported incomplete
+  and the place gets a marker that does not stop the code: a __Rewind.Note at the
+  allocation (HOpaque.Remark, written as Note instead of Effect;
+  REWIND_NO_MARKED_RAW_CONSTRUCTORS turns this off).
+- The same kind of marker now stands where BaseConstructorCalls finds no base
+  constructor call to put back (it was an Effect, which made such a constructor throw
+  where it had run as before).
+
+Unity 6000.0 Master x64 game, Assembly-CSharp: raw allocations 286 -> 212 (74 put
+back as "new"); CallCtor in methods without a marker 46 -> 2; 36 methods now carry
+the note.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/Rewind.Analysis/Hir/Hir.cs                |  5 ++
+ src/Rewind.Analysis/Hir/HirCopy.cs            |  2 +-
+ .../Recover/BaseConstructorCalls.cs           |  6 +-
+ .../Recover/ConstructorFolding.cs             | 89 ++++++++++++++++++-
+ src/Rewind.Analysis/Recover/MethodPipeline.cs |  1 +
+ src/Rewind.Output/BodyEmitter.cs              |  4 +-
+ 6 files changed, 101 insertions(+), 6 deletions(-)
+
+diff --git a/src/Rewind.Analysis/Hir/Hir.cs b/src/Rewind.Analysis/Hir/Hir.cs
+index 419213c..b0d5501 100644
+--- a/src/Rewind.Analysis/Hir/Hir.cs
++++ b/src/Rewind.Analysis/Hir/Hir.cs
+@@ -202,6 +202,11 @@ public sealed class HOpaque(string text, params HExpr[] operands) : HExpr
+     public HExpr[] Operands = operands;
+     /// <summary>The problem reported where this marker was made, if any (see HMethod.SiteProblems).</summary>
+     public string? Problem;
++    /// <summary>
++    /// A statement that marks code which runs as it stands but is not what was written in a form IL accepts:
++    /// written as a note where it is (__Rewind.Note, which does nothing) instead of a stop (__Rewind.Effect).
++    /// </summary>
++    public bool Remark;
+ }
+ 
+ // ---- statements ----------------------------------------------------------------------------------------------
+diff --git a/src/Rewind.Analysis/Hir/HirCopy.cs b/src/Rewind.Analysis/Hir/HirCopy.cs
+index 825d1a0..a613325 100644
+--- a/src/Rewind.Analysis/Hir/HirCopy.cs
++++ b/src/Rewind.Analysis/Hir/HirCopy.cs
+@@ -46,7 +46,7 @@ internal static class HirCopy
+             HMemberToken m => new HMemberToken { Method = m.Method, Field = m.Field, DeclaringType = m.DeclaringType, MethodArguments = m.MethodArguments },
+             HCachedDelegate d => new HCachedDelegate((HField)Of(d.Cache), (HNewObject)Of(d.Creation)),
+             HSelect s => new HSelect(Sub(s.Condition), Sub(s.WhenTrue), Sub(s.WhenFalse)),
+-            HOpaque o => new HOpaque(o.Text, All(o.Operands)) { Problem = o.Problem },
++            HOpaque o => new HOpaque(o.Text, All(o.Operands)) { Problem = o.Problem, Remark = o.Remark },
+             _ => throw new NotSupportedException("no copy of " + e.GetType().Name),
+         };
+         copy.Type = e.Type;
+diff --git a/src/Rewind.Analysis/Recover/BaseConstructorCalls.cs b/src/Rewind.Analysis/Recover/BaseConstructorCalls.cs
+index 51a407b..35aa017 100644
+--- a/src/Rewind.Analysis/Recover/BaseConstructorCalls.cs
++++ b/src/Rewind.Analysis/Recover/BaseConstructorCalls.cs
+@@ -17,7 +17,8 @@ namespace Rewind.Analysis.Recover;
+ /// - Otherwise, where the base class has a constructor that does nothing, its call is what was there: it goes
+ ///   after the stores of field initializers, where C# puts it. Parameters such a constructor never reads are
+ ///   given default values (any value does the same).
+-/// - Otherwise what ran is not known, and the place is marked as a gap.
++/// - Otherwise what ran is not known, and the place is marked as a gap: with a note where the call belongs,
++///   which leaves the constructor running as it did.
+ /// </summary>
+ internal static class BaseConstructorCalls
+ {
+@@ -61,7 +62,8 @@ internal static class BaseConstructorCalls
+         string problem = $"{Missing} ({baseType.Name})";
+         if (method.Problems.Count < 64) method.Problems.Add(problem);
+         method.SiteProblems.Add(problem);
+-        entry.Insert(AfterInitializers(entry, owner), new HEval(new HOpaque("base_constructor") { Problem = problem }));
++        // (The constructor does what the original did, only IL does not accept it: the mark does not stop it.)
++        entry.Insert(AfterInitializers(entry, owner), new HEval(new HOpaque("base_constructor") { Problem = problem, Remark = true }));
+     }
+ 
+     /// <summary>Whether a constructor of the class or of its base class is run on the object anywhere in the method.</summary>
+diff --git a/src/Rewind.Analysis/Recover/ConstructorFolding.cs b/src/Rewind.Analysis/Recover/ConstructorFolding.cs
+index f48cff3..0c96aa7 100644
+--- a/src/Rewind.Analysis/Recover/ConstructorFolding.cs
++++ b/src/Rewind.Analysis/Recover/ConstructorFolding.cs
+@@ -76,7 +76,8 @@ internal static partial class ConstructorFolding
+             if (constructor.Name != ".ctor" || constructor.IsStatic) continue;
+             HMethod? body = pipeline.ConstructorBody(constructor, classArguments);
+             if (body == null) continue;
+-            List<HStmt> statements = body.Blocks[0].Statements;
++            foreach (List<HStmt> statements in Variants(body.Blocks[0].Statements))
++            {
+             int length = statements.Count - 1; // without the final return
+             if (length < bestLength || (length == bestLength && best != null && best.Parameters.Length <= constructor.Parameters.Length)) continue;
+ 
+@@ -100,6 +101,7 @@ internal static partial class ConstructorFolding
+                 bestLength = length;
+                 break;
+             }
++            }
+         }
+         if (best == null || bestArguments == null) return false;
+ 
+@@ -128,6 +130,91 @@ internal static partial class ConstructorFolding
+         return true;
+     }
+ 
++    private static readonly bool NoMarkedRawConstructors = Environment.GetEnvironmentVariable("REWIND_NO_MARKED_RAW_CONSTRUCTORS") != null;
++
++    /// <summary>
++    /// In the finished method: an object allocated raw whose own constructor was not put back, but a base
++    /// class's constructor was, as a call on the object. A constructor run on anything but "this" inside a
++    /// constructor is no IL a verifier accepts. The code does what the original did, so it stays; the place is
++    /// marked with a note (one that does not stop the code) and the method is reported incomplete.
++    /// </summary>
++    public static void MarkRawConstructors(HMethod method)
++    {
++        if (NoMarkedRawConstructors) return;
++        foreach (HBlock block in method.Blocks)
++            for (int i = block.Statements.Count - 1; i >= 0; i--)
++            {
++                if (block.Statements[i] is not HAssign { Target: HLocal { Variable: var created }, Value: HTypeExpr { Op: HTypeOp.Allocate } allocation } ||
++                    !RunsConstructorOn(method, created))
++                    continue;
++                string invalid = $"the constructor of {allocation.Target.ShortName} was not put back: a constructor runs on the object allocated raw";
++                if (method.Problems.Count < 64) method.Problems.Add(invalid);
++                method.SiteProblems.Add(invalid);
++                block.Statements.Insert(i, new HEval(new HOpaque("raw_constructor") { Problem = invalid, Remark = true }) { Address = block.Statements[i].Address });
++            }
++    }
++
++    /// <summary>Whether a constructor is called on the object a variable holds (or a variable it is copied into).</summary>
++    private static bool RunsConstructorOn(HMethod method, HVar created)
++    {
++        var holders = new HashSet<HVar> { created };
++        for (bool more = true; more;)
++        {
++            more = false;
++            foreach (HBlock b in method.Blocks)
++                foreach (HStmt s in b.Statements)
++                    if (s is HAssign { Target: HLocal { Variable: var copy }, Value: HLocal { Variable: var from } } && holders.Contains(from) && holders.Add(copy))
++                        more = true;
++        }
++        bool found = false;
++        foreach (HBlock b in method.Blocks)
++            foreach (HStmt s in b.Statements)
++                FinallyFolding.Visit(s, e => found |= e is HCall { Method.Name: ".ctor", This: HLocal { Variable: var v } } && holders.Contains(v));
++        return found;
++    }
++
++    private static readonly bool NoPropagatedTemporaries = Environment.GetEnvironmentVariable("REWIND_NO_CONSTRUCTOR_TEMP_PROPAGATION") != null;
++
++    /// <summary>
++    /// The constructor's statements as they are, and - where it keeps a value computed from its parameters
++    /// alone in a temporary ("double norm = offset / 255; this.offsetNorm = norm;") - with that value written
++    /// where the temporary is read. The compiler does the same at a site where it knows the arguments: there the
++    /// value is a constant stored straight into the field, and no temporary is left to match.
++    /// </summary>
++    private static IEnumerable<List<HStmt>> Variants(List<HStmt> statements)
++    {
++        yield return statements;
++        if (NoPropagatedTemporaries) yield break;
++        var sets = new Dictionary<HVar, int>();
++        foreach (HStmt st in statements)
++            if (st is HAssign { Target: HLocal { Variable: var v } }) sets[v] = sets.GetValueOrDefault(v) + 1;
++        var known = new Dictionary<HVar, HExpr>();
++        var propagated = new List<HStmt>(statements.Count);
++        foreach (HStmt st in statements)
++        {
++            HStmt current = st;
++            if (known.Count != 0 && st is not (HReturn or HJump or HBranch or HSwitch or HThrow))
++            {
++                if (HirCopy.Of(st, e => e is HLocal { Variable: var read } && known.TryGetValue(read, out HExpr? value) ? HirCopy.Of(value) : null) is not { } copy) yield break;
++                current = copy;
++            }
++            if (current is HAssign { Target: HLocal { Variable: var temp }, Value: var computed } && sets[temp] == 1 && HirBuilder.IsPure(computed) && !Names(computed))
++            {
++                known[temp] = computed;
++                continue;
++            }
++            propagated.Add(current);
++        }
++        if (known.Count != 0) yield return propagated;
++
++        static bool Names(HExpr e)
++        {
++            bool named = false;
++            FinallyFolding.Visit(e, x => named |= x is HLocal or HArg { Index: < 0 });
++            return named;
++        }
++    }
++
+     /// <summary>
+     /// The constructor's statements, found at the site with its stores into the new object in another order.
+     /// The compiler puts those in whatever order suits it: nothing can see the object yet, and what is stored
+diff --git a/src/Rewind.Analysis/Recover/MethodPipeline.cs b/src/Rewind.Analysis/Recover/MethodPipeline.cs
+index f4ad916..7d8cba8 100644
+--- a/src/Rewind.Analysis/Recover/MethodPipeline.cs
++++ b/src/Rewind.Analysis/Recover/MethodPipeline.cs
+@@ -583,6 +583,7 @@ public sealed class MethodPipeline
+         LibraryInternals.Run(result, _program);
+         HiddenImplementations.Run(result, _program);
+         BaseConstructorCalls.Run(result, this, _program);
++        ConstructorFolding.MarkRawConstructors(result);
+         InitializerOrder.Run(result);
+         UnsetLocals.Run(result);
+         FlagMarkers(result);
+diff --git a/src/Rewind.Output/BodyEmitter.cs b/src/Rewind.Output/BodyEmitter.cs
+index 956f9f8..9cb4960 100644
+--- a/src/Rewind.Output/BodyEmitter.cs
++++ b/src/Rewind.Output/BodyEmitter.cs
+@@ -376,8 +376,8 @@ public sealed class BodyEmitter
+                 case HEval e:
+                     if (e.Expression is HOpaque opaque)
+                     {
+-                        _il.Emit(OpCodes.Ldstr, Describe(opaque));
+-                        _il.Emit(OpCodes.Call, _owner.MarkersFor(_module).Effect);
++                        _il.Emit(OpCodes.Ldstr, opaque.Remark ? opaque.Problem ?? Describe(opaque) : Describe(opaque));
++                        _il.Emit(OpCodes.Call, opaque.Remark ? _owner.MarkersFor(_module).Note : _owner.MarkersFor(_module).Effect);
+                         return false;
+                     }
+                     Value(e.Expression);

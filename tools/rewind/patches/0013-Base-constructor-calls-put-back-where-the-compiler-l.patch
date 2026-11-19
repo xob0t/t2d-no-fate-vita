@@ -1,0 +1,416 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xob0t <32616886+xob0t@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 05:28:40 +0300
+Subject: [PATCH 13/22] Base constructor calls put back where the compiler left
+ them out or pasted them in
+
+A constructor that runs no constructor of its base class is not valid IL (ILVerify:
+ThisUninitReturn), yet that is how one reads back when the C++ compiler inlined the
+base constructor: an empty one (MonoBehaviour's, object's) leaves nothing behind, a
+small one leaves its statements in the middle of the constructor.
+
+New pass BaseConstructorCalls, run on the finished method before InitializerOrder:
+
+- where the statements of a straight-line constructor of the base class stand in the
+  constructor (with values in place of its parameters; plain field stores may stand
+  between plain stores), they become a call of it again;
+- otherwise a constructor of the base class whose code does nothing (read back, and
+  the same for the ones it calls) is called after the field initializers; parameters
+  such a constructor never reads are given default values (HMethod.Notes says so);
+- otherwise the place gets an Effect marker ("base constructor call not recovered").
+
+REWIND_NO_BASE_CONSTRUCTOR_CALLS turns it off, REWIND_BASE_CONSTRUCTOR_TRACE prints
+what was done per constructor.
+
+Unity 6000.0 Master x64 game, three game assemblies: ThisUninitReturn 114 -> 1 (in a
+constructor that has a gap and now a marker); 103 calls inserted, 27 put back, 5
+marked. Complete bodies unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../Recover/BaseConstructorCalls.cs           | 363 ++++++++++++++++++
+ src/Rewind.Analysis/Recover/MethodPipeline.cs |   1 +
+ 2 files changed, 364 insertions(+)
+ create mode 100644 src/Rewind.Analysis/Recover/BaseConstructorCalls.cs
+
+diff --git a/src/Rewind.Analysis/Recover/BaseConstructorCalls.cs b/src/Rewind.Analysis/Recover/BaseConstructorCalls.cs
+new file mode 100644
+index 0000000..51a407b
+--- /dev/null
++++ b/src/Rewind.Analysis/Recover/BaseConstructorCalls.cs
+@@ -0,0 +1,363 @@
++using Rewind.Analysis.Hir;
++using Rewind.Model;
++
++namespace Rewind.Analysis.Recover;
++
++/// <summary>
++/// Puts back the call of the base class's constructor that the compiler left out or pasted in.
++///
++/// Every constructor of a class runs a constructor of its base class (or another of its own) on the object
++/// before it is done; IL requires it. The C++ compiler inlines that call like any other: an empty base
++/// constructor - one that runs nothing but the empty one of its own base class, up to object's - leaves nothing
++/// behind, and a small one leaves its statements in the middle of the constructor. Either way the constructor
++/// reads back as if it ran no base constructor at all, which is no constructor IL allows.
++///
++/// - Where the statements of a constructor of the base class stand in the constructor, with values in place
++///   of its parameters, they become a call of it again (straight-line constructors only).
++/// - Otherwise, where the base class has a constructor that does nothing, its call is what was there: it goes
++///   after the stores of field initializers, where C# puts it. Parameters such a constructor never reads are
++///   given default values (any value does the same).
++/// - Otherwise what ran is not known, and the place is marked as a gap.
++/// </summary>
++internal static class BaseConstructorCalls
++{
++    private static readonly bool Disabled = Environment.GetEnvironmentVariable("REWIND_NO_BASE_CONSTRUCTOR_CALLS") != null;
++    private static readonly bool Trace = Environment.GetEnvironmentVariable("REWIND_BASE_CONSTRUCTOR_TRACE") != null;
++
++    public const string Missing = "base constructor call not recovered";
++    public const string Defaulted = "arguments a base constructor never reads are given default values";
++
++    public static void Run(HMethod method, MethodPipeline pipeline, ProgramAnalysis program)
++    {
++        MethodDef ctor = method.Method;
++        TypeDef owner = ctor.DeclaringType;
++        if (Disabled || ctor.Name != ".ctor" || ctor.IsStatic || owner.IsValueType || owner.IsInterface || method.Blocks.Count == 0) return;
++        if (owner.BaseType is not { Definition: { } baseType } baseSig) return; // System.Object itself
++        if (CallsConstructor(method, owner, baseType)) return;
++
++        var candidates = new List<(MethodDef Ctor, List<HStmt> Body, bool Nothing)>();
++        foreach (MethodDef m in baseType.Methods)
++        {
++            if (m.Name != ".ctor" || m.IsStatic || !Reachable(m, owner) || Straight(m, pipeline, program) is not { } body) continue;
++            candidates.Add((m, body, DoesNothing(m, pipeline, program, 0)));
++        }
++        List<HStmt> entry = method.Blocks[0].Statements;
++        // The statements of one that does something, pasted in: the longest that matches.
++        foreach (var (candidate, body, nothing) in candidates.Where(c => !c.Nothing).OrderByDescending(c => c.Body.Count))
++        {
++            if (Match(method, entry, body, candidate, pipeline, program) is not { } found) continue;
++            Replace(method, entry, found.Matched, Call(candidate, baseSig, owner, found.Arguments, program, method));
++            if (Trace) Console.Error.WriteLine($"[base-ctor] {ctor.FullName}: {candidate.FullName} put back");
++            return;
++        }
++        // One that does nothing: the one with the fewest parameters.
++        if (candidates.Where(c => c.Nothing).OrderBy(c => c.Ctor.Parameters.Length).FirstOrDefault() is { Ctor: { } empty })
++        {
++            entry.Insert(AfterInitializers(entry, owner), new HEval(Call(empty, baseSig, owner, new HExpr?[empty.Parameters.Length], program, method)));
++            if (Trace) Console.Error.WriteLine($"[base-ctor] {ctor.FullName}: {empty.FullName} called");
++            return;
++        }
++        if (Trace) Console.Error.WriteLine($"[base-ctor] {ctor.FullName}: {baseType.FullName} not recovered");
++        string problem = $"{Missing} ({baseType.Name})";
++        if (method.Problems.Count < 64) method.Problems.Add(problem);
++        method.SiteProblems.Add(problem);
++        entry.Insert(AfterInitializers(entry, owner), new HEval(new HOpaque("base_constructor") { Problem = problem }));
++    }
++
++    /// <summary>Whether a constructor of the class or of its base class is run on the object anywhere in the method.</summary>
++    private static bool CallsConstructor(HMethod method, TypeDef owner, TypeDef baseType)
++    {
++        bool found = false;
++        foreach (HBlock block in method.Blocks)
++            foreach (HStmt s in block.Statements)
++                FinallyFolding.Visit(s, e => found |= e is HCall { Method: { Name: ".ctor" } called, This: HArg { Index: < 0 } } &&
++                                                      (ReferenceEquals(called.DeclaringType, owner) || ReferenceEquals(called.DeclaringType, baseType)));
++        return found;
++    }
++
++    /// <summary>Where the stores of field initializers end: values that name neither the object, a parameter nor a variable.</summary>
++    private static int AfterInitializers(List<HStmt> entry, TypeDef owner)
++    {
++        int at = 0;
++        while (at < entry.Count && entry[at] is HAssign { Target: HField { Object: HArg { Index: < 0 }, Field: var field }, Value: var value } &&
++               ReferenceEquals(field.DeclaringType, owner) && !field.IsStatic && !Names(value))
++            at++;
++        return at;
++    }
++
++    private static bool Names(HExpr e)
++    {
++        bool named = false;
++        FinallyFolding.Visit(e, x => named |= x is HArg or HLocal);
++        return named;
++    }
++
++    private static HCall Call(MethodDef target, TypeSig baseSig, TypeDef owner, HExpr?[] arguments, ProgramAnalysis program, HMethod method)
++    {
++        var given = new HExpr[target.Parameters.Length];
++        for (int i = 0; i < given.Length; i++)
++        {
++            if (arguments[i] is { } known)
++            {
++                given[i] = known;
++                continue;
++            }
++            TypeSig type = target.Parameters[i].Type;
++            if (baseSig is GenericInstSig g) type = program.Model.Sigs.Substitute(type, g.Arguments, []);
++            given[i] = new HTypeExpr(HTypeOp.Default, type, null) { Type = type };
++            if (!method.Notes.Contains(Defaulted)) method.Notes.Add(Defaulted);
++        }
++        return new HCall
++        {
++            Method = target,
++            DeclaringType = baseSig is GenericInstSig ? baseSig : null,
++            This = new HArg(-1) { Type = owner.Sig },
++            Arguments = given,
++            Type = program.Model.Sigs.Primitive(Rewind.Runtime.Il2CppTypeEnum.Void),
++        };
++    }
++
++    private static void Replace(HMethod method, List<HStmt> entry, List<int> matched, HCall call)
++    {
++        int last = matched[^1];
++        var kept = new List<HStmt>(entry.Count);
++        for (int k = 0; k < entry.Count; k++)
++        {
++            if (k == last) kept.Add(new HEval(call) { Address = entry[k].Address });
++            else if (!matched.Contains(k)) kept.Add(entry[k]);
++        }
++        entry.Clear();
++        entry.AddRange(kept);
++    }
++
++    /// <summary>Whether a derived class can call the constructor: not private (unless the class is nested in its base).</summary>
++    private static bool Reachable(MethodDef target, TypeDef from)
++    {
++        int access = target.Flags & MethodDef.AccessMask;
++        if (access is 6 or 5 or 4) return true; // public, protected internal, protected
++        if (access is 3 or 2) return ReferenceEquals(target.DeclaringType.Assembly, from.Assembly); // internal, private protected
++        for (TypeDef? t = from.DeclaringType; t != null; t = t.DeclaringType)
++            if (ReferenceEquals(t, target.DeclaringType)) return true;
++        return false;
++    }
++
++    private static readonly List<HStmt> Nothing = [];
++
++    /// <summary>
++    /// The statements of a constructor read back completely, when they run straight through (jumps from one
++    /// block to the next only); the final return left out. Object's constructor has none. Null otherwise.
++    /// </summary>
++    private static List<HStmt>? Straight(MethodDef ctor, MethodPipeline pipeline, ProgramAnalysis program)
++    {
++        TypeDef type = ctor.DeclaringType;
++        if (type.BaseType == null && type.Namespace == "System" && type.Name == "Object") return Nothing;
++        HMethod? body = null;
++        if (type.GenericParameters.Length == 0) body = pipeline.CoreBody(ctor);
++        else
++            foreach (MethodInst inst in program.InstsOf(ctor))
++                if (inst.Address != 0 && (body = pipeline.CoreBody(inst)) != null)
++                    break;
++        if (body == null || body.Blocks.Count == 0 || body.TryRegions.Count != 0) return null;
++        var statements = new List<HStmt>();
++        var seen = new HashSet<HBlock>();
++        for (HBlock? block = body.Blocks[0]; block != null;)
++        {
++            if (!seen.Add(block)) return null;
++            HBlock? next = null;
++            foreach (HStmt s in block.Statements)
++                switch (s)
++                {
++                    case HJump jump: next = jump.Target; break;
++                    case HReturn { Value: null }: return statements;
++                    case HAssign or HEval: statements.Add(s); break;
++                    default: return null;
++                }
++            if (next == null) return null;
++            block = next;
++        }
++        return null;
++    }
++
++    /// <summary>Whether a constructor's code does nothing: at most it runs a constructor of its own base class that does nothing either.</summary>
++    private static bool DoesNothing(MethodDef ctor, MethodPipeline pipeline, ProgramAnalysis program, int depth)
++    {
++        if (depth > 32 || Straight(ctor, pipeline, program) is not { } body) return false;
++        foreach (HStmt s in body)
++            if (!IsEmptyConstructorCall(s, ctor, pipeline, program, depth)) return false;
++        return true;
++    }
++
++    private static bool IsEmptyConstructorCall(HStmt s, MethodDef from, MethodPipeline pipeline, ProgramAnalysis program, int depth) =>
++        s is HEval { Expression: HCall { Method: { Name: ".ctor" } called, This: HArg { Index: < 0 } } call } &&
++        !ReferenceEquals(called, from) && call.Arguments.All(HirBuilder.IsPure) && DoesNothing(called, pipeline, program, depth + 1);
++
++    // ---- statements of a base constructor among the constructor's own -------------------------------------------
++
++    private sealed class Bindings
++    {
++        public readonly Dictionary<int, HExpr> Arguments = [];
++        public readonly Dictionary<HVar, HVar> Locals = [];
++        public readonly HashSet<HVar> Taken = [];
++
++        public Bindings Copy()
++        {
++            var copy = new Bindings();
++            foreach (var (k, v) in Arguments) copy.Arguments[k] = v;
++            foreach (var (k, v) in Locals) copy.Locals[k] = v;
++            copy.Taken.UnionWith(Taken);
++            return copy;
++        }
++    }
++
++    /// <summary>
++    /// Where the statements of <paramref name="body"/> (a base constructor's) stand in the first block: their
++    /// positions, and what stands for each parameter there. They follow one another; plain stores of the
++    /// class's own fields may stand between them where the base constructor's statements are plain stores
++    /// too (the order of those cannot be told from outside). A call of a constructor that does nothing may be
++    /// missing (left out in the one place and not the other).
++    /// </summary>
++    private static (List<int> Matched, HExpr?[] Arguments)? Match(HMethod method, List<HStmt> entry, List<HStmt> body, MethodDef candidate,
++        MethodPipeline pipeline, ProgramAnalysis program)
++    {
++        TypeDef owner = method.Method.DeclaringType;
++        bool plain = body.All(s => s is HAssign { Target: HField { Object: HArg { Index: < 0 } }, Value: var v } && HirBuilder.IsPure(v));
++        for (int start = 0; start < entry.Count; start++)
++        {
++            Bindings b = new();
++            var matched = new List<int>();
++            int i = start;
++            bool ok = true;
++            foreach (HStmt wanted in body)
++            {
++                while (plain && matched.Count != 0 && i < entry.Count && !SameStatement(wanted, entry[i], b.Copy()) && OwnPlainStore(entry[i], owner)) i++;
++                Bindings trial = b.Copy();
++                if (i < entry.Count && SameStatement(wanted, entry[i], trial))
++                {
++                    b = trial;
++                    matched.Add(i++);
++                    continue;
++                }
++                if (IsEmptyConstructorCall(wanted, candidate, pipeline, program, 0)) continue;
++                ok = false;
++                break;
++            }
++            if (!ok || matched.Count == 0) continue;
++            // The variables the pasted-in statements set are theirs: nothing else may read them.
++            bool leaks = false;
++            var mine = new HashSet<HVar>(b.Locals.Values);
++            for (int k = 0; k < method.Blocks.Count && !leaks; k++)
++                foreach (HStmt s in method.Blocks[k].Statements.Where((_, n) => k != 0 || !matched.Contains(n)))
++                    FinallyFolding.Visit(s, e => leaks |= e is HLocal { Variable: var v } && mine.Contains(v));
++            if (leaks) continue;
++            // What stands for a parameter is worked out once, where the call is: it must give the same there.
++            var arguments = new HExpr?[candidate.Parameters.Length];
++            foreach (var (index, value) in b.Arguments)
++            {
++                if (index >= arguments.Length || !HirBuilder.IsPure(value)) { ok = false; break; }
++                bool own = false;
++                FinallyFolding.Visit(value, e => own |= e is HLocal { Variable: var v } && mine.Contains(v));
++                if (own) { ok = false; break; }
++                arguments[index] = value;
++            }
++            if (!ok) continue;
++            // (Set again between the first and the last matched statement: not the same value at the call.)
++            var changed = new HashSet<HVar>();
++            for (int k = matched[0]; k <= matched[^1]; k++)
++                if (entry[k] is HAssign { Target: HLocal { Variable: var set } }) changed.Add(set);
++            bool moved = false;
++            foreach (HExpr? a in arguments)
++                if (a != null) FinallyFolding.Visit(a, e => moved |= e is HLocal { Variable: var v } && changed.Contains(v) || e is HArg { Index: >= 0 } && ChangedArgument(entry, matched, e));
++            if (moved) continue;
++            return (matched, arguments);
++        }
++        return null;
++    }
++
++    private static bool ChangedArgument(List<HStmt> entry, List<int> matched, HExpr argument)
++    {
++        int index = ((HArg)argument).Index;
++        for (int k = matched[0]; k <= matched[^1]; k++)
++            if (entry[k] is HAssign { Target: HArg { Index: var set } } && set == index) return true;
++        return false;
++    }
++
++    private static bool OwnPlainStore(HStmt s, TypeDef owner) =>
++        s is HAssign { Target: HField { Object: HArg { Index: < 0 }, Field: var field }, Value: var value } &&
++        ReferenceEquals(field.DeclaringType, owner) && HirBuilder.IsPure(value);
++
++    private static bool SameStatement(HStmt wanted, HStmt at, Bindings b) => (wanted, at) switch
++    {
++        (HAssign x, HAssign y) => Same(x.Target, y.Target, b) && Same(x.Value, y.Value, b),
++        (HEval x, HEval y) => Same(x.Expression, y.Expression, b),
++        _ => false,
++    };
++
++    private static bool SameType(TypeSig? x, TypeSig? y) => x == null || y == null || x.Key == y.Key;
++
++    private static bool Same(HExpr? x, HExpr? y, Bindings b)
++    {
++        if (x == null || y == null) return x == null && y == null;
++        switch (x)
++        {
++            case HArg { Index: < 0 }:
++                return y is HArg { Index: < 0 };
++            case HArg a:
++                if (b.Arguments.TryGetValue(a.Index, out HExpr? bound)) return Same(bound, y, new Bindings());
++                b.Arguments[a.Index] = y;
++                return true;
++            case HLocal l:
++                if (y is not HLocal other) return false;
++                if (b.Locals.TryGetValue(l.Variable, out HVar? mapped)) return ReferenceEquals(mapped, other.Variable);
++                if (!b.Taken.Add(other.Variable)) return false;
++                b.Locals[l.Variable] = other.Variable;
++                return true;
++            case HConst c:
++                return y is HConst d && Equals(c.Value, d.Value);
++            case HField f:
++                return y is HField g && ReferenceEquals(f.Field, g.Field) && Same(f.Object, g.Object, b);
++            case HElement e:
++                return y is HElement e2 && Same(e.Array, e2.Array, b) && Same(e.Index, e2.Index, b);
++            case HArrayLength len:
++                return y is HArrayLength len2 && Same(len.Array, len2.Array, b);
++            case HAddressOf ad:
++                return y is HAddressOf ad2 && Same(ad.Target, ad2.Target, b);
++            case HDeref d0:
++                return y is HDeref d1 && Same(d0.Pointer, d1.Pointer, b);
++            case HUnary u:
++                return y is HUnary u2 && u.Op == u2.Op && Same(u.Operand, u2.Operand, b);
++            case HBinary bi:
++                return y is HBinary bi2 && bi.Op == bi2.Op && Same(bi.Left, bi2.Left, b) && Same(bi.Right, bi2.Right, b);
++            case HCompare c0:
++                return y is HCompare c1 && c0.Op == c1.Op && Same(c0.Left, c1.Left, b) && Same(c0.Right, c1.Right, b);
++            case HConv cv:
++                return y is HConv cv2 && cv.Kind == cv2.Kind && Same(cv.Operand, cv2.Operand, b);
++            case HSelect s:
++                return y is HSelect s2 && Same(s.Condition, s2.Condition, b) && Same(s.WhenTrue, s2.WhenTrue, b) && Same(s.WhenFalse, s2.WhenFalse, b);
++            case HCall call:
++                return y is HCall call2 && ReferenceEquals(call.Method, call2.Method) && SameType(call.DeclaringType, call2.DeclaringType) &&
++                       Same(call.This, call2.This, b) && All(call.Arguments, call2.Arguments, b);
++            case HNewObject n:
++                return y is HNewObject n2 && ReferenceEquals(n.Constructor, n2.Constructor) && SameType(n.DeclaringType, n2.DeclaringType) && All(n.Arguments, n2.Arguments, b);
++            case HNewArray na:
++                return y is HNewArray na2 && na.ElementType.Key == na2.ElementType.Key && Same(na.Length, na2.Length, b);
++            case HTypeExpr t:
++                return y is HTypeExpr t2 && t.Op == t2.Op && t.Target.Key == t2.Target.Key && Same(t.Operand, t2.Operand, b);
++            case HMethodPointer p:
++                return y is HMethodPointer p2 && ReferenceEquals(p.Method, p2.Method) && Same(p.VirtualOn, p2.VirtualOn, b);
++            case HMemberToken m:
++                return y is HMemberToken m2 && ReferenceEquals(m.Method, m2.Method) && ReferenceEquals(m.Field, m2.Field);
++            case HCachedDelegate cd:
++                return y is HCachedDelegate cd2 && Same(cd.Cache, cd2.Cache, b) && Same(cd.Creation, cd2.Creation, b);
++            default:
++                return false;
++        }
++    }
++
++    private static bool All(HExpr[] x, HExpr[] y, Bindings b)
++    {
++        if (x.Length != y.Length) return false;
++        for (int i = 0; i < x.Length; i++)
++            if (!Same(x[i], y[i], b)) return false;
++        return true;
++    }
++}
+diff --git a/src/Rewind.Analysis/Recover/MethodPipeline.cs b/src/Rewind.Analysis/Recover/MethodPipeline.cs
+index 7a4239e..f4ad916 100644
+--- a/src/Rewind.Analysis/Recover/MethodPipeline.cs
++++ b/src/Rewind.Analysis/Recover/MethodPipeline.cs
+@@ -582,6 +582,7 @@ public sealed class MethodPipeline
+         AccessorFolding.Run(result, _program);
+         LibraryInternals.Run(result, _program);
+         HiddenImplementations.Run(result, _program);
++        BaseConstructorCalls.Run(result, this, _program);
+         InitializerOrder.Run(result);
+         UnsetLocals.Run(result);
+         FlagMarkers(result);

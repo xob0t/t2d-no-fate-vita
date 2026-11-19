@@ -1,0 +1,148 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xob0t <32616886+xob0t@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 04:56:21 +0300
+Subject: [PATCH 01/22] Helpers behind a wrapper that only widens its arguments
+
+A support function can be a wrapper that widens its 32-bit arguments and jumps
+to the function doing the work: SZArrayNew(klass, uint32 length) is
+"mov edx, edx; jmp Array::NewSpecific". A library recognizes the wrapper, but
+whole-program optimized code mostly calls the function behind it directly, and
+that call stayed an unidentified native call with the class used as data. The
+function jumped to is now the same helper (HelperShapes; off with
+REWIND_NO_WIDENED_HELPERS). It does what the wrapper does for every argument the
+wrapper passes on; nothing is taken over where something is already known, nor
+for compiled methods or wrappers that do more than widen a register into itself.
+
+rewind-lab's helpers (hir, norm, ir, ...) now also go through the same
+completion as the decompiler (code shapes, then roles).
+
+Unity 6000.0.60f1 Master game read with the 6000.0.85f2 library: whole game
+12,759 of 19,693 complete (was 12,403); its own assembly 2,169 of 2,968 (was 2,114).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../Runtime/HelperDiscovery.cs                | 21 ++++--
+ src/Rewind.Analysis/Runtime/HelperShapes.cs   | 70 +++++++++++++++++++
+ src/Rewind.Lab/LiftLab.cs                     |  1 +
+ 3 files changed, 85 insertions(+), 7 deletions(-)
+ create mode 100644 src/Rewind.Analysis/Runtime/HelperShapes.cs
+
+diff --git a/src/Rewind.Analysis/Runtime/HelperDiscovery.cs b/src/Rewind.Analysis/Runtime/HelperDiscovery.cs
+index 820f598..f0abcf3 100644
+--- a/src/Rewind.Analysis/Runtime/HelperDiscovery.cs
++++ b/src/Rewind.Analysis/Runtime/HelperDiscovery.cs
+@@ -101,12 +101,19 @@ public static class HelperDiscovery
+         if (best == null) return new DiscoveredHelpers(new RuntimeHelpers(), context, "none (no signature library for this platform)", 0, false);
+         if (AddImportStubs(image, best.Helpers) > 0)
+             best = best with { Kinds = best.Helpers.ByAddress.Values.Select(i => i.Kind).Distinct().Count() };
+-        // What no library recognized, the compiled methods may show by the way they call it.
+-        if (HelperRoles.Identify(model, context, index, best.Helpers) is { } found)
+-        {
+-            log(found);
+-            best = best with { Kinds = best.Helpers.ByAddress.Values.Select(i => i.Kind).Distinct().Count() };
+-        }
+-        return best;
++        foreach (string found in Complete(model, context, index, best.Helpers)) log(found);
++        return best with { Kinds = best.Helpers.ByAddress.Values.Select(i => i.Kind).Distinct().Count() };
++    }
++
++    /// <summary>
++    /// What the signature library did not recognize, found another way: by the code of the function itself, and by
++    /// the way the compiled methods call it. Returns lines for the log.
++    /// </summary>
++    public static List<string> Complete(Il2CppModel model, ModelCodeContext context, CodeIndex index, RuntimeHelpers helpers)
++    {
++        var lines = new List<string>();
++        if (HelperShapes.Identify(model, context, index, helpers) is { } shapes) lines.Add(shapes);
++        if (HelperRoles.Identify(model, context, index, helpers) is { } roles) lines.Add(roles);
++        return lines;
+     }
+ }
+diff --git a/src/Rewind.Analysis/Runtime/HelperShapes.cs b/src/Rewind.Analysis/Runtime/HelperShapes.cs
+new file mode 100644
+index 0000000..1cd202d
+--- /dev/null
++++ b/src/Rewind.Analysis/Runtime/HelperShapes.cs
+@@ -0,0 +1,70 @@
++using Iced.Intel;
++using Rewind.Model;
++using Decoder = Iced.Intel.Decoder;
++
++namespace Rewind.Analysis.Runtime;
++
++/// <summary>
++/// Finds runtime support functions whose own few instructions say what they are, where no signature library
++/// recognized them.
++/// </summary>
++public static class HelperShapes
++{
++    private static readonly bool NoWidened = Environment.GetEnvironmentVariable("REWIND_NO_WIDENED_HELPERS") != null;
++
++    /// <summary>Adds what the code shows to <paramref name="helpers"/>; returns a line for the log, or null.</summary>
++    public static string? Identify(Il2CppModel model, ModelCodeContext context, CodeIndex code, RuntimeHelpers helpers)
++    {
++        if (model.Image.Arch != Rewind.Binary.CpuArch.X64) return null;
++        var found = new List<string>();
++        if (!NoWidened && AddWidenedTargets(model, context, code, helpers) is > 0 and var widened)
++            found.Add($"{widened} called through a function that only widens arguments");
++        return found.Count == 0 ? null : "shapes:   found by their code: " + string.Join("; ", found);
++    }
++
++    /// <summary>
++    /// A support function can be a wrapper that does nothing but widen its 32-bit arguments to 64 bits and jump to
++    /// the function that does the work: SZArrayNew(klass, uint32 length) is "mov edx, edx; jmp Array::NewSpecific".
++    /// The library recognizes the wrapper, but code built with whole-program optimization mostly calls the function
++    /// behind it, passing the length already widened. That function does what the wrapper does, for every argument
++    /// the wrapper can pass on, and is the same helper. (Not where something else is known to be there, nor a
++    /// compiled method, nor where the wrapper does anything but widen a register into itself.)
++    /// </summary>
++    private static int AddWidenedTargets(Il2CppModel model, ModelCodeContext context, CodeIndex code, RuntimeHelpers helpers)
++    {
++        int added = 0;
++        foreach (var (address, info) in helpers.ByAddress.ToList())
++        {
++            if (info.Kind == HelperKind.None || WidenedJumpTarget(model, address) is not { } next) continue;
++            ulong target = code.ThunkTarget(next);
++            foreach (ulong at in new[] { next, target }.Distinct())
++            {
++                if (at == address || context.IsManaged(at) || helpers.At(at) != null) continue;
++                helpers.Add(at, info with { Name = info.Name + " (the function it widens its arguments for)" });
++                added++;
++            }
++        }
++        return added;
++    }
++
++    /// <summary>Where the function jumps when all it does before is "mov r32, r32" of an argument register into itself.</summary>
++    private static ulong? WidenedJumpTarget(Il2CppModel model, ulong start)
++    {
++        ReadOnlySpan<byte> bytes = model.Image.SpanToSectionEnd(start);
++        if (bytes.Length == 0) return null;
++        var decoder = Decoder.Create(64, new ByteArrayCodeReader(bytes[..Math.Min(bytes.Length, 64)].ToArray()), start);
++        bool widens = false;
++        for (int i = 0; i < 5; i++)
++        {
++            decoder.Decode(out Instruction ins);
++            if (ins.IsInvalid) return null;
++            if (ins.Mnemonic == Mnemonic.Jmp && ins.Op0Kind == OpKind.NearBranch64)
++                return widens ? ins.NearBranchTarget : null;
++            if (ins.Mnemonic != Mnemonic.Mov || ins.Op0Kind != OpKind.Register || ins.Op1Kind != OpKind.Register ||
++                ins.Op0Register != ins.Op1Register || ins.Op0Register is not (Register.ECX or Register.EDX or Register.R8D or Register.R9D))
++                return null;
++            widens = true;
++        }
++        return null;
++    }
++}
+diff --git a/src/Rewind.Lab/LiftLab.cs b/src/Rewind.Lab/LiftLab.cs
+index 0cf641c..03c8ef6 100644
+--- a/src/Rewind.Lab/LiftLab.cs
++++ b/src/Rewind.Lab/LiftLab.cs
+@@ -43,6 +43,7 @@ internal static class LiftLab
+             // (As the decompiler does: functions named by the stubs they are called through.)
+             int stubs = Rewind.Analysis.Runtime.HelperDiscovery.AddImportStubs(model.Image, matched);
+             if (stubs != 0) Console.WriteLine($"helpers from import stubs: {stubs}");
++            foreach (string line in Rewind.Analysis.Runtime.HelperDiscovery.Complete(model, context, index, matched)) Console.WriteLine(line);
+             var watch = Stopwatch.StartNew();
+             var analysis = new ProgramAnalysis(model, matched, context);
+             Console.WriteLine($"exact copies: {analysis.ExactCopies.Copies.Count} of {analysis.ExactCopies.Examined} unlisted functions equal a listed method ({analysis.ExactCopies.Rounds} rounds); witnessed copies: {analysis.InlineCopies.Count}; near copies: {analysis.NearCopies.Count}; program analysis {watch.ElapsedMilliseconds} ms");

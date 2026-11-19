@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xob0t <32616886+xob0t@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 05:32:46 +0300
+Subject: [PATCH 20/22] Merged structs returned in a register rebuilt from
+ their bits
+
+A struct of 8 bytes returned in RAX from several places is a merged value typed as the
+struct, and what each way in gave it (two floats packed into the register) was copied in
+as a number cast to the struct: "(Vector2)(ulong)...", invalid IL. PhiCopies now rebuilds
+such a struct from the register's bits (StructFromBits), as a single return already did;
+StructFromBits takes 32 bits widened without their sign as the first of two 4-byte fields
+and zero. REWIND_NO_MERGED_STRUCT_BITS turns this off.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/Rewind.Analysis/Recover/HirBuilder.Values.cs | 3 +++
+ src/Rewind.Analysis/Recover/HirBuilder.cs        | 9 ++++++++-
+ 2 files changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/src/Rewind.Analysis/Recover/HirBuilder.Values.cs b/src/Rewind.Analysis/Recover/HirBuilder.Values.cs
+index 53bb5c1..46c3a95 100644
+--- a/src/Rewind.Analysis/Recover/HirBuilder.Values.cs
++++ b/src/Rewind.Analysis/Recover/HirBuilder.Values.cs
+@@ -2346,6 +2346,9 @@ public sealed partial class HirBuilder
+         var parts = new List<(FieldSlot Slot, HExpr Value)>();
+         bool ok = true;
+         bool Direct(HExpr given, TypeSig field) => NoLowHalves || !IsStructType(field) || ReferenceEquals(given.Type, field);
++        // 32 bits widened without their sign: the first half, and nothing above it.
++        if (!NoMergedStructBits && s is SVal { Expr: not HConst } && n.Op == Op.ZExt && n.In[0].Type == VT.I32)
++            s = new SPair(Shortened(HConvKind.I4, _int, Value(n), 32), new HConst(0, _int));
+         if (s is SPair pair && layout.Fields.Length == 2 && layout.Fields[0].Size == 4 && layout.Fields[1].Size == 4 &&
+             Direct(pair.Low, layout.Fields[0].Type) && Direct(pair.High, layout.Fields[1].Type))
+         {
+diff --git a/src/Rewind.Analysis/Recover/HirBuilder.cs b/src/Rewind.Analysis/Recover/HirBuilder.cs
+index 414b7ba..e6de90d 100644
+--- a/src/Rewind.Analysis/Recover/HirBuilder.cs
++++ b/src/Rewind.Analysis/Recover/HirBuilder.cs
+@@ -515,6 +515,7 @@ public sealed partial class HirBuilder
+     private static readonly bool NoParamHalves = Environment.GetEnvironmentVariable("REWIND_NO_PARAM_HALVES") != null;
+     private static readonly bool NoRefParamHalves = Environment.GetEnvironmentVariable("REWIND_NO_REF_PARAM_HALVES") != null;
+     private static readonly bool NoStaticRefs = Environment.GetEnvironmentVariable("REWIND_NO_STATIC_REFS") != null;
++    private static readonly bool NoMergedStructBits = Environment.GetEnvironmentVariable("REWIND_NO_MERGED_STRUCT_BITS") != null;
+     private static readonly bool NoArgumentConflicts = Environment.GetEnvironmentVariable("REWIND_NO_ARGUMENT_CONFLICTS") != null;
+     private static readonly bool NoWideSwitches = Environment.GetEnvironmentVariable("REWIND_NO_WIDE_SWITCHES") != null;
+ 
+@@ -1256,7 +1257,13 @@ public sealed partial class HirBuilder
+                 // held with the merged value: it counts when that is read, not when the value itself is used
+                 // for what it is (the class's methods read through it, the merge given back to each way in).
+                 if (!NoCopyProblemsOnPhi) _peekSubject = phi;
+-                value = Value(input);
++                // A merged struct that travels in a register (a struct of 8 bytes returned in RAX): what a way in
++                // gives as the register's bits is the struct those bits are, not a number made into it.
++                value = !NoMergedStructBits && IsStructType(variable.Type) && input.Type is VT.I32 or VT.I64 &&
++                    (s is SPair || s is SVal { Expr: not HConst, Type: PrimitiveSig bits } && !IsReference(bits) && BitsOf(bits) is > 0 and <= 64) &&
++                    _p.Layouts.Of(variable.Type) is { Known: true, Size: > 0 and <= 8 }
++                    ? StructFromBits(input, variable.Type)
++                    : Value(input);
+             }
+             finally
+             {

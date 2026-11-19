@@ -1,0 +1,259 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xob0t <32616886+xob0t@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 05:06:54 +0300
+Subject: [PATCH 18/22] Floating-point negation through a mask held in a
+ register
+
+"xorps x, m" with the sign mask of a double is lifted lane by lane. Where the mask was
+loaded once, ahead of a loop, its lanes reach the XOR through merges and are constants
+only after normalization: the double came out as "high half ^ 80000000h" beside
+"low half ^ 0", never folded back into "-x". Such a value passed in a stack slot was then
+read as its low half alone (an int where a double belongs, with no marker), and one passed
+in a register as the bits of a double.
+
+- Normalizer.RefoldTruncations: a Concat of a top half under a bitwise mask and a bottom
+  half that is not (or is under the op's identity) is the whole under the 64-bit mask,
+  where the halves are those of a double (cut out of a double's bits, the top lane of a
+  call's vector result, or merges of such): a Vector2 with its y negated looks the same
+  and is left alone. The whole folds or its merges rejoin as before
+  (REWIND_NO_MASKED_HALVES).
+- IrBuilder.IsLowHalf: the bottom half of "x ^ m" (or "|", or "&") is the bottom half of x
+  when m leaves the bottom half alone (REWIND_NO_BOTTOM_MASKS).
+- HirBuilder.FloatAt: a double in a stack slot made of two 32-bit values is both halves,
+  not the low one (REWIND_NO_DOUBLE_HALVES).
+- HirBuilder.SignedLanes: a double argument or return in the two lanes of a register,
+  the top one under the sign or magnitude mask, is "-x" or "Math.Abs(x)"
+  (REWIND_NO_SIGNED_LANES).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/Rewind.Analysis/Ir/IrBuilder.cs           |  9 ++-
+ .../Recover/HirBuilder.Aapcs.cs               |  1 +
+ .../Recover/HirBuilder.Calls.cs               | 10 ++-
+ .../Recover/HirBuilder.Values.cs              | 25 +++++-
+ src/Rewind.Analysis/Recover/HirBuilder.cs     |  5 ++
+ src/Rewind.Analysis/Recover/Normalizer.cs     | 78 +++++++++++++++++++
+ 6 files changed, 125 insertions(+), 3 deletions(-)
+
+diff --git a/src/Rewind.Analysis/Ir/IrBuilder.cs b/src/Rewind.Analysis/Ir/IrBuilder.cs
+index 1bcdf2f..abe4ade 100644
+--- a/src/Rewind.Analysis/Ir/IrBuilder.cs
++++ b/src/Rewind.Analysis/Ir/IrBuilder.cs
+@@ -303,6 +303,7 @@ public sealed class IrBuilder(Function fn)
+     }
+ 
+     internal static readonly bool NoSumHalves = Environment.GetEnvironmentVariable("REWIND_NO_SUM_HALVES") != null;
++    private static readonly bool NoBottomMasks = Environment.GetEnvironmentVariable("REWIND_NO_BOTTOM_MASKS") != null;
+ 
+     /// <summary>
+     /// Is "low" the bottom 32 bits of the 64-bit "whole"? Narrowing moves inside sums and the like when it is
+@@ -315,7 +316,13 @@ public sealed class IrBuilder(Function fn)
+         if (low.Type != VT.I32 || whole.Type != VT.I64) return false;
+         if (whole.IsConst) return low.IsConst && (uint)low.UImm == (uint)whole.UImm;
+         if (low.Op == Op.Trunc && ReferenceEquals(resolve != null ? resolve(low.In[0]) : low.In[0], whole)) return true;
+-        if (depth >= 4 || low.Op != whole.Op || low.In.Length != 2 || whole.In.Length != 2) return false;
++        if (depth >= 4) return false;
++        // A mask that leaves the bottom half alone ("x ^ 8000000000000000h", the sign of a double): the bottom
++        // half of x is the bottom half of the masked x.
++        if (!NoBottomMasks && whole.Op is Op.Xor or Op.Or or Op.And && whole.In.Length == 2 && whole.In[1].IsConst && low.Op != whole.Op &&
++            (uint)whole.In[1].UImm == (whole.Op == Op.And ? uint.MaxValue : 0u))
++            return IsLowHalf(low, whole.In[0], resolve, depth + 1);
++        if (low.Op != whole.Op || low.In.Length != 2 || whole.In.Length != 2) return false;
+         if (whole.Op is not (Op.Add or Op.Sub or Op.Mul or Op.And or Op.Or or Op.Xor)) return false;
+         return IsLowHalf(low.In[0], whole.In[0], resolve, depth + 1) && IsLowHalf(low.In[1], whole.In[1], resolve, depth + 1);
+     }
+diff --git a/src/Rewind.Analysis/Recover/HirBuilder.Aapcs.cs b/src/Rewind.Analysis/Recover/HirBuilder.Aapcs.cs
+index 0372760..cd68d42 100644
+--- a/src/Rewind.Analysis/Recover/HirBuilder.Aapcs.cs
++++ b/src/Rewind.Analysis/Recover/HirBuilder.Aapcs.cs
+@@ -88,6 +88,7 @@ public sealed partial class HirBuilder
+         if (!isDouble) return AsFloat(FloatValue(lo), type);
+         if (Eval(lo) is SHalf { High: false } l && hi != null && Eval(hi) is SHalf { High: true } h && SameValue(l.Whole, h.Whole))
+             return l.Whole;
++        if (hi != null && SignedLanes(lo, hi) is { } signed) return signed;
+         if (Eval(lo) is SVal { Expr: HConst { Value: int low } } && hi != null && Eval(hi) is SVal { Expr: HConst { Value: int high } })
+             return new HConst(BitConverter.Int64BitsToDouble((long)(uint)high << 32 | (uint)low), _double);
+         HExpr bits = CombineParts([new Part(0, 4, HalfBits(lo)), new Part(4, 4, hi != null ? HalfBits(hi) : new HConst(0, _int))], 8);
+diff --git a/src/Rewind.Analysis/Recover/HirBuilder.Calls.cs b/src/Rewind.Analysis/Recover/HirBuilder.Calls.cs
+index 5ed521f..faa2b70 100644
+--- a/src/Rewind.Analysis/Recover/HirBuilder.Calls.cs
++++ b/src/Rewind.Analysis/Recover/HirBuilder.Calls.cs
+@@ -26,6 +26,8 @@ public sealed partial class HirBuilder
+         _fn.Regs.IsStackPosition(position) ? Input(call, ArgSlotKind.Stack, _fn.Regs.StackSlotOf(position))
+         : _fn.Regs.IntRegisterOf(position) is int r and >= 0 ? Input(call, ArgSlotKind.IntReg, r) : null;
+ 
++    private static readonly bool NoDoubleHalves = Environment.GetEnvironmentVariable("REWIND_NO_DOUBLE_HALVES") != null;
++
+     private HExpr FloatAt(Node call, int position, bool isDouble)
+     {
+         TypeSig type = isDouble ? _double : _float;
+@@ -41,7 +43,12 @@ public sealed partial class HirBuilder
+                 else if (slot.Op is Op.ZExt or Op.SExt && slot.In[0].Type == VT.I32 && !_materialize.Contains(slot) && !_sem.ContainsKey(slot)) slot = slot.In[0];
+             }
+             Sem s = Eval(slot);
+-            if (s is SPair pair) return AsFloat(pair.Low, type);           // a float occupies the low half of its stack slot
++            if (s is SPair pair)
++            {
++                // A float occupies the low half of its stack slot; a double, both halves.
++                if (!isDouble || NoDoubleHalves) return AsFloat(pair.Low, type);
++                return ValueFromBits(CombineParts([new Part(0, 4, pair.Low), new Part(4, 4, pair.High)], 8), _double, 8);
++            }
+             if (s is SVal v) return AsFloat(v.Expr, type);
+             return AsFloat(Value(slot), type);
+         }
+@@ -54,6 +61,7 @@ public sealed partial class HirBuilder
+         Node? hi = Input(call, ArgSlotKind.FloatReg, register * 4 + 1);
+         if (Eval(lo) is SHalf { High: false } l && hi != null && Eval(hi) is SHalf { High: true } h && ReferenceEquals(l.Whole, h.Whole))
+             return l.Whole;
++        if (hi != null && SignedLanes(lo, hi) is { } signed) return signed;
+         if (Eval(lo) is SVal { Expr: HConst { Value: int low } } && hi != null && Eval(hi) is SVal { Expr: HConst { Value: int high } })
+             return new HConst(BitConverter.Int64BitsToDouble((long)(uint)high << 32 | (uint)low), _double);
+         HExpr bits = CombineParts([new Part(0, 4, HalfBits(lo)), new Part(4, 4, hi != null ? HalfBits(hi) : new HConst(0, _int))], 8);
+diff --git a/src/Rewind.Analysis/Recover/HirBuilder.Values.cs b/src/Rewind.Analysis/Recover/HirBuilder.Values.cs
+index 96b88de..53bb5c1 100644
+--- a/src/Rewind.Analysis/Recover/HirBuilder.Values.cs
++++ b/src/Rewind.Analysis/Recover/HirBuilder.Values.cs
+@@ -267,7 +267,30 @@ public sealed partial class HirBuilder
+         return call is HCall ? call : null;
+     }
+ 
+-    private static readonly bool NoWideShifts = Environment.GetEnvironmentVariable("REWIND_NO_WIDE_SHIFTS") != null;
++    /// <summary>
++    /// A double in the two 32-bit lanes of a register, its top lane under the sign mask ("xorps x, m" with m
++    /// loaded once and used lane by lane): "-x" or "Abs(x)". Null when the lanes are not that.
++    /// </summary>
++    private HExpr? SignedLanes(Node lo, Node hi)
++    {
++        if (NoSignedLanes || hi.Op is not (Op.Xor or Op.And) || hi.In.Length != 2) return null;
++        Node top = hi.In[0], mask = hi.In[1];
++        if (!mask.IsConst) (top, mask) = (mask, top);
++        if (!mask.IsConst || top.IsConst) return null;
++        bool negate = hi.Op == Op.Xor && (uint)mask.UImm == 0x80000000u, absolute = hi.Op == Op.And && (uint)mask.UImm == 0x7FFFFFFFu;
++        if (!negate && !absolute) return null;
++        // (The bottom lane under the same mask's bottom half: nothing changed.)
++        if (lo.Op == hi.Op && lo.In.Length == 2 && lo.In[1].IsConst && !lo.In[0].IsConst && (uint)lo.In[1].UImm == (negate ? 0u : uint.MaxValue)) lo = lo.In[0];
++        if (Eval(lo) is not SHalf { High: false, Part: null } low || Eval(top) is not SHalf { High: true, Part: null } high ||
++            !SameValue(low.Whole, high.Whole) || !ReferenceEquals(low.Whole.Type, _double))
++            return null;
++        if (negate) return new HUnary(HUnaryOp.Neg, low.Whole) { Type = _double };
++        return MathCall("Abs", true, low.Whole) is HCall abs ? abs : null;
++    }
++
++    private static readonly bool NoSignedLanes = Environment.GetEnvironmentVariable("REWIND_NO_SIGNED_LANES") != null;
++
++    private static readonly bool NoWideShifts =Environment.GetEnvironmentVariable("REWIND_NO_WIDE_SHIFTS") != null;
+ 
+     private Sem BinarySem(Node n)
+     {
+diff --git a/src/Rewind.Analysis/Recover/HirBuilder.cs b/src/Rewind.Analysis/Recover/HirBuilder.cs
+index 04b8034..0cf85f9 100644
+--- a/src/Rewind.Analysis/Recover/HirBuilder.cs
++++ b/src/Rewind.Analysis/Recover/HirBuilder.cs
+@@ -1755,6 +1755,11 @@ public sealed partial class HirBuilder
+                     Emit(new HReturn(lo.Whole), ret.Addr);
+                     return;
+                 }
++                if (ret.In.Length == 2 && SignedLanes(ret.In[0], ret.In[1]) is { } signed)
++                {
++                    Emit(new HReturn(signed), ret.Addr);
++                    return;
++                }
+                 // The two halves come from different places: the double is whatever those 64 bits spell.
+                 HExpr bits = CombineParts([new Part(0, 4, HalfBits(ret.In[0])), new Part(4, 4, ret.In.Length > 1 ? HalfBits(ret.In[1]) : new HConst(0, _int))], 8);
+                 Emit(new HReturn(ValueFromBits(bits, _double, 8)), ret.Addr);
+diff --git a/src/Rewind.Analysis/Recover/Normalizer.cs b/src/Rewind.Analysis/Recover/Normalizer.cs
+index d40116f..0010ce6 100644
+--- a/src/Rewind.Analysis/Recover/Normalizer.cs
++++ b/src/Rewind.Analysis/Recover/Normalizer.cs
+@@ -629,6 +629,23 @@ public sealed partial class Normalizer(ProgramAnalysis program)
+                     changed = true;
+                     continue;
+                 }
++                // Two halves under one mask each are the whole under the mask made of both: "xorps x, m" on a
++                // double whose mask was loaded once (ahead of a loop) is a 32-bit operation per lane, with
++                // constants known only now. The whole, its halves put together, folds or merges as above.
++                if (n.Op == Op.Concat && !NoMaskedHalves && MaskedHalves(n) is var (op, wholeHigh, wholeLow, mask))
++                {
++                    _b.Current = b;
++                    _b.InsertIndex = i;
++                    _b.CurrentAddr = n.Addr;
++                    int count = b.Nodes.Count;
++                    Node masked = _b.Binary(op, _b.Concat(wholeHigh, wholeLow), _b.Const(VT.I64, (long)mask));
++                    _b.InsertIndex = -1;
++                    i += b.Nodes.Count - count;
++                    _replace[n] = masked;
++                    n.Dead = true;
++                    changed = true;
++                    continue;
++                }
+                 if (n.Op != Op.Trunc) continue;
+                 Node operand = Resolve(n.In[0]);
+                 if (operand.Op is not (Op.Or or Op.And or Op.Const)) continue;
+@@ -652,6 +669,67 @@ public sealed partial class Normalizer(ProgramAnalysis program)
+         return true;
+     }
+ 
++    private static readonly bool NoMaskedHalves = Environment.GetEnvironmentVariable("REWIND_NO_MASKED_HALVES") != null;
++
++    /// <summary>
++    /// A Concat whose top half is under a bitwise mask and whose bottom half is not (or is under the op's
++    /// identity, a constant known only now): the op, the two unmasked halves and the 64-bit mask. That is the
++    /// sign or magnitude of a double; two masked halves are two floats (a Vector2 negated), left as they are.
++    /// </summary>
++    private (Op Op, Node High, Node Low, ulong Mask)? MaskedHalves(Node concat)
++    {
++        Node high = Resolve(concat.In[0]), low = Resolve(concat.In[1]);
++        if (high.Op is not (Op.Xor or Op.And or Op.Or) || high.In.Length != 2 || high.Type != VT.I32 || low.Type != VT.I32 || low.IsConst) return null;
++        Node value = Resolve(high.In[0]), mask = Resolve(high.In[1]);
++        if (value.IsConst && !mask.IsConst) (value, mask) = (mask, value);
++        if (!mask.IsConst || value.IsConst) return null;
++        uint identity = high.Op == Op.And ? uint.MaxValue : 0u;
++        if (low.Op == high.Op && low.In.Length == 2)
++        {
++            Node a = Resolve(low.In[0]), b = Resolve(low.In[1]);
++            if (a.IsConst && !b.IsConst) (a, b) = (b, a);
++            if (b.IsConst && !a.IsConst)
++            {
++                if ((uint)b.UImm != identity) return null;
++                low = a;
++            }
++        }
++        // Only where the halves are those of a double: a struct of two floats with its second one negated
++        // looks the same.
++        if (!HalfOfDouble(value, []) && !HalfOfDouble(low, [])) return null;
++        return (high.Op, value, low, (mask.UImm & 0xFFFFFFFFUL) << 32 | identity);
++    }
++
++    /// <summary>Is this a half of the bits of a double: cut out of them, returned in the top lane, or merged from such halves (and constants)?</summary>
++    private bool HalfOfDouble(Node n, HashSet<Node> seen)
++    {
++        n = Resolve(n);
++        // (Met again: its answer is the one already being given - every part must be such a half.)
++        if (!seen.Add(n)) return true;
++        if (seen.Count > 64) return false;
++        switch (n.Op)
++        {
++            case Op.FToBits: return n.In[0].Type == VT.F64;
++            // The second lane of what a call returns in a vector register: only a double fills it.
++            case Op.Proj when n.Imm == CallResult.FloatLane1: return true;
++            case Op.Trunc: return HalfOfDouble(n.In[0], seen);
++            case Op.ShrU when n.In[1].IsConstValue(32): return HalfOfDouble(n.In[0], seen);
++            case Op.Phi:
++            {
++                bool any = false;
++                foreach (Node input in n.In)
++                {
++                    Node value = Resolve(input);
++                    if (value.IsConst || ReferenceEquals(value, n)) continue;
++                    if (!HalfOfDouble(value, seen)) return false;
++                    any = true;
++                }
++                return any;
++            }
++            default: return false;
++        }
++    }
++
+     private static readonly bool NoKnownZeros = Environment.GetEnvironmentVariable("REWIND_NO_KNOWN_ZEROS") != null;
+ 
+     /// <summary>

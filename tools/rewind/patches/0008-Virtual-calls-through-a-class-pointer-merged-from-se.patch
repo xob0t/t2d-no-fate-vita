@@ -1,0 +1,120 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xob0t <32616886+xob0t@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 05:06:46 +0300
+Subject: [PATCH 08/22] Virtual calls through a class pointer merged from
+ several ways in
+
+The compiler moves the read of an object's class pointer for a virtual call into
+the code before a point where several ways meet (each way reads the class and
+sets up its own arguments, one call follows), so the call takes its method from
+a merged value: it came out as "__call_indirect(__load8(m0 + off), ...)" with
+"ObjKlass value used as data". An address based on such a merge is now the
+class of the object when every way in read the class of the same object, or the
+class of the merged receiver when each way read the class of the object that
+another merged value is given on that way in; merges of such merges count too.
+The merged value itself is not read, so its copies go.
+
+What cannot be said about a value as the copy into a merged value (a class
+pointer is no data) is now held with the merged value rather than with the value:
+it counted before as soon as the value was used for real anywhere (the class's
+methods read through it), leaving a Note with no marker in the body.
+
+REWIND_NO_MERGED_KLASS and REWIND_NO_COPY_PROBLEMS_ON_PHI turn these off.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../Recover/HirBuilder.Values.cs              | 37 ++++++++++++++++++-
+ src/Rewind.Analysis/Recover/HirBuilder.cs     | 11 +++++-
+ 2 files changed, 46 insertions(+), 2 deletions(-)
+
+diff --git a/src/Rewind.Analysis/Recover/HirBuilder.Values.cs b/src/Rewind.Analysis/Recover/HirBuilder.Values.cs
+index 20663d5..9a6175f 100644
+--- a/src/Rewind.Analysis/Recover/HirBuilder.Values.cs
++++ b/src/Rewind.Analysis/Recover/HirBuilder.Values.cs
+@@ -960,7 +960,7 @@ public sealed partial class HirBuilder
+         foreach (var (node, scale) in terms)
+         {
+             if (scale != 1) continue;
+-            Sem s = Eval(node);
++            Sem s = node.Op == Op.Phi && MergedObjKlass(node) is { } merged ? merged : Eval(node);
+             if (!IsPointerLike(s) && !(s is SVal { Type: { } wrapper } && IsReferenceWrapper(wrapper))) continue;
+             baseNode = node;
+             baseSem = s;
+@@ -1016,6 +1016,41 @@ public sealed partial class HirBuilder
+         return sum == null ? parts : new AddressParts(baseNode, baseSem, offset, sum, unit);
+     }
+ 
++    private static readonly bool NoMergedKlass = Environment.GetEnvironmentVariable("REWIND_NO_MERGED_KLASS") != null;
++
++    /// <summary>
++    /// The class of an object, merged from ways in that each read it: the compiler moves the read of the class
++    /// pointer of a virtual call into the code before the point where several ways meet, and the call after it
++    /// takes its method from the merged pointer. Where every way in read the class of the same object, it is
++    /// that object's class; where each read the class of the object another merged value is given on the same
++    /// way in (the receiver, merged alongside), it is the class of that merged value. Only ways in already
++    /// translated are looked at; the merged value itself is not read (its copies go, see SettlePhis). Ways in
++    /// that met before (a merge of such merges) count as one.
++    /// </summary>
++    private SObjKlass? MergedObjKlass(Node phi, int depth = 0)
++    {
++        if (NoMergedKlass || phi.Block == null || phi.In.Length < 2 || depth > 4) return null;
++        var objects = new Node[phi.In.Length];
++        for (int i = 0; i < phi.In.Length; i++)
++        {
++            Node input = phi.In[i];
++            // (A way in that is itself such a merge: ways that met before this point.)
++            SObjKlass? klass = input.Op == Op.Phi ? MergedObjKlass(input, depth + 1)
++                : _sem.TryGetValue(input, out Sem? s) ? s as SObjKlass : null;
++            if (klass == null) return null;
++            objects[i] = klass.Object;
++        }
++        if (objects.All(o => ReferenceEquals(o, objects[0]))) return new SObjKlass(objects[0]);
++        foreach (Node other in phi.Block.Phis)
++        {
++            if (ReferenceEquals(other, phi) || other.Dead || other.In.Length != objects.Length || other.Type != VT.I64) continue;
++            bool same = true;
++            for (int i = 0; i < objects.Length && same; i++) same = ReferenceEquals(other.In[i], objects[i]);
++            if (same) return new SObjKlass(other);
++        }
++        return null;
++    }
++
+     private static long Gcd(long a, long b)
+     {
+         while (b != 0) (a, b) = (b, a % b);
+diff --git a/src/Rewind.Analysis/Recover/HirBuilder.cs b/src/Rewind.Analysis/Recover/HirBuilder.cs
+index 9ea4747..f499623 100644
+--- a/src/Rewind.Analysis/Recover/HirBuilder.cs
++++ b/src/Rewind.Analysis/Recover/HirBuilder.cs
+@@ -592,7 +592,10 @@ public sealed partial class HirBuilder
+             while (work.Count > 0)
+             {
+                 Node phi = work.Dequeue();
+-                if (!settled.Add(phi) || !_phiInputs.TryGetValue(phi, out List<Node>? inputs)) continue;
++                if (!settled.Add(phi)) continue;
++                // (What its copies could not say counts now: see PhiCopies.)
++                Release(phi);
++                if (!_phiInputs.TryGetValue(phi, out List<Node>? inputs)) continue;
+                 foreach (Node input in inputs)
+                 {
+                     if (input.Op == Op.Phi) _phiRead.Add(input);
+@@ -1237,6 +1240,10 @@ public sealed partial class HirBuilder
+             {
+                 s = Eval(input);
+                 if (s is SJunk) continue;
++                // What cannot be said about the value as the merged value's copy (a class pointer is no data) is
++                // held with the merged value: it counts when that is read, not when the value itself is used
++                // for what it is (the class's methods read through it, the merge given back to each way in).
++                if (!NoCopyProblemsOnPhi) _peekSubject = phi;
+                 value = Value(input);
+             }
+             finally
+@@ -1291,6 +1298,8 @@ public sealed partial class HirBuilder
+         return ReferenceEquals(to, from.Succs[cond.Op == Op.CmpEq ? 0 : 1]);
+     }
+ 
++    private static readonly bool NoCopyProblemsOnPhi = Environment.GetEnvironmentVariable("REWIND_NO_COPY_PROBLEMS_ON_PHI") != null;
++
+     private readonly Dictionary<HVar, Node> _phiOfVar = [];
+     /// <summary>The nearest common type of the references each merged value was given in this build.</summary>
+     private readonly Dictionary<Node, TypeSig> _phiJoins = [];
