@@ -321,6 +321,35 @@ Patch 0033 fixes issue 30: a direct call changes only the volatile registers its
 Three rules are retired, each method's new IL checked against what the rule made: `Sprites.addFromJSON` (`Barriers.cs`; the elevators' `type = 0` now in their recovered constructors), `Platform.doPlatformCheck` (`Barriers.cs`; `other.y = V4 - 1.0`) and `GameObject.overCover` (`Calls.cs`; `this.cover = V5`).
 `SaveSettings.loadSettings` (`Saves.cs`) was re-pinned: a temporary of Rewind's in its marker text went from `e21` to `e31`, and the exception is still V6.
 
+### The later levels and the menus after them
+
+Written on 2026-11-19 from the native code as above, for the methods on the way through the arcade and story levels, game over and the extras.
+Each commit's message has the details; by rule file:
+
+| Rule file | Methods | The repair |
+| --- | --- | --- |
+| `Highscores.cs` | `HighscoreTable.update`, `draw` | popped vtable reads; the table's rows through the `drawString` invoker. The 7 sites left are the Steam leaderboard rows, which the port never draws |
+| `EndScreen.cs`, `Menus.cs` | `EndScreen.draw`, `LevelSelect.draw` | the inlined `thumbnails.Length` becomes `ldlen`; the rank's text through the slot invoker 0x180002F90; popped vtable reads |
+| `Bosses.cs` | `DesertBoss.changeState`, `TerminatorBob.changeState` | the jump point from the jump bounds the compiler merged into one load at `this` plus a per-path offset; each load becomes the field its offset names |
+| `Bosses.cs` | `Biker..ctor`, `BikerBarPatron..ctor` | merged `NUM_FRAMES_PER_ANIM` initializers get their own fields back |
+| `Bosses.cs` | `FW3Boss.update`, `hit`, `FW3Boss2ndPhase.update`, `HKBomber.shoot`, `draw` | fields off untyped elements (the legs' hp and age, a platform's y, the turrets' targets); the older leg's `changeState(9)` through slot 14, each turret's `draw()` through slot 29 |
+| `Levels.cs` | `TruckChase.drawForeground`, `update`, `Truck.update`, `FreewayChase.update`, `PoliceHelicopter.start`, `TankerChase.setupScene`, `CyberdyneHQ.draw` | indexed field access by a strip's parity; `SCROLL_TOP` or `SCROLL_BOTTOM` by a path's offset; fields off untyped elements and locals; the always-passing inlined array-store check branches to the store; the HQ mini-game's lines centred by the wider |
+| `Invokers.cs` | `Orderly.update`, `T1000SteelMill.update`, `DialogBox.draw`, `Demo.draw`, `CyberdyneHQ.draw` | `Utils.rand.Next`, `changeImage`, `changeState` and `drawString` through the generic virtual and slot invokers |
+| `Barriers.cs` | `SarahVan.update` | a write barrier whose card is marked with an atomic OR |
+| `Scripts.cs` | `TerminatorBob`'s silverfish count, `PoliceCarWreck.hit`'s callback, `CyberdyneHQOutro.draw` | fields of the sprite each callback gets, and `visible = true`; a popped vtable read |
+| `HaxeRuntime.cs`, `Menus.cs`, `Levels.cs` | `Std.parseInt`, `Credits.draw`, `Database.draw`, `MusicPlayer.update`, `ArcadeEnding.drawBackground` | the string's second character (the `0x` test) and the marker after IL2CPP's IndexOutOfRange throw; string compares by the family; popped vtable reads; `Runtime.toDouble` inlined; background strips by parity, as `TruckChase.drawForeground` |
+
+With them the code stage leaves 6 gap methods with 147 marker sites:
+
+| Method | Sites | Why it is left |
+| --- | ---: | --- |
+| `SaveStats.saveStats` | 119 | the Xbox and UWP binary-writer save modes; this build's is `SAVE_MODE_UNITY_BINARY` |
+| `InifiniteOrBossRushSummary.draw` | 9 | the summary after infinite mode and boss rush |
+| `Runtime.eq` | 9 | the Decimal comparison, which the game's Haxe values never take |
+| `HighscoreTable.draw` | 7 | the Steam leaderboard rows |
+| `Database.start` | 2 | |
+| `MusicPlayer.draw` | 1 | |
+
 ## Prototype results
 
 ### On fixed60, the current rules

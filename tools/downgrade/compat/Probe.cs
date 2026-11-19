@@ -32,8 +32,8 @@ using UnityEngine.SceneManagement;
 //                                    the result or the exception: <path to an object or a type>::<method>[::<arg>...],
 //                                    each arg an int, @<peek path>, or a string
 //   -t2d-set <App>:<path>=<v>[,...]  a static field set by reflection when the game enters that App (before its
-//                                    start()), or at the first frame for App *: Namespace.Type.field, an int, bool or
-//                                    double. For tests: Game.levelNumber when a MissionBriefing starts picks the level
+//                                    start()), or at the first frame for App *: Namespace.Type.field, an int, bool,
+//                                    double or int[] (values joined with |). For tests: Game.levelNumber when a MissionBriefing starts picks the level
 //                                    it briefs; Game.infiniteHealth keeps a scripted player alive.
 //   -t2d-atlas-sync                  the atlas prefetches with Resources.Load, not LoadAsync (Atlas.PrefetchAsync)
 // A screenshot is the frame read back at its end and saved as a PNG (on the PS Vita 960x544, about 0.6 s of stall,
@@ -230,7 +230,9 @@ namespace T2DCompat
                     FieldInfo field = type == null ? null : type.GetField(path.Substring(dot + 1), BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
                     if (field == null) throw new ArgumentException("no static field " + path);
                     object value = field.FieldType == typeof(bool) ? (object)bool.Parse(text)
-                        : field.FieldType == typeof(double) ? (object)double.Parse(text, Inv) : (object)int.Parse(text, Inv);
+                        : field.FieldType == typeof(double) ? (object)double.Parse(text, Inv)
+                        : field.FieldType == typeof(int[]) ? (object)Array.ConvertAll(text.Split('|'), x => int.Parse(x, Inv))
+                        : (object)int.Parse(text, Inv);
                     field.SetValue(null, value);
                     Debug.Log("T2D_SET " + path + " = " + text + " entering " + app);
                 }
