@@ -2,14 +2,16 @@
 // of a TSV, with the member (method, constructor, accessor, field) and type it is in.
 //
 //   RoslynDiag <file.rsp> <out.tsv> [--dep <dep.rsp>]... [--depdll <dll>]... [--stub-errors <stubbed.tsv>]
-//              [--emit <out.dll>]
+//              [--emit <out.dll>] [--stub-marker 1]
 //
 // --dep compiles another response file (a dependency's source) and references it as a compilation,
 // so its errors don't matter and no DLL of it is needed; --depdll references a built one.
 // --stub-errors replaces the body of every member that has an error with `{ throw null; }` (and a
 // constructor initializer's arguments with `default`), recompiles, repeats until no errors are left
 // in bodies, lists the stubbed members in <stubbed.tsv>, and writes the diagnostics left after that.
-// For measuring only: it lets the rest of the assembly emit.
+// For measuring only: it lets the rest of the assembly emit. With --stub-marker 1 a stubbed body is
+// `throw new System.NotSupportedException("COMPILE_STUB <type>.<member>")` instead, so a test player's
+// log names the stubbed member it reached.
 //
 // csc stops after parse and declaration errors before it binds method bodies; GetDiagnostics() does
 // not, so the TSV holds the errors csc would show in later rounds as well.
@@ -30,6 +32,7 @@ if (args.Length < 2)
 string rsp = Path.GetFullPath(args[0]);
 string outTsv = args[1];
 string? emit = null, stubOut = null;
+bool stubMarker = false;
 var deps = new List<string>();
 var depDlls = new List<string>();
 for (int i = 2; i + 1 < args.Length; i += 2)
@@ -38,6 +41,7 @@ for (int i = 2; i + 1 < args.Length; i += 2)
     else if (args[i] == "--dep") deps.Add(Path.GetFullPath(args[i + 1]));
     else if (args[i] == "--depdll") depDlls.Add(Path.GetFullPath(args[i + 1]));
     else if (args[i] == "--stub-errors") stubOut = args[i + 1];
+    else if (args[i] == "--stub-marker") stubMarker = args[i + 1] == "1";
     else { Console.Error.WriteLine("unknown option " + args[i]); return 2; }
 }
 
@@ -106,9 +110,16 @@ if (stubOut != null)
             }
             targets.RemoveWhere(t => targets.Any(o => o != t && o.Span.Contains(t.Span) && o is not ConstructorInitializerSyntax && t is not ConstructorInitializerSyntax));
             if (targets.Count == 0) continue;
-            var throwBody = SyntaxFactory.Block(SyntaxFactory.ParseStatement("throw null;"));
+            var throwNull = SyntaxFactory.Block(SyntaxFactory.ParseStatement("throw null;"));
             var newRoot = root.ReplaceNodes(targets, (orig, cur) =>
             {
+                var throwBody = throwNull;
+                if (stubMarker && orig is not ConstructorInitializerSyntax && orig is not IdentifierNameSyntax)
+                {
+                    string name = MemberOf(orig, out var ownerType, out _);
+                    throwBody = SyntaxFactory.Block(SyntaxFactory.ParseStatement(
+                        "throw new global::System.NotSupportedException(\"COMPILE_STUB " + (ownerType + "." + name).Replace("\\", "\\\\").Replace("\"", "\\\"") + "\");"));
+                }
                 switch (cur)
                 {
                     case ConstructorInitializerSyntax ci:
