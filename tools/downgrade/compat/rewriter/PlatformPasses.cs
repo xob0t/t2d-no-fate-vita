@@ -4,16 +4,15 @@ using System.Linq;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
 
-// The platform layer's pass: applies PlatformRules.cs to the game's assembly, so its store, language, sound and
-// startup code runs offline on T2DCompat (compat/Store.cs, Sounds.cs). InControl needs no pass: the rewriter's type
-// retargeting sends it to compat/InControl.cs once the roots leave InControl out ("-InControl").
+// The platform layer's pass: applies PlatformRules.cs to the game's assembly, so its store, language, sound, display
+// and startup code runs offline on T2DCompat (compat/Store.cs, Sounds.cs, Display.cs), and no method of it calls into
+// Steamworks. InControl needs no pass: the rewriter's type retargeting sends it to compat/InControl.cs, since the roots
+// leave InControl out ("-InControl"), and Steamworks' types left in signatures go to compat/Steamworks.cs ("-Steamworks").
 //
-// Part of the assembly rewriter (DowngradeAssemblies, a partial class across files): add this file and
-// PlatformRules.cs to pipeline.REWRITER_SOURCES, and
-//     new Pass("platform", Scope.Game, PlatformPatches),
-// to DowngradeAssemblies.Passes, after the type retargeting's redirect pass and before ListRewindGaps (docs/platform.md).
-// It uses the rewriter's compat, problems, Count, AllTypes and CompatMethod, and nothing else of it; its own helpers
-// are named Platform*.
+// Part of the assembly rewriter (DowngradeAssemblies, a partial class across files): pipeline.REWRITER_SOURCES lists
+// this file and PlatformRules.cs, and DowngradeAssemblies.Rewrite calls PlatformPatches on the game's assembly before
+// its type retargeting (the rules name Steamworks' members by their own names). It uses the rewriter's compat,
+// problems, Count, AllTypes and CompatMethod, and nothing else of it; its own helpers are named Platform*.
 //
 // Every rule counts its sites (Count): one that matched nothing in the game's assembly is a NO MATCH and fails the run.
 // A rule that finds what it expects in a shape it can't change (a sequence a branch lands inside, a cut whose call isn't
@@ -26,7 +25,7 @@ partial class DowngradeAssemblies
         if (module.GetType("com.twissgreen.unity.UnityMain") == null) return 0;
         // Cuts look for the Steam call that Calls redirects, so they run first.
         return PlatformCuts(module) + PlatformStubs(module) + PlatformSequences(module) + PlatformForwards(module) +
-               PlatformSwitches(module) + PlatformSoundLoader(module) + PlatformCalls(module);
+               PlatformStores(module) + PlatformSoundLoader(module) + PlatformCalls(module);
     }
 
     // ---- the rules ----
@@ -149,10 +148,10 @@ partial class DowngradeAssemblies
         return total;
     }
 
-    static int PlatformSwitches(ModuleDefinition module)
+    static int PlatformStores(ModuleDefinition module)
     {
         int total = 0;
-        foreach (string[] rule in PlatformRules.Switches)
+        foreach (string[] rule in PlatformRules.Stores)
         {
             MethodDefinition method = PlatformMethod(module, rule[0]);
             int count = 0;
@@ -161,10 +160,11 @@ partial class DowngradeAssemblies
                 var stores = new List<KeyValuePair<FieldDefinition, MethodReference>>();
                 for (int i = 2; i + 1 < rule.Length; i += 2)
                 {
-                    FieldDefinition field = method.DeclaringType.Fields.FirstOrDefault(f => f.Name == rule[i] && f.IsStatic &&
-                        f.FieldType.MetadataType == MetadataType.Boolean);
-                    if (field == null) problems.Add(module.Name + ": platform switches " + rule[0] + ": no static bool " + rule[i]);
-                    else stores.Add(new KeyValuePair<FieldDefinition, MethodReference>(field, CompatMethod(module, rule[1], rule[i + 1])));
+                    FieldDefinition field = method.DeclaringType.Fields.FirstOrDefault(f => f.Name == rule[i] && f.IsStatic);
+                    MethodReference getter = CompatMethod(module, rule[1], rule[i + 1]);
+                    if (field == null || field.FieldType.FullName != getter.ReturnType.FullName || getter.Parameters.Count != 0)
+                        problems.Add(module.Name + ": platform stores " + rule[0] + ": no static " + rule[i] + " of T2DCompat." + rule[1] + "." + rule[i + 1] + "'s type");
+                    else stores.Add(new KeyValuePair<FieldDefinition, MethodReference>(field, getter));
                 }
                 if (stores.Count == (rule.Length - 2) / 2 && method.ReturnType.MetadataType == MetadataType.Void && method.Parameters.Count == 0)
                 {
@@ -178,7 +178,7 @@ partial class DowngradeAssemblies
                     count = stores.Count;
                 }
             }
-            Count("platform switches " + rule[0], count);
+            Count("platform stores " + rule[0], count);
             total += count;
         }
         return total;

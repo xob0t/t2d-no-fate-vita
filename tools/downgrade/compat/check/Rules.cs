@@ -11,10 +11,11 @@ using Mono.Cecil.Cil;
 //      T2DCompat method a rule names is in T2DCompat.dll, with the callee's parameters and result where it replaces one;
 //   2. every InControl type and member Assembly-CSharp names has its T2DCompat.InControl_* counterpart, of the same
 //      signature once InControl's types are renamed as the rewriter renames them;
-//   3. the platform pass (PlatformPasses.cs) runs on a copy of Assembly-CSharp, with InControl's types retargeted as the
-//      rewriter does: no problems, no rule without sites, every T2DCompat member the result names resolves, every
+//   3. the platform pass (PlatformPasses.cs) runs on a copy of Assembly-CSharp, with InControl's and Steamworks' types
+//      retargeted as the rewriter does once the pipeline leaves both out: no problems, no rule without sites, every T2DCompat member the result names resolves, every
 //      method the pass changed passes a stack check, and none of them has a Rewind marker left;
-//   4. the calls into Steamworks left in the game's code, with the methods they're in.
+//   and the references to Steamworks left in the game's code, with the methods they're in (there must be none: those
+//      left after the pass are field and parameter types, which step 3 resolves against compat/Steamworks.cs).
 // Writes the patched copy to <out dir>/Assembly-CSharp.dll (under work/, never committed).
 //
 //   PlatformCheck.exe rules <Rewind's assemblies dir> <T2DCompat.dll> <out dir>
@@ -55,8 +56,6 @@ static partial class PlatformCheck
         CheckInControl(game);
         Console.WriteLine("== 3. the platform pass");
         ApplyAndVerify(game, compatModule, output);
-        Console.WriteLine("== 4. calls into Steamworks left in the game's code");
-        ListSteamCalls(game);
         Console.WriteLine(failures == 0 ? "OK" : failures + " failures");
         return failures == 0 ? 0 : 1;
     }
@@ -155,18 +154,19 @@ static partial class PlatformCheck
             if (target == null) Fail("forward " + rule[0] + ": no " + rule[1] + " " + Signature(method));
             else Console.WriteLine("  forward " + rule[0] + " -> " + rule[1] + (Markers(target) > 0 ? " (which has Rewind markers)" : ""));
         }
-        foreach (string[] rule in PlatformRules.Switches)
+        foreach (string[] rule in PlatformRules.Stores)
         {
             MethodDefinition method = GameMethod(game, rule[0]);
             if (method == null) continue;
             for (int i = 2; i + 1 < rule.Length; i += 2)
             {
-                FieldDefinition field = method.DeclaringType.Fields.FirstOrDefault(f => f.Name == rule[i]);
-                if (field == null || !field.IsStatic || field.FieldType.FullName != "System.Boolean") Fail("switches " + rule[0] + ": no static bool " + rule[i]);
+                FieldDefinition field = method.DeclaringType.Fields.FirstOrDefault(f => f.Name == rule[i] && f.IsStatic);
                 MethodDefinition getter = CompatMethodDefinition(rule[1], rule[i + 1]);
-                if (getter != null && Signature(getter) != "System.Boolean()") Fail("switches: T2DCompat." + rule[1] + "." + rule[i + 1] + " is " + Signature(getter));
+                if (field == null) Fail("stores " + rule[0] + ": no static " + rule[i]);
+                else if (getter != null && Signature(getter) != field.FieldType.FullName + "()")
+                    Fail("stores: T2DCompat." + rule[1] + "." + rule[i + 1] + " is " + Signature(getter) + ", " + rule[i] + " " + field.FieldType.FullName);
             }
-            Console.WriteLine("  switches " + rule[0] + ": " + (rule.Length - 2) / 2 + " fields");
+            Console.WriteLine("  stores " + rule[0] + ": " + (rule.Length - 2) / 2 + " fields");
         }
         foreach (string[] rule in PlatformRules.Cuts)
         {
@@ -206,14 +206,19 @@ static partial class PlatformCheck
 
     // ---- 2 ----
 
-    static bool FromInControl(TypeReference type)
+    // Whether a type is one of a left-out library's (PlatformRules.ReplacedLibraries), or only InControl's.
+    static string Library(TypeReference type)
     {
         while (type is TypeSpecification) type = ((TypeSpecification)type).ElementType;
-        if (type.IsGenericParameter) return false;
+        if (type.IsGenericParameter) return null;
         while (type.DeclaringType != null) type = type.DeclaringType;
         var scope = type.Scope as AssemblyNameReference;
-        return scope != null && scope.Name == PlatformRules.ReplacedLibrary;
+        return scope != null && PlatformRules.ReplacedLibraries.Contains(scope.Name) ? scope.Name : null;
     }
+
+    static bool FromReplaced(TypeReference type) { return Library(type) != null; }
+
+    static bool FromInControl(TypeReference type) { return Library(type) == PlatformRules.ReplacedApi; }
 
     // A type's full name as the rewriter's retargeting leaves it: InControl.X is T2DCompat.InControl_X.
     static string Renamed(TypeReference type)
@@ -223,7 +228,7 @@ static partial class PlatformCheck
         if (type is ArrayType) return Renamed(((ArrayType)type).ElementType) + "[]";
         if (type is ByReferenceType) return Renamed(((ByReferenceType)type).ElementType) + "&";
         if (type.IsGenericParameter) return type.FullName;
-        if (FromInControl(type) && type.DeclaringType == null) return "T2DCompat." + PlatformRules.ReplacementPrefix + type.Name;
+        if (FromReplaced(type) && type.DeclaringType == null) return "T2DCompat." + type.FullName.Replace('.', '_');
         return type.FullName;
     }
 
@@ -274,20 +279,8 @@ static partial class PlatformCheck
 
     static void ApplyAndVerify(ModuleDefinition game, ModuleDefinition compatModule, string output)
     {
-        // The rewriter's retargeting, for InControl only: its types to T2DCompat's, by the naming convention.
-        var compatReference = new AssemblyNameReference(compatModule.Assembly.Name.Name, compatModule.Assembly.Name.Version);
-        game.AssemblyReferences.Add(compatReference);
-        int retargeted = 0;
-        foreach (TypeReference type in game.GetTypeReferences().ToArray())
-        {
-            if (type.DeclaringType != null || !FromInControl(type)) continue;
-            type.Namespace = "T2DCompat";
-            type.Name = PlatformRules.ReplacementPrefix + type.Name;
-            type.Scope = compatReference;
-            retargeted++;
-        }
-        Console.WriteLine("  retargeted " + retargeted + " InControl types");
-
+        // As the rewriter: the platform pass first, on the game's own names, then the retargeting of the left-out
+        // libraries' types to T2DCompat's by the naming convention.
         var before = new Dictionary<MethodDefinition, string>();
         foreach (TypeDefinition type in AllTypes(game.Types))
             foreach (MethodDefinition method in type.Methods) before[method] = BodyKey(method);
@@ -310,14 +303,40 @@ static partial class PlatformCheck
             if (markers > 0) Console.WriteLine("    " + method.FullName + ": " + markers + " Rewind markers left (other gaps of the method)");
         }
 
-        // Every T2DCompat type and member the module names now resolves.
-        int resolved = 0;
-        foreach (TypeReference type in game.GetTypeReferences().Where(t => t.Scope == compatReference || (t.Scope is AssemblyNameReference && ((AssemblyNameReference)t.Scope).Name == compatReference.Name)))
+        var compatReference = new AssemblyNameReference(compatModule.Assembly.Name.Name, compatModule.Assembly.Name.Version);
+        game.AssemblyReferences.Add(compatReference);
+        int retargeted = 0;
+        foreach (TypeReference type in game.GetTypeReferences().ToArray())
         {
+            if (type.DeclaringType != null || !FromReplaced(type)) continue;
+            if (!DowngradeAssemblies.compat.ContainsKey(Renamed(type))) Fail("the retargeting finds no " + Renamed(type) + " for " + type.FullName);
+            type.Name = type.FullName.Replace('.', '_');
+            type.Namespace = "T2DCompat";
+            type.Scope = compatReference;
+            retargeted++;
+        }
+        Console.WriteLine("  retargeted " + retargeted + " InControl and Steamworks types");
+        string written = Path.Combine(output, PlatformRules.GameAssembly + ".dll");
+        game.Write(written);
+        Console.WriteLine("  wrote " + written);
+
+        // The written file, read again: its type references are what the pass and the retargeting left (a read
+        // module's list is the file's). Every one of a left-out library or T2DCompat resolves, and so does every member.
+        var resolver = (DefaultAssemblyResolver)game.AssemblyResolver;
+        ModuleDefinition patched = ModuleDefinition.ReadModule(written, new ReaderParameters { AssemblyResolver = resolver });
+        int resolved = 0;
+        foreach (TypeReference type in patched.GetTypeReferences())
+        {
+            TypeReference top = type;
+            while (top.DeclaringType != null) top = top.DeclaringType;
+            var scope = top.Scope as AssemblyNameReference;
+            if (scope == null) continue;
+            if (PlatformRules.ReplacedLibraries.Contains(scope.Name)) { Fail("still names " + scope.Name + ": " + type.FullName); continue; }
+            if (scope.Name != compatReference.Name) continue;
             if (type.Resolve() == null) Fail("doesn't resolve: " + type.FullName);
             resolved++;
         }
-        foreach (MemberReference member in game.GetMemberReferences())
+        foreach (MemberReference member in patched.GetMemberReferences())
         {
             TypeReference owner = member.DeclaringType;
             while (owner is TypeSpecification) owner = ((TypeSpecification)owner).ElementType;
@@ -328,33 +347,27 @@ static partial class PlatformCheck
             resolved++;
         }
         Console.WriteLine("  " + resolved + " T2DCompat types and members named by the patched assembly resolve");
-        game.Write(Path.Combine(output, PlatformRules.GameAssembly + ".dll"));
-        Console.WriteLine("  wrote " + Path.Combine(output, PlatformRules.GameAssembly + ".dll"));
+        ListSteamCalls(patched);
     }
 
     // ---- 4 ----
 
     static void ListSteamCalls(ModuleDefinition game)
     {
-        var users = new SortedDictionary<string, int>(StringComparer.Ordinal);
-        foreach (TypeDefinition type in AllTypes(game.Types))
-            foreach (MethodDefinition method in type.Methods.Where(m => m.HasBody))
-                foreach (Instruction instruction in method.Body.Instructions)
-                {
-                    var member = instruction.Operand as MemberReference;
-                    if (member == null || member.DeclaringType == null) continue;
-                    TypeReference owner = member.DeclaringType;
-                    while (owner is TypeSpecification) owner = ((TypeSpecification)owner).ElementType;
-                    while (owner.DeclaringType != null) owner = owner.DeclaringType;
-                    var scope = owner.Scope as AssemblyNameReference;
-                    if (scope == null || scope.Name != "Steamworks") continue;
-                    string key = type.FullName + "::" + method.Name;
-                    int n;
-                    users.TryGetValue(key, out n);
-                    users[key] = n + 1;
-                }
-        foreach (KeyValuePair<string, int> user in users) Console.WriteLine("  " + user.Key + ": " + user.Value);
-        if (users.Count == 0) Console.WriteLine("  none");
+        int members = 0;
+        foreach (MemberReference member in game.GetMemberReferences())
+        {
+            TypeReference owner = member.DeclaringType;
+            while (owner is TypeSpecification) owner = ((TypeSpecification)owner).ElementType;
+            if (owner.Name.StartsWith("Steamworks_", StringComparison.Ordinal))
+            {
+                Fail("a member of a Steamworks type is still used: " + member.FullName);
+                members++;
+            }
+        }
+        string[] types = game.GetTypeReferences().Where(t => t.Name.StartsWith("Steamworks_", StringComparison.Ordinal))
+            .Select(t => t.FullName).OrderBy(n => n, StringComparer.Ordinal).ToArray();
+        Console.WriteLine("  " + members + " members; " + types.Length + " types, as field, parameter or attribute types: " + string.Join(", ", types));
     }
 
     // ---- a stack check, as the rewriter's CheckStacks: depths agree where paths meet, no underflow, a ret finds its

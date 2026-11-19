@@ -33,6 +33,10 @@ public static class PlatformRules
         new[] { "com.twissgreen.unity.UnityMain", "dlcXB1LoadAssetBundle" },
         // ISteamUtils.IsSteamRunningOnSteamDeck (a Rewind gap): STEAM_DECK stays false.
         new[] { "com.twissgreen.engine.utils.Utils", "setSteamDeck" },
+        // PlayerPrefs arrays for the PlayerPrefs save mode (SaveData.SAVE_MODE_UNITY_PLAYER_PREFS), which this build never
+        // uses: SaveData.saveMethod() is SAVE_MODE_UNITY_BINARY. Rewind gaps (array allocations) and an inlined string
+        // index (String._firstChar), on which UnityLinker stopped.
+        new[] { "com.twissgreen.unity.PlayerPrefsX", "*" },
     };
 
     // Calls in every method of the game's assembly that go to a T2DCompat method of the same parameters and result:
@@ -65,9 +69,9 @@ public static class PlatformRules
         new[] { "com.twissgreen.engine.utils.Utils::systemLanguageSteam", "systemLanguageStandalone" },
     };
 
-    // Methods whose bodies become stores of the type's static bool fields from T2DCompat getters:
+    // Methods whose bodies become stores of the type's static fields from T2DCompat getters of the fields' types:
     // { method, T2DCompat class, field, getter, field, getter, ... }.
-    public static readonly string[][] Switches =
+    public static readonly string[][] Stores =
     {
         // Utils.initUtils: the platform switches the Steam build sets (STEAM_BUILD true, STEAM_DECK from Steam, a Rewind
         // gap), from the player instead (T2DCompat BuildFlags). The PS4/PS5/Xbox switches it sets only on those consoles
@@ -78,6 +82,11 @@ public static class PlatformRules
             "CONSOLE_BUILD", "ConsoleBuild", "STEAM_BUILD", "SteamBuild", "STEAM_DECK", "SteamDeck",
             "FULL_SCREEN", "FullScreen", "NO_EXIT", "NoExit", "VIBRATION_BUILD", "Vibration", "CIRCLE_ENTER", "CircleEnter",
         },
+        // UnityMain.OnPreRender: crt_4hscale = RenderTexture.GetTemporary(398, 896, 0, ARGB32, Default), the CRT filter's
+        // target, which IL2CPP inlined into Unity 6's RenderTextureDescriptor internals (graphics formats, mipCount's
+        // backing field), on which UnityLinker stopped; and a Rewind gap (the static field's write barrier). T2DCompat
+        // Display.CrtTarget makes the same texture through 2018.2's GetTemporary.
+        new[] { "com.twissgreen.unity.UnityMain::OnPreRender", "Display", "crt_4hscale", "CrtTarget" },
     };
 
     // Methods that return right after a call whose result they discard: what follows is Steam-only (an inlined
@@ -99,8 +108,12 @@ public static class PlatformRules
         "Sounds", "Clip",
     };
 
-    // Libraries the game's InControl calls go to: the rewriter leaves the InControl assembly out (its root "-InControl"),
-    // and its naming convention sends InControl.X to T2DCompat.InControl_X (compat/InControl.cs).
-    public const string ReplacedLibrary = "InControl";
-    public const string ReplacementPrefix = "InControl_";
+    // Libraries the pipeline leaves out (their roots "-InControl", "-Steamworks"): the rewriter's naming convention sends
+    // their types to T2DCompat, Library.X to T2DCompat.Library_X: InControl's to compat/InControl.cs (the API the game
+    // uses, over Unity's Input), Steamworks.NET's to compat/Steamworks.cs (the types left once this pass has run).
+    public static readonly string[] ReplacedLibraries = { "InControl", "Steamworks" };
+
+    // The library whose members the game calls through T2DCompat without a rule (InControl's), as against Steamworks,
+    // whose calls the rules above remove.
+    public const string ReplacedApi = "InControl";
 }

@@ -330,6 +330,10 @@ partial class DowngradeAssemblies
         var sizes = new Dictionary<MethodDefinition, long>();
         foreach (TypeDefinition type in AllTypes(module.Types))
             foreach (MethodDefinition method in type.Methods.Where(m => m.HasBody)) sizes[method] = BodySize(method.Body);
+        // The platform layer (compat/rewriter/PlatformPasses.cs), before the retargeting: its rules name the game's
+        // calls into Steamworks by their own names, and take them out before Steamworks' types go to T2DCompat.
+        int platform = IsGameAssembly(module) ? PlatformPatches(module) : 0;
+        Count("pass PlatformPatches", platform);
         // Before the retargeting: it fills strippedTypes, whose references the loop leaves alone.
         int stripped = StripAttributes(module) + StripSecurityDeclarations(module);
         int retargeted = 0, shimmedTypes = 0, replacedGameTypes = 0;
@@ -395,7 +399,7 @@ partial class DowngradeAssemblies
         int outOfRange;
         int widened = WidenChangedBodies(module, sizes, out outOfRange);
         CheckStacks(module);
-        return "retargeted=" + retargeted + " shimTypes=" + shimmedTypes + " attributeTypes=" + attributeTypes +
+        return "platform=" + platform + " retargeted=" + retargeted + " shimTypes=" + shimmedTypes + " attributeTypes=" + attributeTypes +
                " strippedAttributes=" + stripped +
                " widenedBodies=" + widened + " (short branches out of range in " + outOfRange + ")" +
                " removedReferences=" + removed + string.Concat(groups.Where(changed.Contains).Select(g => lines[g]));
