@@ -306,7 +306,8 @@ Runs are SpriteBatch's draws a frame, switches the runs that change texture; the
 | L03 Hospital (3) | `lv3` | yes | yes | | | 16.7 / 17.3-17.4 | 58.2-60.0 | 10.6-13.7 (15) | 6.4-8.2 | 58 MB | 22.5 MB | 194 MB |
 | L05-07 Cyberdyne HQ (5) | `b2a4` | yes | yes | | | 16.7 / 17.3-17.4 | 57.9-60.3 | 11.2-24.8 (31) | 7.6-18.9 | 76-78 MB | 2.5-4.5 MB | 191-194 MB |
 | Cyberdyne HQ, level 6 | `b8s9` | yes | yes | | | 16.7 / 17.3-17.4 | 58.1-60.0 | 11.9-28.3 (41) | 8.3-20.9 | 78 MB, 32 in main memory | 34.5 MB | 162 MB |
-HQROWS| L08 Freeway Chase (8) | `b5a5` | yes | yes | | | 16.7 / 17.3-17.5 | 59.9-60.3 | 11.2-23.3 (33) | 8.1-20.7 | 72 MB, 24 in main memory | 16.5 MB | 186 MB |
+| Cyberdyne HQ, level 7 | `b10s10` | yes | yes | | | 16.7 / 17.3-17.7 | 57.8-60.3 | 10.7-23.3 (38) | 7.5-20.4 | 76-78 MB, 32 in main memory | 34.5-36.5 MB | 162 MB |
+| L08 Freeway Chase (8) | `b5a5` | yes | yes | | | 16.7 / 17.3-17.5 | 59.9-60.3 | 11.2-23.3 (33) | 8.1-20.7 | 72 MB, 24 in main memory | 16.5 MB | 186 MB |
 | L09 Steel Mill (9) | `b6a6` | yes | yes | | | 16.7 / 17.2-17.5 | 57.8-60.3 | 8.0-12.9 (16) | 6.0-11.1 | 82-86 MB, 32 in main memory | 26.5-30.5 MB | 162 MB |
 | L14 Police Station (14) | `b7s13` | yes | yes | | | 16.7 / 17.2-17.4 | 57.9-60.0 | 7.4-10.4 (12) | 6.1-8.4 | 46-48 MB | 32.5-34.5 MB | 194 MB |
 | L15 Future War 4 (15) | `b7s14` | yes | yes | none seen; it calls `drawParallaxTiled`, fixed before the run | `DrawParallaxTiled` | 16.7 / 17.2-17.3 | 59.9 | 9.4-12.4 (18) | 6.8-10.4 | 82 MB, 40 in main memory | 30.5 MB | 162 MB |
