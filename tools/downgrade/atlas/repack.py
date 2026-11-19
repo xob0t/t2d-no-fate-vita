@@ -12,17 +12,19 @@ Inputs: the game folder (packs from resources.assets; or --packs, an AssetRipper
 Rewind's Assembly-CSharp.dll (the frame table, frametable.py) and scenes.json (scene_sets.py).
 
 Outputs, in --out (a Resources folder of the Unity project, e.g. Assets/Resources/atlas):
-  p000.png ...       pages, 8-bit RGBA PNG; their .meta imports them as RGBA 4444 (PS Vita and default),
-                     point filtering, Repeat wrapping, no mipmaps, not readable
+  p000.png ...       pages, 8-bit RGBA PNG with each channel rounded to 4 bits and stored as n * 17, so the
+                     import's truncation to RGBA 4444 (the editor's and tools/builder's) keeps n; their .meta
+                     imports them as RGBA 4444 (PS Vita and default), point filtering, Repeat wrapping, no
+                     mipmaps, not readable
   or, with --raw,
   p000.bytes ...     pages as raw RGBA 4444 TextAssets (rows bottom first, u16 per texel, R in the top nibble),
-                     each channel rounded to 4 bits; Atlas.cs makes the textures with LoadRawTextureData
+                     the same texels; Atlas.cs makes the textures with LoadRawTextureData
   frames.bytes       page and rect of every frame of every image row (format in Atlas.cs)
   scenes.bytes       scenes, their keys and pages (format in Atlas.cs)
 and in --report: report.json and memory.md (pages and RGBA 4444 MB per scene).
 
 After writing, every frame is read back through frames.bytes and the written pages and compared with the
-original pack byte for byte (with --raw, with the original rounded to 4 bits), along with its transparent border;
+original pack rounded to 4 bits per channel, byte for byte, along with its transparent border;
 any difference stops the build.
 
 Usage: python -I repack.py --asm <Rewind>/assemblies/Assembly-CSharp.dll --game <game folder>
@@ -480,8 +482,7 @@ def check(out_dir, table, decoded, pad, raw=False):
             top = H - y - h
             got = arr[top : top + h, x : x + w]
             want = png_rect(decoded[f['pack']], f)
-            if raw:
-                want = quantize4(want) * 17
+            want = quantize4(want) * 17
             frames += 1
             if got.shape != want.shape or not np.array_equal(got, want):
                 bad.append((row, j))
@@ -520,8 +521,8 @@ def main():
     ap.add_argument(
         '--raw',
         action='store_true',
-        help='pages as raw RGBA 4444 TextAssets (pNNN.bytes, rounded to 4 bits here) instead of PNGs with '
-        'RGBA 4444 import settings; Atlas.cs loads either',
+        help='pages as raw RGBA 4444 TextAssets (pNNN.bytes) instead of PNGs with RGBA 4444 import settings, '
+        'the same texels; Atlas.cs loads either',
     )
     a = ap.parse_args()
     if not (a.game or a.packs):
@@ -599,7 +600,7 @@ def main():
             )
             continue
         buf = io.BytesIO()
-        Image.fromarray(canvas, 'RGBA').save(buf, 'PNG', compress_level=6)
+        Image.fromarray(quantize4(canvas) * 17, 'RGBA').save(buf, 'PNG', compress_level=6)
         write_if_changed(os.path.join(a.out, page_name(p) + '.png'), buf.getvalue())
         write_if_changed(
             os.path.join(a.out, page_name(p) + '.png.meta'),

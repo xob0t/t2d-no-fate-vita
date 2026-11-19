@@ -28,11 +28,12 @@ def _stamp(assembly: Path, packs: Path, page: int, raw: bool):
     return digest.hexdigest()
 
 
-def atlas_overlay(exported: Path, assembly: Path, work: Path, report: Path, page=1024, raw=True, log=print):
+def atlas_overlay(exported: Path, assembly: Path, work: Path, report: Path, page=1024, raw=False, log=print):
     """(overlay, excluded): overlay maps Assets/Resources/atlas/<file> to the file in work/atlas/atlas; excluded
     lists the export's texture packs (and their folder), which the game no longer loads.
-    raw: pages as raw RGBA 4444 TextAssets (repack.py --raw), the default while tools/builder imports textures
-    only as RGB24, RGBA32, DXT1 and DXT5; False: PNGs with RGBA 4444 import settings."""
+    raw: False (the default) for PNG pages with RGBA 4444 import settings, which the editor and tools/builder
+    import as Texture2D assets; True for raw RGBA 4444 TextAssets (repack.py --raw) that Atlas.cs makes into
+    textures at load time, the fallback (T2D_ATLAS_PAGES=raw). Both hold the same texels."""
     packs = exported / PACKS
     if not packs.is_dir():
         sys.exit(f'No texture packs in {packs}: run pipeline.py rip first')

@@ -243,8 +243,15 @@ class Bundle:
         for ext in ('.resS', '.resource'):
             stream = build.streams.pop(self.file + ext, None)
             if stream is not None:
-                files.append((self.cab + ext, bytes(stream)))
+                files.append((self.cab + ext, stream_file(ext, stream)))
         return files, missing
+
+
+def stream_file(ext, data):
+    """A bundle's stream file: a .resS ends padded to a multiple of 4 bytes, as each texture in it starts
+    (tools/builder/check_textures.py: an editor bundle whose last texture is 1x1 RGBA4444)."""
+    data = bytes(data)
+    return data + bytes(-len(data) % 4) if ext == '.resS' else data
 
 
 def unityfs(files, engine=paths.TARGET):
@@ -293,9 +300,12 @@ def read_unityfs(data):
     p = data.index(b'\0') + 1 + 4
     p = data.index(b'\0', p) + 1
     p = data.index(b'\0', p) + 1
-    _, packed, raw, _ = struct.unpack_from('>qIII', data, p)
+    _, packed, raw, flags = struct.unpack_from('>qIII', data, p)
     p += 20
-    info = lz4.block.decompress(data[p : p + packed], uncompressed_size=raw)
+    if flags & 0x80:
+        raise NotImplementedError('a UnityFS container with its blocks info at the end')
+    info = data[p : p + packed]
+    info = lz4.block.decompress(info, uncompressed_size=raw) if flags & 0x3F else info  # uncompressed bundles too
     p += packed
     (count,) = struct.unpack_from('>i', info, 16)
     q, chunks = 20, []

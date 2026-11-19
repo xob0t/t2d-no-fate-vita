@@ -701,8 +701,10 @@ def asset_overlay(exported: Path, platform: str, assemblies: list):
     # The texture pages in place of the twelve packs (docs/textures.md).
     from atlas.step import atlas_overlay
 
+    raw = build_switches(platform, ('project',))['T2D_ATLAS_PAGES'] == 'raw'
+    log('Texture pages: ' + describe_switches({'T2D_ATLAS_PAGES': 'raw' if raw else 'png'}))
     atlas, atlas_excluded = atlas_overlay(
-        exported, RECOVERED / 'Assembly-CSharp.dll', WORK / 'atlas', ARTIFACTS / 'atlas', log=log
+        exported, RECOVERED / 'Assembly-CSharp.dll', WORK / 'atlas', ARTIFACTS / 'atlas', raw=raw, log=log
     )
     overlay.update(atlas)
     excluded |= atlas_excluded
