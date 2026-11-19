@@ -14,7 +14,10 @@
 // Clip returns the loaded clip at once. A clip still loading is waited for, that one only; a clip whose load has not
 // started is loaded there and then. So a sound the game plays is never silent: at worst it starts late.
 //
-// Order: the UI sounds first, then the music (streamed clips load in a fraction of a millisecond), then the rest;
+// Order: the UI sounds first, then the music (streamed clips load in a fraction of a millisecond), then Skynet's
+// voice lines, then the rest. Skynet's are the longest clips loaded into memory (up to 15 s, 0.5 MB, stereo), and a
+// frame that finishes one takes 100 to 210 ms on the console; queued among the rest, by name, they came last, in the
+// attract cutscene's last seconds. Ahead of the rest they load under the splash and the publisher's logo. Then the rest;
 // after the first InFlight, which start as soon as they are queued. On the console Resources.LoadAsync is no faster
 // in all than one Resources.Load after another (15.4 s with 16 in flight, docs/audio.md), but the frames go on while
 // it loads. Fewer in flight means a clip asked for early waits on fewer loads ahead of it.
@@ -37,7 +40,7 @@ namespace T2DCompat
         // A wait longer than this (ms) is logged one by one; the summary counts every wait.
         public static float LogWaitsOverMs = 20;
 
-        const int Priorities = 3;
+        const int Priorities = 4;
 
         enum State { Pending, Loading, Done }
 
@@ -50,7 +53,7 @@ namespace T2DCompat
         }
 
         static readonly Dictionary<string, Entry> entries = new Dictionary<string, Entry>();
-        static readonly Queue<Entry>[] pending = { new Queue<Entry>(), new Queue<Entry>(), new Queue<Entry>() };
+        static readonly Queue<Entry>[] pending = { new Queue<Entry>(), new Queue<Entry>(), new Queue<Entry>(), new Queue<Entry>() };
         static int queued, loading, done, waits, deferred;
         static float started = -1, waitedMs, longestWaitMs;
         static bool reported;
@@ -122,7 +125,8 @@ namespace T2DCompat
         {
             if (name.StartsWith("audio/ui/")) return 0;
             if (name.StartsWith("audio/music/")) return 1;
-            return 2;
+            if (name.StartsWith("audio/sfx/voices/Skynet/", StringComparison.OrdinalIgnoreCase)) return 2;
+            return 3;
         }
 
         // Whether new loads wait: while the atlas loads pages (Probe.Install sets it to Atlas.Busy). A page's integration
