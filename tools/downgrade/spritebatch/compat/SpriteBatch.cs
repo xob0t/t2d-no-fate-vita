@@ -282,6 +282,8 @@ namespace T2DCompat
             int cols = 1, rows = 1, first = page >= 0 ? Atlas.Tiles(page, out cols, out rows) : -1;
             if (first >= 0) return SubmitTiled(first, cols, rows, material, colored, zorder);
             Texture tex = page == -1 ? (Texture)sTex : Atlas.Get(page);
+            // A page missing from the build (Atlas logs it once): no draw, rather than one with the material's texture.
+            if (page >= 0 && (object)tex == null) return zorder;
             if (!tScreen)
             {
                 DrawNow(material, tex, colored);
@@ -336,6 +338,7 @@ namespace T2DCompat
                     quadT[2] = new Vector2(tuL, tvT);
                     quadT[3] = new Vector2(tuL, tvB);
                     Texture tex = Atlas.Get(first + r * cols + c);
+                    if ((object)tex == null) continue;
                     if (!tScreen) DrawNow(material, tex, colored);
                     else Queue(material, tex, colored, zorder);
                     any = true;
