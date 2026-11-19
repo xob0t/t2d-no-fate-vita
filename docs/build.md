@@ -191,18 +191,18 @@ The list is `BUILD_SWITCHES` in `tools/downgrade/common.py`:
 
 ## Where it stands
 
-As of 2026-11-19 on the Steam release, `uv run build.py` makes a VPK: everything compiles and links.
-Whether it runs is the next question; every gap method still throws when it reaches a marker.
+As of 2026-11-19 on the Steam release, `uv run build.py` makes a VPK that boots and plays on the console ([On the console](#on-the-console)), with Rewind from the fork at `56ccf43`.
+The 3 gap methods left still throw when they reach a marker, all on paths the port doesn't take.
 
 | Stage | Time | Result |
 | --- | --- | --- |
 | Setup, from nothing | 12 min | Every doctor check passes. 2.8 GB in `tools/external`. A rerun with everything in place takes seconds. |
-| `recover` | 31 s | 44 assemblies, 16 MB. Rewind, with the 27 patches, identifies 59 kinds of runtime function with the 6000.0.60f1 library and recovers 15,501 of 18,368 native bodies completely (by its own count). |
-| `rip` | 11 to 29 s | 1,005 assets; the Mono-layout copy is 0.6 GB, the export 0.6 GB. |
-| `code` | 4 s | Runs through: 0 problems from the rewriter, no repair errors or warnings, 100 gap methods with 649 marker sites in `Recovered.T2D`, 41 of them the well-typed stand-ins of `TypeGapValues` ([repairs](repairs.md#well-typed-stand-ins-for-what-is-left-rewritergaptypingcs)). |
-| `project` | 5 s | `work/t2d-2018.2.19f1-vita`, 0.6 GB. |
-| `build` | 4.6 min | The data step, then the code step: UnityLinker, IL2CPP's C++ conversion, psp2snc on every C++ file and psp2ld, in 99 s with psp2snc's object cache. `Media/Modules/il2CppAssemblies.suprx` is 27.7 MB. |
-| `package` | 33 s | `builds/t2d-2018.2.19f1-vita.vpk`, 334 MB, with the LiveArea art and the patched eboot. Not tried on the console yet. |
+| `recover` | 33 s | 44 assemblies, 16 MB. Rewind, the fork at `56ccf43`, identifies 59 kinds of runtime function with the 6000.0.60f1 library and recovers 15,736 of 18,368 native bodies completely (by its own count). |
+| `rip` | 9 to 29 s | 1,005 assets; the Mono-layout copy is 0.6 GB, the export 0.6 GB. |
+| `code` | 4 s | Runs through: 0 problems from the rewriter, no repair errors or warnings, 3 gap methods with 135 marker sites in `Recovered.T2D` (below). |
+| `project` | 41 s | `work/t2d-2018.2.19f1-vita`, 0.6 GB; most of the time is the atlas repack (106 pages). |
+| `build` | 2.7 min | The data step, then the code step: UnityLinker, IL2CPP's C++ conversion, psp2snc on every C++ file and psp2ld, with psp2snc's object cache. `Media/Modules/il2CppAssemblies.suprx` is 28.1 MB. |
+| `package` | 34 s | `builds/t2d-2018.2.19f1-vita.vpk`, 334 MB, with the LiveArea art and the patched eboot. Installs with vitacompanion's `install` and launches from LiveArea. |
 
 Complete method bodies by RewindStats' count, upstream Rewind against the patched one, with the shipped 6000.0.60f1 library (the old library before it was rebuilt in brackets):
 
