@@ -446,6 +446,35 @@ namespace Repairs
             return mayDie.Any(r => r.IsMatch(Fingerprint.Text(text)));
         }
 
+        // Facts for compiling markers' own text (Expr.cs): a temporary of Rewind's is this local.
+        readonly Dictionary<string, VariableDefinition> bound = new Dictionary<string, VariableDefinition>();
+
+        public MethodRepair Bind(string temp, int local)
+        {
+            if (Method != null) bound[temp] = Method.Body.Variables[local];
+            return this;
+        }
+
+        // tN is local N, for each N given (Rewind numbers the locals of an initializer-like method so).
+        public MethodRepair BindSame(params int[] locals)
+        {
+            foreach (int n in locals) Bind("t" + n, n);
+            return this;
+        }
+
+        internal VariableDefinition Bound(string temp)
+        {
+            VariableDefinition v;
+            return bound.TryGetValue(temp, out v) ? v : null;
+        }
+
+        // Compiles every marker not taken yet whose text starts with prefix (Expr.cs); count is how many.
+        public MethodRepair CompileAll(string prefix, int count, string hash)
+        {
+            foreach (Site s in Sites(prefix, count, hash)) s.Compile();
+            return this;
+        }
+
         // The rule repairs only some markers; the rest are left for later (and reported).
         public MethodRepair Partial()
         {
@@ -478,6 +507,10 @@ namespace Repairs
         }
 
         MethodBody Body { get { return repair.Method.Body; } }
+
+        // The marker's ldstr and call, or an anchor's first and last instruction.
+        public Instruction First { get { return Marker.Ldstr; } }
+        public Instruction Last { get { return Marker.Call; } }
 
         // The instructions before and after the marker, inside the hashed window, that a
         // replacement may also take: Replace(before: 1, ...) takes the instruction before the ldstr.
@@ -514,6 +547,22 @@ namespace Repairs
             var past = (Instruction)c.Operand;
             repair.MayRemove("__statics()", "__load8(", "__atomic_compare_exchange(");
             return Replace(0, 3, il => il.Br(past));
+        }
+
+        // The marker's own text, compiled with the rule's bindings (Expr.cs).
+        public Site Compile()
+        {
+            if (Marker == null) return this;
+            Marker k = Marker;
+            return With(il => ExprCompiler.Compile(repair, k, il));
+        }
+
+        // new T[n] for Array::NewSpecific's marker: T from the class the native code passes, n from the marker.
+        public Site NewArray(string elementType)
+        {
+            if (Marker == null) return this;
+            int n = (int)Marker.IntArg(1);
+            return With(il => il.I4(n).Newarr(elementType));
         }
 
         // A 2-byte store over two adjacent bool fields, `__store2(&this.F, v)` (mov word [this+off], v):

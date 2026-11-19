@@ -25,7 +25,7 @@ def ilverify(exe, dll, refs, names):
     out = subprocess.run(args, capture_output=True, text=True).stdout
     errors = {}
     for line in out.splitlines():
-        m = re.search(r' : ([^\]]+)\]\[offset 0x([0-9A-F]+)\](.*)', line)
+        m = re.search(r' : (.+?)\]\[offset 0x([0-9A-F]+)\](.*)', line)
         if m:
             # offsets move when IL is replaced: an error is its message and its place among the method's errors
             errors.setdefault(m.group(1), []).append(re.sub(r'\s+', ' ', m.group(3)).strip())
