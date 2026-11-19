@@ -566,7 +566,13 @@ namespace T2DCompat
                 }
             }
             IssueBackground();
+            if (!Busy && Idle != null) Idle();
         }
+
+        // Pages loading or waiting to, for SoundLoads, which starts no clip load meanwhile; Idle each flush they aren't
+        // (Probe.Install joins the two).
+        public static Action Idle;
+        public static bool Busy { get { return loaded && (asyncLoads.Count > 0 || bgQueue.Count > 0); } }
 
         static void IssueBackground()
         {
