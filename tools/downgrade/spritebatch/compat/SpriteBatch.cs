@@ -262,6 +262,7 @@ namespace T2DCompat
             if (Trace.On) Trace.Enter("SpriteBatch.Draw");
             int page = Layout(x, y, frame, hframes, vframes, align, hflip, vflip, width, height, rotation, hscale, vscale,
                               tScreen ? (float)zorder : 0f, quadV, quadT);
+            if ((object)colorT != null) warmMaterial = colorT;
             return Submit(page, colored ? colorT : normal, colored, zorder);
         }
 
@@ -453,6 +454,7 @@ namespace T2DCompat
                     }
                 }
             }
+            Warm(camera);
             LastSprites = sprites;
             LastRuns = runCount;
             LastMeshes = segmentCount;
@@ -462,6 +464,40 @@ namespace T2DCompat
             offscreen = 0;
             runCount = 0;
             segmentCount = 0;
+        }
+
+        // ---- prefetch ---------------------------------------------------------------------------------------------
+
+        // The game's ColorTransform material, from its draws.
+        static Material warmMaterial;
+        static Mesh warmMesh;
+        public static int Warms;
+
+        // A page the atlas prefetched (Atlas.NextWarm), drawn as one texel with the ColorTransform material at colour 0
+        // and offset 0: its alpha is 0, so the blend leaves the screen as it was, but the player reads the page's
+        // texels for it now rather than at the page's first real draw.
+        static void Warm(Camera camera)
+        {
+            if ((object)warmMaterial == null || (object)camera == null) return;
+            Texture2D page = Atlas.NextWarm();
+            if ((object)page == null) return;
+            Init();
+            if (warmMesh == null)
+            {
+                warmMesh = new Mesh();
+                warmMesh.name = "SpriteBatch warm";
+                warmMesh.vertices = new[] { new Vector3(0f, 1f, 0f), new Vector3(0f, 0f, 0f), new Vector3(1f, 1f, 0f), new Vector3(1f, 0f, 0f) };
+                warmMesh.uv = new[] { new Vector2(0f, 0.0005f), new Vector2(0f, 0f), new Vector2(0.0005f, 0.0005f), new Vector2(0.0005f, 0f) };
+                warmMesh.triangles = new[] { 0, 1, 2, 2, 1, 3 };
+                warmMesh.bounds = everywhere;
+            }
+            block.Clear();
+            block.SetTexture(idMainTex, page);
+            block.SetColor(idColor, new Color(0f, 0f, 0f, 0f));
+            block.SetVector(idColoff, Vector4.zero);
+            Graphics.DrawMesh(warmMesh, Matrix4x4.identity, warmMaterial, 0, camera, 0, block,
+                              ShadowCastingMode.Off, false, null, LightProbeUsage.Off);
+            Warms++;
         }
 
         // Per mesh of each set, the quads of its runs when its indices were last written.

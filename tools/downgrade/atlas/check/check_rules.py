@@ -115,6 +115,7 @@ def main():
             '-out:' + atlas_dll,
             os.path.join(ATLAS, 'compat', 'Atlas.cs'),
             os.path.join(DOWNGRADE, 'compat', 'Trace.cs'),  # T2D_TRACE builds' trail, which Atlas.Get joins
+            os.path.join(DOWNGRADE, 'compat', 'FreeMemory.cs'),  # the free video memory the budget follows
         ]
     )
     exe = os.path.join(a.work, 'RuleCheck.exe')

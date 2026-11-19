@@ -21,6 +21,17 @@ using UnityEngine.SceneManagement;
 //   -t2d-shot <s> <path>             a screenshot s seconds after the start
 //   -t2d-shots <s> <prefix> [after]  a screenshot every s seconds from after seconds on, <prefix>-<seconds>.png
 //   -t2d-quit-after <s>              quit s seconds after the start
+//   -t2d-stalls <ms>                 a frame longer than ms (default 1000; 0: off) logs T2D_STALL lines from a thread
+//                                    of the probe's, every 250 ms while it lasts: the free memory and, in a T2D_TRACE=1
+//                                    build, the game methods the main thread entered last and how many since the frame
+//                                    began; then how long the frame took
+//   -t2d-peek <path>[,<path>...]     static fields by reflection, Namespace.Type.field, then .field or [index] (into
+//                                    an array or a haxe Array's __a) as often as wanted; T2D_PEEK lines on the first
+//                                    frame and whenever a value changes
+//   -t2d-invoke <call>[,<call>...]   at the second heartbeat (or 10 s), calls by reflection and logs T2D_INVOKE lines with
+//                                    the result or the exception: <path to an object or a type>::<method>[::<arg>...],
+//                                    each arg an int, @<peek path>, or a string
+//   -t2d-atlas-sync                  the atlas prefetches with Resources.Load, not LoadAsync (Atlas.PrefetchAsync)
 // A screenshot is the frame read back at its end and saved as a PNG (on the PS Vita 960x544, about 0.6 s of stall,
 // since ScreenCapture writes nothing there); use a path in ux0:data/T2DNoFate.
 // Part of T2DCompat; see Compat2018.cs.
@@ -29,39 +40,16 @@ namespace T2DCompat
     public class Probe : MonoBehaviour
     {
         static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
-        static readonly KeyValuePair<string, MethodInfo>[] FreeMemory = FindFreeMemory();
-
-        static KeyValuePair<string, MethodInfo>[] FindFreeMemory()
-        {
-            try
-            {
-                Type diagnostics = AppDomain.CurrentDomain.GetAssemblies()
-                    .Select(a => a.GetType("UnityEngine.PSVita.Diagnostics", false)).FirstOrDefault(t => t != null);
-                if (diagnostics == null) return new KeyValuePair<string, MethodInfo>[0];
-                return new[] { "LPDDR", "CDRAM", "PHYSCONT" }
-                    .Select(n => new KeyValuePair<string, MethodInfo>("free" + n, diagnostics.GetMethod("GetFreeMemory" + n, BindingFlags.Static | BindingFlags.Public)))
-                    .Where(p => p.Value != null).ToArray();
-            }
-            catch (Exception)
-            {
-                return new KeyValuePair<string, MethodInfo>[0];
-            }
-        }
 
         // " heapMB=.. freeLPDDRMB=.. freeCDRAMMB=.. freePHYSCONTMB=..".
         public static string Memory()
         {
             var line = new StringBuilder();
             line.Append(" heapMB=").Append((GC.GetTotalMemory(false) / 1048576.0).ToString("F1", Inv));
-            foreach (KeyValuePair<string, MethodInfo> free in FreeMemory)
+            for (int kind = 0; kind < FreeMemory.Names.Length; kind++)
             {
-                try
-                {
-                    line.Append(' ').Append(free.Key).Append("MB=").Append((Convert.ToInt64(free.Value.Invoke(null, null)) / 1048576.0).ToString("F1", Inv));
-                }
-                catch (Exception)
-                {
-                }
+                long free = FreeMemory.Bytes(kind);
+                if (free >= 0) line.Append(" free").Append(FreeMemory.Names[kind]).Append("MB=").Append((free / 1048576.0).ToString("F1", Inv));
             }
             return line.ToString();
         }
@@ -90,6 +78,15 @@ namespace T2DCompat
             shotsEvery = Flags.Number("-t2d-shots", 1, -1f);
             shotsPrefix = Flags.Word("-t2d-shots", 2);
             shotsAfter = Flags.Number("-t2d-shots", 3, 0f);
+            stallMs = (int)Flags.Number("-t2d-stalls", 1, 1000f);
+            string peek = Flags.Value("-t2d-peek");
+            if (peek != null) peeks = peek.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+            string invoke = Flags.Value("-t2d-invoke");
+            if (invoke != null) invokes = invoke.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+            Atlas.PrefetchAsync = !Flags.Has("-t2d-atlas-sync");
+            Trace.MarkMain();
+            tickMs = Now();
+            if (stallMs > 0) new System.Threading.Thread(WatchStalls) { IsBackground = true, Name = "T2DStalls" }.Start();
             var host = new GameObject("T2DProbe");
             DontDestroyOnLoad(host);
             probe = host.AddComponent<Probe>();
@@ -122,6 +119,14 @@ namespace T2DCompat
         {
             if (tickedFrame == Time.frameCount) return;
             tickedFrame = Time.frameCount;
+            int now = Now();
+            if (stalled == tickNumber)
+                Debug.Log("T2D_STALL frame " + tickNumber + " ended after " + (now - tickMs) + " ms" + Memory());
+            tickTraced = Trace.MainCount;
+            tickMs = now;
+            tickNumber++;
+            if (peeks != null) Peek();
+            if (invokes != null && PlayerLog.Seconds >= invokeAt) Invoke();
             if (ticks++ == 0) Debug.Log("T2D_PROBE first tick from " + from + " " + Stamp());
             try
             {
@@ -131,6 +136,181 @@ namespace T2DCompat
             {
                 if (errors++ < 5) Debug.Log("T2D_PROBE error " + e);
             }
+        }
+
+        // ---- stalls -----------------------------------------------------------------------------------------------
+
+        static int stallMs;
+        static volatile int tickMs, tickNumber, stalled = -1;
+        static long tickTraced;
+
+        static int Now() { return (int)(PlayerLog.Seconds * 1000.0); }
+
+        // The probe's own thread: while the main thread hasn't ticked for stallMs, every 250 ms a line on where it is.
+        static void WatchStalls()
+        {
+            int next = 0;
+            while (true)
+            {
+                System.Threading.Thread.Sleep(50);
+                int frame = tickNumber, since = Now() - tickMs;
+                if (since < stallMs) continue;
+                bool first = stalled != frame;
+                if (first)
+                {
+                    stalled = frame;
+                    next = since;
+                }
+                if (since < next) continue;
+                next = since + 250;
+                var line = new StringBuilder("T2D_STALL frame ").Append(frame).Append(" +").Append(since).Append(" ms");
+                line.Append(Memory());
+                if (Trace.On)
+                {
+                    line.Append(" traced=").Append(Trace.MainCount - tickTraced).Append(", last entered:\n");
+                    line.Append(Trace.MainTrail(first ? 12 : 3).TrimEnd());
+                }
+                Debug.Log(line.ToString());
+            }
+        }
+
+        // ---- peeks ------------------------------------------------------------------------------------------------
+
+        static string[] peeks, peeked;
+
+        static void Peek()
+        {
+            if (peeked == null) peeked = new string[peeks.Length];
+            for (int i = 0; i < peeks.Length; i++)
+            {
+                string value;
+                try
+                {
+                    value = Describe(Resolve(peeks[i]));
+                }
+                catch (Exception e)
+                {
+                    value = "(" + e.GetType().Name + ": " + e.Message + ")";
+                }
+                if (value == peeked[i]) continue;
+                peeked[i] = value;
+                Debug.Log("T2D_PEEK " + peeks[i] + " = " + value + " (frame " + Time.frameCount + ")");
+            }
+        }
+
+        static string[] invokes;
+        static double invokeAt = 10.0;
+
+        static void Invoke()
+        {
+            string[] calls = invokes;
+            invokes = null;
+            foreach (string call in calls)
+            {
+                string result;
+                try
+                {
+                    string[] parts = call.Split(new[] { "::" }, StringSplitOptions.None);
+                    Type type = FindType(parts[0]);
+                    object target = type == null ? Resolve(parts[0]) : null;
+                    if (type == null && target == null) throw new ArgumentException(parts[0] + " is null");
+                    Type owner = type ?? target.GetType();
+                    var args = new object[parts.Length - 2];
+                    for (int i = 0; i < args.Length; i++)
+                    {
+                        string a = parts[i + 2];
+                        int n;
+                        if (a.StartsWith("@")) args[i] = Resolve(a.Substring(1));
+                        else if (int.TryParse(a, NumberStyles.Integer, Inv, out n)) args[i] = n;
+                        else args[i] = a;
+                    }
+                    MethodInfo method = owner.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance)
+                        .FirstOrDefault(mi => mi.Name == parts[1] && mi.GetParameters().Length == args.Length);
+                    if (method == null) throw new ArgumentException("no " + parts[1] + " with " + args.Length + " parameters in " + owner.FullName);
+                    result = Describe(method.Invoke(method.IsStatic ? null : target, args));
+                }
+                catch (Exception e)
+                {
+                    Exception inner = e is TargetInvocationException && e.InnerException != null ? e.InnerException : e;
+                    result = "threw " + inner.GetType().Name + ": " + inner.Message + (Trace.On ? " after:\n" + Trace.Trail(12).TrimEnd() : "");
+                }
+                Debug.Log("T2D_INVOKE " + call + " = " + result);
+            }
+        }
+
+        static readonly Dictionary<string, Type> types = new Dictionary<string, Type>();
+
+        static Type FindType(string name)
+        {
+            Type type;
+            if (!types.TryGetValue(name, out type))
+            {
+                type = AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType(name, false)).FirstOrDefault(t => t != null);
+                types[name] = type;
+            }
+            return type;
+        }
+
+        static object Resolve(string path)
+        {
+            string[] parts = path.Split('.');
+            Type type = null;
+            int at = 0;
+            for (int n = parts.Length - 1; n > 0 && type == null; n--)
+            {
+                type = FindType(string.Join(".", parts, 0, n));
+                at = n;
+            }
+            if (type == null) throw new ArgumentException("no type in " + path);
+            object value = null;
+            bool first = true;
+            for (int k = at; k < parts.Length; k++)
+            {
+                string part = parts[k];
+                var indexes = new List<int>();
+                int bracket = part.IndexOf('[');
+                if (bracket >= 0)
+                {
+                    foreach (string index in part.Substring(bracket + 1).TrimEnd(']').Split(new[] { "][" }, StringSplitOptions.None))
+                        indexes.Add(int.Parse(index, Inv));
+                    part = part.Substring(0, bracket);
+                }
+                if (part.Length > 0)
+                {
+                    if (!first && value == null) return null;
+                    Type owner = first ? type : value.GetType();
+                    FieldInfo field = owner.GetField(part, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance);
+                    if (field == null) throw new ArgumentException("no field " + part + " in " + owner.FullName);
+                    value = field.GetValue(field.IsStatic ? null : value);
+                    first = false;
+                }
+                foreach (int index in indexes)
+                {
+                    if (value == null) return null;
+                    var array = value as Array;
+                    if (array == null)
+                    {
+                        FieldInfo items = value.GetType().GetField("__a");
+                        array = items == null ? null : items.GetValue(value) as Array;
+                    }
+                    if (array == null) throw new ArgumentException(part + " is no array");
+                    if (index < 0 || index >= array.Length) return "(index " + index + " past " + array.Length + ")";
+                    value = array.GetValue(index);
+                }
+            }
+            return value;
+        }
+
+        static string Describe(object value)
+        {
+            if (value == null) return "null";
+            var text = value as string;
+            if (text != null) return "\"" + (text.Length > 40 ? text.Substring(0, 40) + "..." : text) + "\" (" + text.Length + " chars)";
+            var array = value as Array;
+            if (array != null) return value.GetType().Name + " length " + array.Length;
+            if (value is IFormattable) return ((IFormattable)value).ToString(null, Inv);
+            if (value is bool) return value.ToString();
+            return value.GetType().FullName;
         }
 
         void Step()
@@ -199,6 +379,7 @@ namespace T2DCompat
             }
             line.Append(" gc=").Append(GC.CollectionCount(0));
             line.Append(Memory());
+            line.Append(Atlas.Summary());
             Debug.Log(line.ToString());
             deltas.Clear();
             sprites = runs = switches = offscreen = 0;
