@@ -279,7 +279,7 @@ namespace T2DCompat
         {
             if (Trace.On) Trace.Enter("SpriteBatch.Submit");
             if (page == -2) return zorder;
-            int cols, rows, first = page >= 0 ? Atlas.Tiles(page, out cols, out rows) : -1;
+            int cols = 1, rows = 1, first = page >= 0 ? Atlas.Tiles(page, out cols, out rows) : -1;
             if (first >= 0) return SubmitTiled(first, cols, rows, material, colored, zorder);
             Texture tex = page == -1 ? (Texture)sTex : Atlas.Get(page);
             if (!tScreen)
