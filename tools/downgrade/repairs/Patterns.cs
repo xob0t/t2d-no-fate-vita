@@ -119,6 +119,12 @@ namespace Repairs
             engine.Adopt(r);
         }
 
+        // The families on a method a rule took (MethodRepair.Families), for the markers it left to them.
+        internal static void ApplyFamilies(MethodRepair r)
+        {
+            Apply(r);
+        }
+
         // Every family on one method, in an order where each sees the code the earlier ones left reachable.
         static void Apply(MethodRepair r)
         {

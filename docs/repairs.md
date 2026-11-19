@@ -111,6 +111,8 @@ What a site can do:
 
 For a silent error, which has no marker, `m.Anchor(pattern, nth, hash)` finds an instruction run by opcode and operand substring, under the same hash check.
 `m.RetypeLocal`, `m.NewLocal`, `m.MayRemove` and `m.Partial()` cover the rest.
+`m.Families()`, called after a rule's sites, runs the [family patterns](#the-family-patterns) on the markers of theirs that the rule leaves, for a method that has both (the patterns alone never take a method with a gap outside their families).
+`ExprCompiler.CompileArg(m, marker, i, il, kind)` compiles one argument of a marker's call from its own text, such as the font and the number of an invoker call.
 
 ### What a run checks
 
@@ -265,6 +267,39 @@ On the later output of the same day (08:45), made with Rewind patches for the ba
 ILVerify (dotnet-ilverify 10.0.15) on Assembly-CSharp after the engine, master's engine against these patterns: 1,106 errors against 983 on the first output, and 1,036 against 909 on the second.
 In the methods the patterns finish (87 and 93), 185 errors become 62, and 212 become 85; no method has an error it didn't have before.
 The one message new to ILVerify, in `CyberdyneHQBot..ctor`, is patch 0019's `ldloca` of an int64 read back with `ldobj System.Double`: it was there before, and ILVerify reaches it now that the box block before it is gone.
+
+## Rules for the menu and Future War 1
+
+Written on 2026-11-19 from the native code (rizin and `native/listing.py` on the Steam `GameAssembly.dll`), for the methods the triage (`tools/assess/triage`) puts on the way from boot through the main menu to Future War 1, its briefing, HUD and pause.
+The six methods of [Rewind issue 29](rewind-issues.md) (`Button.staticCallbacks`, `Game.start`, `GameMap.solid`, `GameObject.move`, `Player.setGroundTile`, `Sprites.addFromJSON`) are left to the Rewind fix.
+With these rules the code stage goes from 69 gap methods and 405 marker sites to 50 and 319, with no repair error and no reference left unresolved; In the 19 repaired methods ILVerify (10.0.15) finds no new error, and one fewer than before (in `GameObject.overCover`); the errors it keeps are Rewind's `ldloca` of an int64 read back as a double, and one `stelem` of an object into a `GameObject[]`.
+
+| Method | Gap kind | Sites | Rule file | The repair |
+| --- | --- | ---: | --- | --- |
+| `Runtime.toDouble` | interface invoker (0x180003650, IConvertible slot 12) | 1 | `HaxeRuntime.cs` | `((IConvertible)obj).ToDouble(null)`, with `isinst` as the native `IsInst` |
+| `HaxeException.wrap` | virtual call, slot 11 | 1 | `HaxeRuntime.cs` | `((HaxeException)obj).getObject()` in place of the int64 Rewind narrowed into an object |
+| `Script.pause`, `Script.resume` | `Runtime.toDouble` inlined, the interface call lost | 1, 2 | `Scripts.cs` | the call into the double local of the unbox path, then a branch to that path's halves (`InlinedToDouble`) |
+| `Script.drawSummary` | vtable read, popped | 1 | `Scripts.cs` | the read goes with its pop |
+| `Script.inLowJumpZone` | element fields read untyped | 3 | `UntypedFields.cs` | `((GameObject)lowJumpZones.__a[i])`'s y (as bits), width, height |
+| `Centurion.shoot` | object field read untyped | 1 | `UntypedFields.cs` | `((CenturionTurret)turret).y` as bits |
+| `SarahFuture` findBestBob callback | object fields read untyped | 2 | `UntypedFields.cs` | `((GameObject)o)`'s image, y |
+| `PlayerProjectile` target callback | object fields read untyped | 9 | `UntypedFields.cs` | `((GameObject)o)`'s type, canBeHit, hp, x, y, height, proximity |
+| `Trigger.update` | field store on an untyped object | 1 | `UntypedFields.cs` | `youngJohn.runDirection = -youngJohn.runDirection` |
+| `Centurion.draw` | virtual call, slot 29 | 1 | `Calls.cs` | `((CenturionTurret)turret).draw()` |
+| `Game.draw` | vtable reads kept in a long stack slot; a class-initialized test | 3 | `Calls.cs` | the slot keeps 0; the test is true (both paths join) |
+| `GameObject.overCover` | store value lost with its write barrier call | 1 | `Calls.cs` | `this.cover = sprite` (V5) |
+| `Message.draw` | slot invokers 0x1800030D0 (drawNumber), 0x180002F90 (draw) | 2 | `Invokers.cs` | `bmpFont.drawNumber/draw(Main.CANVAS_BD, value or textId, x - Cam.left, y - Cam.top, alignment, ct ...)` |
+| `Cutscene.drawText` | slot invoker 0x180002E30 (drawString), two tail-merged calls; a width popped (silent) | 2 + 1 anchor | `Invokers.cs` | the four call paths' text, x (the text's x, lost with the call, or centred on the popped width, now kept), y, align 9, ct |
+| `HUD.draw` | slot invokers 0x180002F90, 0x180002E30, 0x1800030D0; inlined string compares | 11 + 6 | `Invokers.cs` | each call's x and y from the native stack stores (the HUD's top is Rewind's V68); the numbers' font, target and value compiled from the markers' text; the compares by the string family (`Families()`) |
+| `MissionBriefing.draw` | vtable read, popped; `Array.Length` inlined (rank, bounds, throw) | 1 + 10 | `Inlined.cs` | the read goes; `text.Length` is `ldlen` (a vector has rank 1, no bounds), and the rest of the block dies |
+| `SaveStats.loadStats` | two catch-alls in Unity 6 IL2CPP's form (class test, active-exception push/pop, exception read back, Haxe's thread-static `Exceptions.exception`) | 14 | `Saves.cs` | the test is true, the bookkeeping goes, the exception is the caught one, the store is `Exceptions.exception = e`. Its second handler (old StatsBlobV1 saves) was the path a second boot would take after a first save |
+| `Gfx.drawClippedWidth` | stack arguments of a tail call not captured | 2 | `MissingArgs.cs` | `_ct` and `(double)_width`, left in the caller's slots |
+
+What the triage still lists in these tiers:
+
+- `Runtime.eq`: the Decimal comparison path (9 sites), which the game's Haxe values never take; the rule is partial on purpose.
+- `SaveStats.saveStats`: 119 calls through the generic virtual invokers (BinaryWriter's Write(int), (bool), (double), (char) by slot), all on the Xbox and UWP binary-writer save modes (`SaveData.saveMethod()` 5 and 6). This build's save mode is `SAVE_MODE_UNITY_BINARY` (1), whose BinaryFormatter path has no marker, so they are never reached.
+- The issue 29 methods above.
 
 ## Prototype results
 

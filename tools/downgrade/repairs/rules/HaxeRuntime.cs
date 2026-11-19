@@ -24,4 +24,51 @@ static partial class Rules
     {
         il.Ldloc(local).Null().Callvirt("System.IConvertible::ToDouble(IFormatProvider)").DoubleToBits();
     }
+
+    // Runtime.toDouble(obj), not a boxed Double: the native code (0x180512200) takes `IsInst(obj, IConvertible)`
+    // (a null reference exception when it isn't one) and tail-jumps to the interface invoker 0x180003650, which
+    // looks IConvertible up in the object's interface offsets and calls slot 12 of it, ToDouble, with r9 = null.
+    // Rewind keeps the call as an Opaque<Int64> returned as the method's double.
+    static void HaxeRuntimeToDouble(Engine e)
+    {
+        MethodRepair m = e.Method("haxe.lang.Runtime::toDouble(Object)", "8a84cee1");
+        m.Site("__InterfaceInvoker()", "832daf1d").With(il =>
+            il.Arg(0).Isinst("System.IConvertible").Null().Callvirt("System.IConvertible::ToDouble(IFormatProvider)"));
+    }
+
+    // HaxeException.wrap(obj), obj a HaxeException: the native code (0x180511930) checks the class again (an invalid
+    // cast otherwise) and calls [klass+0x1e8], slot 11, getObject(), storing the result in the new exception's obj
+    // (+0x90). Rewind keeps the call as an int64 in V2, then `conv.i4` into the object local V0; the value and the
+    // two instructions that narrow it become the call.
+    static void HaxeExceptionWrap(Engine e)
+    {
+        MethodRepair m = e.Method("haxe.lang.HaxeException::wrap(Object)", "eb2ca8cf");
+        m.Site("__call_indirect(__vtable(), obj, __vtable(), __objklass())", "fb0a8901").Replace(0, 3, il =>
+            il.Arg(0).Castclass("haxe.lang.HaxeException").Callvirt("haxe.lang.HaxeException::getObject()"));
+    }
+
+    // Runtime.toDouble inlined, `x is Double ? (double)x : ((IConvertible)x).ToDouble(null)`, with the interface call
+    // lost as an Effect on the second path (the invoker 0x180003650, slot 12, as in Runtime.toDouble). The first path
+    // unboxes x into a double local and splits it into the halves Rewind's locals carry on: the call stores its
+    // result in the same double local and joins that path right after the unbox, so the halves are Rewind's own.
+    // obj: the local x is in; value: the double local the unbox stores to.
+    static void InlinedToDouble(Site s, MethodRepair m, int obj, int value)
+    {
+        if (s.Marker == null) return;
+        Mono.Collections.Generic.Collection<Mono.Cecil.Cil.Instruction> all = m.Method.Body.Instructions;
+        Mono.Cecil.Cil.Instruction after = null;
+        for (int i = 0; i + 2 < all.Count; i++)
+        {
+            if (Fingerprint.Local(all[i], m.Method.Body) == m.Method.Body.Variables[obj] && all[i].OpCode.Name.StartsWith("ldloc")
+                && all[i + 1].OpCode == Mono.Cecil.Cil.OpCodes.Unbox_Any && ((Mono.Cecil.TypeReference)all[i + 1].Operand).FullName == "System.Double"
+                && all[i + 2].OpCode.Name.StartsWith("stloc") && Fingerprint.Local(all[i + 2], m.Method.Body) == m.Method.Body.Variables[value])
+            {
+                if (after != null) throw new RepairException(m.Key + ": two unboxes of V" + obj + " into V" + value);
+                after = all[i + 3];
+            }
+        }
+        if (after == null) throw new RepairException(m.Key + ": no unbox of V" + obj + " into V" + value + " to join");
+        s.With(il => il.Ldloc(obj).Isinst("System.IConvertible").Null().Callvirt("System.IConvertible::ToDouble(IFormatProvider)")
+                       .Stloc(value).Br(after));
+    }
 }
