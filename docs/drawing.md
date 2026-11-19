@@ -101,7 +101,7 @@ The counts are those of the Steam release, build 24040403, as Rewind recovers it
 | R8 | `SpriteBatchDraws` | `BitmapData.unityDraw`, `unityDrawClippedWidth` | the parameters above by type; one `Graphics.DrawMesh`, a `DrawMeshNow`, reads of `meshes`, one store of `zorder`; no call into SpriteBatch yet | a new body each, below |
 | R7 | `SpriteBatchMeshes` | `BitmapData.CreateMultiMeshFrames(TextureFrames)` | static, returns `Mesh[]`, makes Meshes; nothing but the two draw methods reads `BitmapData.meshes` | `return new Mesh[tframes.uvx.Length * 4];` |
 | R9 | `SpriteBatchFlush` | `UnityMain.OnRenderObject` | one call of `Main.draw()`; a static `Camera m_RenderCamera` | after it: `ldsfld m_RenderCamera; call SpriteBatch.Flush(Camera)`; the call in `try { } catch (Exception) { SpriteBatch.Discard(); throw; }`, so a draw that throws part way doesn't leave its sprites queued for the next frame |
-| R10 | `SpriteBatchFilters` | `Gfx.saturateImage(BitmapData, double)` | static, returns `BitmapData`, one call of `BitmapData.applyFilter`; nothing reads `BitmapData.bmfilter` | `return image;` |
+| R10 | `SpriteBatchFilters` | `Gfx.saturateImage(BitmapData, double)` | static, returns `BitmapData`, one call of `BitmapData.applyFilter`; every `ret` returns the image argument; no call but `Type.GetTypeFromHandle`, `FormatterServices.GetUninitializedObject`, `Point`'s constructor, `getFilter` and `applyFilter`; no store but into the `ColorMatrixFilter`, `Matrix4x4` and `Vector4` it makes and its `double[]`; `applyFilter` only stores `bmfilter`, `getFilter` is `return this`; nothing reads `BitmapData.bmfilter` | `return image;` |
 
 R8's new body is:
 

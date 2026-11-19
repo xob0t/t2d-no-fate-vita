@@ -375,7 +375,8 @@ partial class DowngradeAssemblies
     // reads bmfilter, so the call only makes garbage; Button.draw makes it for every locked button every frame (the
     // achievements list, 32 icons). Its body becomes
     //   return image;
-    // The rule checks that the method is that filter (one applyFilter call) and that nothing reads bmfilter.
+    // The rule checks that the method is that filter (one applyFilter call), that it returns its image and does nothing
+    // else that outlives it (SpriteFilterEffects), and that nothing reads bmfilter.
     static int SpriteBatchFilters(ModuleDefinition module)
     {
         TypeDefinition gfx = GameType(module, SpriteGfx);
@@ -387,11 +388,66 @@ partial class DowngradeAssemblies
             throw SpriteRule(rule, "Gfx.saturateImage is not static BitmapData (BitmapData, double)");
         if (SpriteCount(saturate, i => SpriteCalls(i, "BitmapData", "applyFilter")) != 1)
             throw SpriteRule(rule, "Gfx.saturateImage does not call BitmapData.applyFilter once");
+        SpriteFilterEffects(rule, saturate);
         foreach (TypeDefinition type in AllTypes(module.Types))
             foreach (MethodDefinition m in type.Methods.Where(m => m.HasBody))
                 if (m.Body.Instructions.Any(i => (i.OpCode == OpCodes.Ldfld || i.OpCode == OpCodes.Ldflda) && SpriteUsesField(i, "bmfilter")))
                     throw SpriteRule(rule, type.Name + "." + m.Name + " reads BitmapData.bmfilter, which R10 leaves unset");
         SpriteReplaceBody(saturate, new List<Instruction> { Instruction.Create(OpCodes.Ldarg_0), Instruction.Create(OpCodes.Ret) });
         return 1;
+    }
+
+    // What `return image;` must keep of Gfx.saturateImage, checked on its body as recovered: it returns its first
+    // argument, and nothing it does outlives the call but applyFilter's store. Its body (Steam build 24040403) makes a
+    // double[20], a ColorMatrixFilter with Type.GetTypeFromHandle and FormatterServices.GetUninitializedObject (Rewind's
+    // inlined constructor) and stores the matrix into that filter's cmfmat and cmfoff (Matrix4x4, Vector4 fields), makes
+    // a Point, then image.applyFilter(image, image.rect, point, filter.getFilter()); return image. Before (Nov 2026)
+    // only the applyFilter count was checked: a body that returned a new bitmap or also changed the image would have
+    // been replaced as well. applyFilter's body must be the one store of bmfilter, and getFilter's `return this`.
+    static void SpriteFilterEffects(string rule, MethodDefinition saturate)
+    {
+        string[] calls =
+        {
+            "System.Type::GetTypeFromHandle", "System.Runtime.Serialization.FormatterServices::GetUninitializedObject",
+            "BitmapFilter::getFilter", "BitmapData::applyFilter", "Point::.ctor",
+        };
+        string[] stored = { "ColorMatrixFilter", "Matrix4x4", "Vector4" };
+        Func<string, Exception> changed = what => SpriteRule(rule, "Gfx.saturateImage " + what + ", which `return image;` would drop");
+        foreach (Instruction i in saturate.Body.Instructions)
+        {
+            OpCode op = i.OpCode;
+            var method = i.Operand as MethodReference;
+            var field = i.Operand as FieldReference;
+            var parameter = i.Operand as ParameterDefinition;
+            if (op == OpCodes.Ret && (i.Previous == null || i.Previous.OpCode != OpCodes.Ldarg_0))
+                throw changed("returns something other than its image argument");
+            if ((op == OpCodes.Starg || op == OpCodes.Starg_S || op == OpCodes.Ldarga || op == OpCodes.Ldarga_S) && parameter != null && parameter.Index == 0)
+                throw changed("stores into its image argument");
+            if (method != null && (op == OpCodes.Call || op == OpCodes.Callvirt || op == OpCodes.Newobj))
+            {
+                string name = (method.DeclaringType.Namespace.StartsWith("System") ? method.DeclaringType.FullName : method.DeclaringType.Name) + "::" + method.Name;
+                if (!calls.Contains(name))
+                    throw changed("calls " + method.FullName);
+            }
+            else if (op == OpCodes.Calli || op == OpCodes.Jmp || op == OpCodes.Ldftn || op == OpCodes.Ldvirtftn)
+                throw changed("has " + op.Name);
+            if (op == OpCodes.Stsfld || op == OpCodes.Stobj || op == OpCodes.Cpblk || op == OpCodes.Initblk || op.Name.StartsWith("stind"))
+                throw changed("stores outside its own objects (" + op.Name + ")");
+            if (op == OpCodes.Stfld && (field == null || !stored.Contains(field.DeclaringType.Name)))
+                throw changed("stores " + (field != null ? field.FullName : "a field") + ", not one of the filter it makes");
+            if (op.Name.StartsWith("stelem") && op != OpCodes.Stelem_R8 && !(op == OpCodes.Stelem_Any && (i.Operand as TypeReference) != null && ((TypeReference)i.Operand).FullName == "System.Double"))
+                throw changed("stores into an array other than its double[] (" + op.Name + ")");
+        }
+        MethodDefinition apply = saturate.Body.Instructions.Select(i => i.Operand as MethodReference)
+            .First(m => m != null && m.Name == "applyFilter").Resolve();
+        if (apply == null || !apply.HasBody || apply.Body.Instructions.Any(i => i.Operand is MethodReference) ||
+            apply.Body.Instructions.Count(i => i.OpCode == OpCodes.Stfld || i.OpCode == OpCodes.Stsfld || i.OpCode.Name.StartsWith("stind") || i.OpCode == OpCodes.Stobj) != 1 ||
+            apply.Body.Instructions.Count(i => i.OpCode == OpCodes.Stfld && SpriteUsesField(i, "bmfilter")) != 1)
+            throw SpriteRule(rule, "BitmapData.applyFilter does more than store its filter in bmfilter");
+        MethodDefinition get = saturate.Body.Instructions.Select(i => i.Operand as MethodReference)
+            .First(m => m != null && m.Name == "getFilter").Resolve();
+        if (get == null || !get.HasBody || !get.Body.Instructions.Where(i => i.OpCode != OpCodes.Nop).Select(i => i.OpCode)
+                .SequenceEqual(new[] { OpCodes.Ldarg_0, OpCodes.Ret }))
+            throw SpriteRule(rule, "BitmapFilter.getFilter is not `return this;`");
     }
 }
