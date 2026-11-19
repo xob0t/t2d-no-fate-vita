@@ -191,8 +191,13 @@ namespace T2DCompat
         // (Game), the level and map hooks choose the pages; an App without a scene of its own keeps them.
         public static void EnterApp(object app)
         {
-            if (app != null) Enter("app:" + app.GetType().Name);
+            if (app == null) return;
+            if (AppEntered != null) AppEntered(app.GetType().Name);
+            Enter("app:" + app.GetType().Name);
         }
+
+        // Each App the game enters, by class name, before its start() (the probe's -t2d-set).
+        public static Action<string> AppEntered;
 
         // Game.loadScriptByLevelID: also called by menus for level previews, so it acts only during a level app.
         // Outside one it names the level a briefing (PrefetchApps) that starts next prefetches.

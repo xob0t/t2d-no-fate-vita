@@ -62,7 +62,9 @@ static partial class Rules
     // - each row of the controls list, through the slot invoker 0x180002E30 (drawString), font Fonts.bmpFontSmallWhite
     //   ([rsp+0xA8], Rewind's V49), target Main.CANVAS_BD, ct null (r15, zero throughout); the row's x is r13 (V50,
     //   260, or 290 for player image 397) and its y esi (V7, controlsListTop, then 22 more a row):
-    //     0x1803EB5CC  drawString(CANVAS_BD, button glyph (r14, V15), x - 1, y + 1, 3, null)
+    //     0x1803EB5CC  drawString(CANVAS_BD, button glyph (r14, V17), x - 1, y + 1, 3, null): V17 is the glyph where the
+    //                  control's paths join (IL_0A1C), V15 on the paths that compute one and the row before's (V6,
+    //                  Text.BLANK at first) on the others; V15 is null there, which threw in getStringWidth every frame.
     //     0x1803EB616  drawString(CANVAS_BD, action's text (rbp, V53), x + 4 (V69), y, 9, null)
     static void ControlsExplanationDraw(Engine e)
     {
@@ -70,7 +72,7 @@ static partial class Rules
         MethodRepair m = e.Method("com.bitmapbureau.terminator.scripts.ControlsExplanation::draw()", "32a6c216");
         m.Site("__vtable()", "26bb70f6").Replace(0, 4, il => { });
         m.Site("__native_0x180002E30(", 0, "933de532").With(il =>
-            il.Ldloc(49).Ldsfld("com.bitmapbureau.terminator.Main::CANVAS_BD").Ldloc(15)
+            il.Ldloc(49).Ldsfld("com.bitmapbureau.terminator.Main::CANVAS_BD").Ldloc(17)
               .Ldloc(50).I4(1).Op(OpCodes.Sub).Op(OpCodes.Conv_R8).Ldloc(7).I4(1).Op(OpCodes.Add).Op(OpCodes.Conv_R8)
               .I4(3).Null().Callvirt(drawString));
         m.Site("__native_0x180002E30(", 0, "e6bd7a11").With(il =>

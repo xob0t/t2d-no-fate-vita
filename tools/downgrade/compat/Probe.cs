@@ -31,6 +31,10 @@ using UnityEngine.SceneManagement;
 //   -t2d-invoke <call>[,<call>...]   at the second heartbeat (or 10 s), calls by reflection and logs T2D_INVOKE lines with
 //                                    the result or the exception: <path to an object or a type>::<method>[::<arg>...],
 //                                    each arg an int, @<peek path>, or a string
+//   -t2d-set <App>:<path>=<v>[,...]  a static field set by reflection when the game enters that App (before its
+//                                    start()), or at the first frame for App *: Namespace.Type.field, an int, bool or
+//                                    double. For tests: Game.levelNumber when a MissionBriefing starts picks the level
+//                                    it briefs; Game.infiniteHealth keeps a scripted player alive.
 //   -t2d-atlas-sync                  the atlas prefetches with Resources.Load, not LoadAsync (Atlas.PrefetchAsync)
 // A screenshot is the frame read back at its end and saved as a PNG (on the PS Vita 960x544, about 0.6 s of stall,
 // since ScreenCapture writes nothing there); use a path in ux0:data/T2DNoFate.
@@ -81,6 +85,12 @@ namespace T2DCompat
             stallMs = (int)Flags.Number("-t2d-stalls", 1, 1000f);
             string peek = Flags.Value("-t2d-peek");
             if (peek != null) peeks = peek.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+            string set = Flags.Value("-t2d-set");
+            if (set != null)
+            {
+                sets = set.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+                Atlas.AppEntered += app => ApplySets(app);
+            }
             string invoke = Flags.Value("-t2d-invoke");
             if (invoke != null) invokes = invoke.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
             Atlas.PrefetchAsync = !Flags.Has("-t2d-atlas-sync");
@@ -126,6 +136,11 @@ namespace T2DCompat
             tickMs = now;
             tickNumber++;
             if (peeks != null) Peek();
+            if (sets != null && !setsAtStart)
+            {
+                setsAtStart = true;
+                ApplySets("*");
+            }
             if (invokes != null && PlayerLog.Seconds >= invokeAt) Invoke();
             if (ticks++ == 0) Debug.Log("T2D_PROBE first tick from " + from + " " + Stamp());
             try
@@ -195,6 +210,34 @@ namespace T2DCompat
                 if (value == peeked[i]) continue;
                 peeked[i] = value;
                 Debug.Log("T2D_PEEK " + peeks[i] + " = " + value + " (frame " + Time.frameCount + ")");
+            }
+        }
+
+        static string[] sets;
+        static bool setsAtStart;
+
+        static void ApplySets(string app)
+        {
+            foreach (string set in sets)
+            {
+                int colon = set.IndexOf(':'), equals = set.IndexOf('=');
+                if (colon < 0 || equals < colon || set.Substring(0, colon) != app) continue;
+                string path = set.Substring(colon + 1, equals - colon - 1), text = set.Substring(equals + 1);
+                try
+                {
+                    int dot = path.LastIndexOf('.');
+                    Type type = FindType(path.Substring(0, dot));
+                    FieldInfo field = type == null ? null : type.GetField(path.Substring(dot + 1), BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+                    if (field == null) throw new ArgumentException("no static field " + path);
+                    object value = field.FieldType == typeof(bool) ? (object)bool.Parse(text)
+                        : field.FieldType == typeof(double) ? (object)double.Parse(text, Inv) : (object)int.Parse(text, Inv);
+                    field.SetValue(null, value);
+                    Debug.Log("T2D_SET " + path + " = " + text + " entering " + app);
+                }
+                catch (Exception e)
+                {
+                    Debug.Log("T2D_SET " + set + " failed: " + e.GetType().Name + ": " + e.Message);
+                }
             }
         }
 

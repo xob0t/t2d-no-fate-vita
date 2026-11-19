@@ -268,4 +268,23 @@ static partial class Rules
               .Ldloc(31).Ldloc(1).Op(OpCodes.Ldelem_Ref).Ldloc(3).Op(OpCodes.Conv_R8).Ldloc(2).Op(OpCodes.Conv_R8).I4(9).Null()
               .Callvirt(drawString));
     }
+
+    // Demo.draw (the attract demos' captions), as DialogBox.draw with Demo's own fields: x 164.0 (xmm6), y r12d (V3,
+    // 14 more a line), alignment 9:
+    //   0x1804098AC  the line being typed, V32.drawString(V33, the line so far (V6), x, y, 9, this.currentCharacterCt)
+    //   0x1804099B2  a line typed out, bmpFontSmallWhite.drawString(CANVAS_BD, this.text[line V2] (V42), x, y, 9,
+    //                this.textCt)
+    static void DemoDraw(Engine e)
+    {
+        const string drawString = FontType + "::drawString(BitmapData,String,Double,Double,Int32,ColorTransform)";
+        const string demo = "com.bitmapbureau.terminator.scripts.Demo::";
+        MethodRepair m = e.Method("com.bitmapbureau.terminator.scripts.Demo::draw()", "78e0e7e0");
+        m.Site("__native_0x180002E30(", 0, "9f3246bf").With(il =>
+            il.Ldloc(32).Ldloc(33).Ldloc(6).R8(164.0).Ldloc(3).Op(OpCodes.Conv_R8).I4(9)
+              .This().Ldfld(demo + "currentCharacterCt").Callvirt(drawString));
+        m.Site("__native_0x180002E30(", 0, "e572e107").With(il =>
+            il.Ldsfld("com.bitmapbureau.terminator.ui.Fonts::bmpFontSmallWhite").Ldsfld("com.bitmapbureau.terminator.Main::CANVAS_BD")
+              .Ldloc(42).Ldloc(2).Op(OpCodes.Ldelem_Ref).R8(164.0).Ldloc(3).Op(OpCodes.Conv_R8).I4(9)
+              .This().Ldfld(demo + "textCt").Callvirt(drawString));
+    }
 }
