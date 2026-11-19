@@ -4,6 +4,7 @@
     python -I tools/downgrade/shaders/test/run.py render      # the editor renders every case (Direct3D 11)
     python -I tools/downgrade/shaders/test/run.py reference   # the same cases from the originals' DXBC, in NumPy
     python -I tools/downgrade/shaders/test/run.py compare [renders]  # renders against the reference
+    python -I tools/downgrade/shaders/test/run.py sheet [renders]    # a side-by-side crop as compare-<renders>.png
     python -I tools/downgrade/shaders/test/run.py vita        # PS Vita player (psp2 shader compile), VPK, GXP cost
     python -I tools/downgrade/shaders/test/run.py all         # project, render, reference, compare, vita
 
@@ -375,6 +376,30 @@ def compare(renders: Path):
     return worst
 
 
+def sheet(renders: Path):
+    """compare-<renders>.png: for the pixel-art CRT case at 960x544, a 240x136 crop, enlarged three times: the
+    input stretched to the same size, the reference from the original's DXBC, the faithful render, the fast
+    render, and the faithful render's difference from the reference times 32."""
+    name, (x, y, w, h), zoom = 'pixelart_960x544', (360, 200, 240, 136), 3
+    source = Image.open(INPUTS / 'pixelart.png').convert('RGB').resize((960, 544), Image.NEAREST)
+    tiles = [('input, nearest', source), ('original (DXBC reference)', Image.open(REFERENCE / f'crt_{name}.png').convert('RGB')),
+             (f'faithful, {renders.name}', Image.open(renders / f'crt_{name}.png').convert('RGB')),
+             (f'T2D_CRT_FAST, {renders.name}', Image.open(renders / f'crtfast_{name}.png').convert('RGB'))]
+    diff = np.abs(np.asarray(tiles[2][1], np.int16) - np.asarray(tiles[1][1], np.int16)).max(-1)
+    tiles.append(('faithful - original, x32', Image.fromarray(np.clip(diff * 32, 0, 255).astype(np.uint8)).convert('RGB')))
+    out = Image.new('RGB', (len(tiles) * (w * zoom + 8), h * zoom + 20), (32, 32, 32))
+    from PIL import ImageDraw
+
+    draw = ImageDraw.Draw(out)
+    for i, (label, image) in enumerate(tiles):
+        crop = image.crop((x, y, x + w, y + h)).resize((w * zoom, h * zoom), Image.NEAREST)
+        out.paste(crop, (i * (w * zoom + 8), 20))
+        draw.text((i * (w * zoom + 8) + 4, 4), label, fill=(230, 230, 230))
+    path = WORK / f'compare-{renders.name}.png'
+    out.save(path)
+    log(f'sheet {path}')
+
+
 # The PS Vita build: the editor compiles the shaders with psp2cgc; the GXPs come out of the built data.
 
 
@@ -477,7 +502,7 @@ def gxp_cost():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('stage', choices=['project', 'render', 'reference', 'compare', 'vita', 'gxp', 'all'])
+    parser.add_argument('stage', choices=['project', 'render', 'reference', 'compare', 'sheet', 'vita', 'gxp', 'all'])
     parser.add_argument('renders', nargs='?', default='d3d11', help='compare: a folder under work/shaders/test')
     args = parser.parse_args()
     if args.stage in ('project', 'all'):
@@ -488,6 +513,8 @@ def main():
         reference()
     if args.stage in ('compare', 'all'):
         compare(WORK / args.renders)
+    if args.stage in ('sheet', 'all'):
+        sheet(WORK / args.renders)
     if args.stage in ('vita', 'all'):
         vita()
     if args.stage == 'gxp':
