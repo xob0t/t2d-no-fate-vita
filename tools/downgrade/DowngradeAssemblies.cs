@@ -137,6 +137,9 @@ partial class DowngradeAssemblies
         new Pass("audio", Scope.Game, AudioStartupLoads),
         new Pass("audio", Scope.Game, AudioClipLoads),
         new Pass("audio", Scope.Game, AudioDeferredClips),
+        // rewriter/MenuCursor.cs: Menu.moveCursor's grid search stops at its first hit (docs/drawing.md), M1. Before Trace,
+        // which changes the bodies M1 pins by hash.
+        new Pass("menus", Scope.Game, MenuCursorSearch),
         // rewriter/Trace.cs: a diagnostic build's method trail (T2D_TRACE=1), after the passes that change bodies.
         new Pass("diagnostics", Scope.Game, TraceMethods, "T2D_TRACE"),
         // SplitMethods.cs: last, so every pass above sees whole methods; cuts what psp2snc -O3 can't compile.
