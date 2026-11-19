@@ -40,6 +40,17 @@
 // - Prefetch: a mission briefing (PrefetchApps) loads the pages of the level it briefs, which its start() names
 //   through Game.loadScriptByLevelID (EnterLevel, outside a level), and SpriteBatch.Flush draws one of them a frame,
 //   invisibly (NextWarm), so their texels are read while the briefing shows rather than on the level's first frame.
+// - Ahead: an App that is always followed by the same one (AheadApps: the boot's splash, logo, attract, menu, and the
+//   menu's briefing) loads and warms the next one's pages the same way, so the next App's first frames find them drawn.
+// - Every load but a miss's and the game's own preloads is a Resources.LoadAsync, and every page a scene wants that
+//   isn't drawn yet gets its invisible draw (WarmAll), paced: the loading thread reads the texels, a first draw only
+//   uploads them (about 21 ms a MB). Get waits for a page still loading. Background loads (prefetch, ahead) start
+//   PrefetchDelayMs after a Switch, PrefetchInFlight at a time, so a synchronous load on the main thread (the
+//   briefing's music, a sound) waits for few of them.
+// - A page over WarmBigBytes (the 16 and 32 MB layers; 0.7 s to upload a 32 MB one) isn't warmed while an App shows:
+//   it is warmed in the frames just after the next App or level Enter (CoverMs), which Transition.update makes while
+//   its fade covers the screen, with whatever else is still waiting.
+// - Slow frames (SlowFrameMs) are logged with what the atlas did in them and the frame before.
 //
 // C# 5, as T2DCompat is compiled by the .NET Framework's csc.
 
@@ -77,6 +88,25 @@ namespace T2DCompat
         // Log every miss (true) or only the first per page and scene (false).
         public static bool LogAllMisses = false;
 
+        // The switches below are bools and ints so that the probe's -t2d-set can turn each off for a comparison run.
+        // Apps always followed by the same App, "<from>><to>": the next one's pages load and warm while the first shows.
+        public static readonly string[] AheadApps = { "BBSplash>ReefLogo", "ReefLogo>Attract", "Attract>MainMenu", "MainMenu>MissionBriefing" };
+        public static bool Ahead = true;
+        public static int AheadDelayMs = 1000;
+        // A Switch loads the scenes' pages with Resources.LoadAsync too (Get waits for one still loading), not Resources.Load.
+        public static bool AsyncSwitch = true;
+        // Every wanted page not drawn yet is warmed, not only the prefetch's; the first warm WarmDelayMs after a Switch.
+        public static bool WarmAll = true;
+        public static int WarmDelayMs = 500;
+        // Background loads (prefetch, ahead) in flight at once (0: all at once), from PrefetchDelayMs after their Switch.
+        public static int PrefetchInFlight = 2;
+        public static int PrefetchDelayMs = 500;
+        // Pages over this many bytes are warmed only in the CoverMs after an App or level Enter (0: like the others).
+        public static int WarmBigBytes = 8 * 1024 * 1024;
+        public static int CoverMs = 300;
+        // A frame longer than this logs what the atlas did in it (0: off).
+        public static int SlowFrameMs = 100;
+
         static bool loaded;
         static int[] pageW, pageH;
         static int[][] tex;
@@ -101,12 +131,20 @@ namespace T2DCompat
         static int[] levelScenes = new int[0];
         static int[] prefetchScenes = new int[0];
         static string nextLevel;    // the level a menu or a briefing named last, outside a level
+        static int[] aheadScenes = new int[0];
+        static string aheadKey;     // the next App's key, until AheadDelayMs is up
+        static float aheadAt;
         static string prefetchKey;
-        static float prefetchStart, warmNextAt;
+        static float prefetchStart, warmNextAt, warmStartAt, coverUntil;
         static int prefetchPages, prefetchAsyncPages;
-        static readonly Queue<int> warmQueue = new Queue<int>();
+        static readonly HashSet<int> prefetchLeft = new HashSet<int>();
+        static readonly List<int> warmList = new List<int>();     // wanted pages not drawn yet, smallest first
+        static readonly List<int> bgQueue = new List<int>();      // background loads not started yet
+        static float bgStartAt;
         static readonly Dictionary<int, ResourceRequest> asyncLoads = new Dictionary<int, ResourceRequest>();
+        static readonly List<int> doneLoads = new List<int>();
         static long asyncBytes;
+        static bool[] viaAsync;     // loaded with LoadAsync, for the slow-frame log
         static bool[] wanted;
         static string sceneLabel = "(start)";
 
@@ -134,11 +172,19 @@ namespace T2DCompat
             Texture2D t = pages[page];
             if (t == null)
             {
-                Miss(page);
-                t = LoadPage(page);
+                t = WaitFor(page);
+                if (t == null)
+                {
+                    Miss(page);
+                    t = LoadPage(page);
+                }
             }
             lastUse[page] = ++useClock;
-            if (!drawn[page]) Drawn(page);
+            if (!drawn[page])
+            {
+                Drawn(page);
+                if (t != null) Note("draw " + PageName(page) + " " + Mb(page) + (viaAsync[page] ? " async" : " sync"));
+            }
             return t;
         }
 
@@ -146,7 +192,33 @@ namespace T2DCompat
         {
             drawn[page] = true;
             pendingBytes -= PageBytes(page);
+            if (prefetchLeft.Remove(page) && prefetchLeft.Count == 0 && prefetchKey != null)
+                Debug.Log(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    "T2D atlas: prefetched {0}: {1} pages drawn in {2:0.00} s, {3:0.0} MB resident, budget {4:0.0} MB",
+                    prefetchKey, prefetchPages, Time.realtimeSinceStartup - prefetchStart, residentBytes / 1048576.0, BudgetBytes / 1048576.0));
         }
+
+        // A page Get needs that is loading in the background or waits to: finished now (the main thread waits for the
+        // loading thread), or null if it isn't one of those.
+        static Texture2D WaitFor(int page)
+        {
+            ResourceRequest request;
+            bool queued = bgQueue.Remove(page);
+            if (!asyncLoads.TryGetValue(page, out request))
+            {
+                if (!queued) return null;
+                Evict(PageBytes(page));
+                LoadAsync(page);
+                if (!asyncLoads.TryGetValue(page, out request)) return pages[page];
+            }
+            float start = Time.realtimeSinceStartup;
+            Complete(page, request);
+            waits++;
+            Note("wait " + PageName(page) + " " + Mb(page) + " " + Ms(start));
+            return pages[page];
+        }
+
+        static int waits;
 
         // loadTexturePacks(n): the game's own preloads, by pack number; a page now, harmless.
         public static void Preload(int page)
@@ -250,6 +322,17 @@ namespace T2DCompat
                 appKey = name;
                 string named = nextLevel;
                 nextLevel = null;
+                // Transition.getApp makes the App while the fade covers the screen: big pages warm now.
+                coverUntil = Time.realtimeSinceStartup + CoverMs / 1000f;
+                aheadScenes = new int[0];
+                aheadKey = null;
+                if (Ahead)
+                    foreach (string pair in AheadApps)
+                        if (pair.StartsWith(name + ">", StringComparison.Ordinal))
+                        {
+                            aheadKey = "app:" + pair.Substring(name.Length + 1);
+                            aheadAt = Time.realtimeSinceStartup + AheadDelayMs / 1000f;
+                        }
                 if (levelApps.Contains(name))
                 {
                     // Game: the level hooks that follow pick the pages; keep what is resident until then.
@@ -296,6 +379,9 @@ namespace T2DCompat
             {
                 prefetchScenes = new int[0];
                 prefetchKey = null;
+                prefetchLeft.Clear();
+                // The level's start, still under the transition's fade: what the briefing left waits no longer.
+                coverUntil = Time.realtimeSinceStartup + CoverMs / 1000f;
             }
             if (SameScenes(scenes, levelScenes) && !prefetched) return;
             levelScenes = scenes;
@@ -314,26 +400,31 @@ namespace T2DCompat
             float start = Time.realtimeSinceStartup;
             for (int i = 0; i < wanted.Length; i++) wanted[i] = false;
             var label = new StringBuilder();
-            foreach (int[] set in new[] { appScenes, levelScenes, prefetchScenes })
+            foreach (int[] set in new[] { appScenes, levelScenes, prefetchScenes, aheadScenes })
                 foreach (int s in set)
                 {
                     foreach (int p in scenePages[s]) wanted[p] = true;
-                    if (label.Length > 0) label.Append(set == prefetchScenes ? " + prefetch " : " + ");
+                    if (label.Length > 0) label.Append(set == prefetchScenes ? " + prefetch " : set == aheadScenes ? " + ahead " : " + ");
                     label.Append(sceneNames[s]);
                 }
             sceneLabel = label.Length > 0 ? label.ToString() : key;
-            int unloaded = 0, added = 0;
+            int unloaded = 0, added = 0, background = 0;
             for (int p = 0; p < pages.Length; p++)
                 if (pages[p] != null && !wanted[p] && !sticky[p])
                 {
                     UnloadPage(p);
                     unloaded++;
                 }
+            bgQueue.RemoveAll(p => !wanted[p]);
             bool async = PrefetchAsync;
+            // The scenes' own pages now; the prefetch's and the next App's in the background, smallest first.
+            var later = new List<int>();
             for (int p = 0; p < pages.Length; p++)
-                if (wanted[p] && pages[p] == null && !asyncLoads.ContainsKey(p))
+                if (wanted[p] && pages[p] == null && !asyncLoads.ContainsKey(p) && !bgQueue.Contains(p))
                 {
-                    if (async && !InScenes(p, appScenes) && !InScenes(p, levelScenes))
+                    bool own = InScenes(p, appScenes) || InScenes(p, levelScenes);
+                    if (async && !own) later.Add(p);
+                    else if (async && AsyncSwitch)
                     {
                         Evict(PageBytes(p));
                         LoadAsync(p);
@@ -341,10 +432,46 @@ namespace T2DCompat
                     else LoadPage(p);
                     added++;
                 }
+            // A level's Enter: what the briefing hadn't started yet starts now.
+            for (int i = bgQueue.Count - 1; i >= 0; i--)
+                if (InScenes(bgQueue[i], levelScenes) || InScenes(bgQueue[i], appScenes))
+                {
+                    int p = bgQueue[i];
+                    bgQueue.RemoveAt(i);
+                    Evict(PageBytes(p));
+                    LoadAsync(p);
+                }
+            later.Sort(BySize);
+            bgQueue.AddRange(later);
+            background = later.Count;
+            if (later.Count > 0) bgStartAt = Time.realtimeSinceStartup + (PrefetchInFlight > 0 ? PrefetchDelayMs / 1000f : 0f);
+            RebuildWarm();
+            Note("switch " + key + " " + Ms(start));
             Debug.Log(string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                "T2D atlas: {0} -> {1}: -{2} +{3} pages, {4:0.0} MB resident ({5:0.0} not drawn yet), budget {6:0.0} MB, {7:0} ms",
+                "T2D atlas: {0} -> {1}: -{2} +{3} pages{8}, {4:0.0} MB resident ({5:0.0} not drawn yet), budget {6:0.0} MB, {7:0} ms",
                 key, sceneLabel, unloaded, added, residentBytes / 1048576.0, pendingBytes / 1048576.0, BudgetBytes / 1048576.0,
-                (Time.realtimeSinceStartup - start) * 1000));
+                (Time.realtimeSinceStartup - start) * 1000, background > 0 ? " (" + background + " in the background)" : ""));
+        }
+
+        static int BySize(int a, int b)
+        {
+            return PageBytes(a) != PageBytes(b) ? PageBytes(a).CompareTo(PageBytes(b)) : a.CompareTo(b);
+        }
+
+        // The pages to warm: those wanted and not drawn yet, resident or on their way, smallest first; all of them, or
+        // (without WarmAll) the prefetch's and the next App's. The first warm waits WarmDelayMs, for the scene's own draws.
+        static void RebuildWarm()
+        {
+            warmList.Clear();
+            for (int p = 0; p < pages.Length; p++)
+            {
+                if (!wanted[p] || (pages[p] != null && drawn[p])) continue;
+                if (pages[p] == null && !asyncLoads.ContainsKey(p) && !bgQueue.Contains(p)) continue;
+                if (!WarmAll && !InScenes(p, prefetchScenes) && !InScenes(p, aheadScenes)) continue;
+                warmList.Add(p);
+            }
+            warmList.Sort(BySize);
+            warmStartAt = Time.realtimeSinceStartup + WarmDelayMs / 1000f;
         }
 
         static bool InScenes(int page, int[] scenes)
@@ -356,24 +483,19 @@ namespace T2DCompat
 
         // ---- prefetch ----------------------------------------------------------------------------------------------
 
-        // After the briefing's Switch: every page of the level not drawn yet waits for its invisible draw.
+        // After the briefing's Switch: the level's pages not drawn yet, for the log line when the last is drawn.
         static void Prefetch()
         {
             prefetchStart = Time.realtimeSinceStartup;
             prefetchPages = prefetchAsyncPages = 0;
-            warmQueue.Clear();
-            var order = new List<int>();
+            prefetchLeft.Clear();
             foreach (int s in prefetchScenes)
                 foreach (int p in scenePages[s])
-                    if (((pages[p] != null && !drawn[p]) || asyncLoads.ContainsKey(p)) && !order.Contains(p)) order.Add(p);
-            // Small pages first, so the briefing slows a little at a time before the big layers stop it once each.
-            order.Sort((a, b) => PageBytes(a) != PageBytes(b) ? PageBytes(a).CompareTo(PageBytes(b)) : a.CompareTo(b));
-            foreach (int p in order)
-            {
-                warmQueue.Enqueue(p);
-                prefetchPages++;
-                if (asyncLoads.ContainsKey(p)) prefetchAsyncPages++;
-            }
+                    if (((pages[p] != null && !drawn[p]) || asyncLoads.ContainsKey(p) || bgQueue.Contains(p)) && prefetchLeft.Add(p))
+                    {
+                        prefetchPages++;
+                        if (pages[p] == null) prefetchAsyncPages++;
+                    }
             Debug.Log("T2D atlas: prefetching " + prefetchPages + " pages of " + prefetchKey + (prefetchAsyncPages > 0 ? ", " + prefetchAsyncPages + " with LoadAsync" : ""));
         }
 
@@ -390,36 +512,90 @@ namespace T2DCompat
             asyncBytes += PageBytes(page);
         }
 
-        // From SpriteBatch.Flush, once a frame: the next prefetched page that hasn't been drawn, for an invisible draw
-        // that makes the player read its texels now, or null.
+        // A LoadAsync done (or waited for): the page joins the table, or goes again if no scene wants it any more.
+        static void Complete(int page, ResourceRequest request)
+        {
+            asyncLoads.Remove(page);
+            asyncBytes -= PageBytes(page);
+            var t = request.asset as Texture2D;
+            if (pages[page] != null) return;
+            if (t == null)
+            {
+                if (wanted[page]) LoadPage(page);
+                return;
+            }
+            Adopt(page, t);
+            viaAsync[page] = true;
+            // Through UnloadPage, so that its release waits two flushes like any other's.
+            if (!wanted[page] && !sticky[page]) UnloadPage(page);
+        }
+
+        // From SpriteBatch.Flush, once a frame before the warm draws: finishes the loads that are done, starts the
+        // background loads that may start, and the next App's pages once AheadDelayMs is up.
+        static void Pump()
+        {
+            float now = Time.realtimeSinceStartup;
+            if (asyncLoads.Count > 0)
+            {
+                doneLoads.Clear();
+                foreach (KeyValuePair<int, ResourceRequest> kv in asyncLoads) if (kv.Value.isDone) doneLoads.Add(kv.Key);
+                foreach (int p in doneLoads) Complete(p, asyncLoads[p]);
+            }
+            if (aheadKey != null && Ahead && now >= aheadAt)
+            {
+                int[] scenes;
+                string key = aheadKey;
+                aheadKey = null;
+                if (keys.TryGetValue(key, out scenes))
+                {
+                    aheadScenes = scenes;
+                    Switch("ahead " + key);
+                }
+            }
+            IssueBackground();
+        }
+
+        static void IssueBackground()
+        {
+            if (bgQueue.Count == 0 || Time.realtimeSinceStartup < bgStartAt) return;
+            while (bgQueue.Count > 0 && (PrefetchInFlight <= 0 || asyncLoads.Count < PrefetchInFlight))
+            {
+                int p = bgQueue[0];
+                bgQueue.RemoveAt(0);
+                if (!wanted[p] || pages[p] != null || asyncLoads.ContainsKey(p)) continue;
+                Evict(PageBytes(p));
+                LoadAsync(p);
+            }
+        }
+
+        // From SpriteBatch.Flush, once a frame, and again while it returns a page: the next page that is wanted and
+        // not drawn yet, for an invisible draw that makes the player upload its texels now, or null. Paced by
+        // WarmBytesPerSecond; pages over WarmBigBytes only in the CoverMs after an Enter, unpaced, as the screen is covered.
         public static Texture2D NextWarm()
         {
-            if (!loaded || Time.realtimeSinceStartup < warmNextAt) return null;
-            while (warmQueue.Count > 0)
+            if (!loaded || warmList.Count == 0) return null;
+            float now = Time.realtimeSinceStartup;
+            bool cover = now < coverUntil;
+            bool paced = now < warmNextAt || now < warmStartAt;
+            if (!cover && paced) return null;
+            for (int i = 0; i < warmList.Count; i++)
             {
-                int p = warmQueue.Peek();
-                ResourceRequest request;
-                if (asyncLoads.TryGetValue(p, out request))
+                int p = warmList[i];
+                if (!wanted[p] || (pages[p] != null && drawn[p]) || (pages[p] == null && !asyncLoads.ContainsKey(p) && !bgQueue.Contains(p)))
                 {
-                    if (!request.isDone) return null;
-                    asyncLoads.Remove(p);
-                    asyncBytes -= PageBytes(p);
-                    var t = request.asset as Texture2D;
-                    if (t == null || pages[p] != null)
-                    {
-                        if (pages[p] == null && wanted[p]) LoadPage(p);
-                    }
-                    else Adopt(p, t);
+                    warmList.RemoveAt(i--);
+                    continue;
                 }
-                warmQueue.Dequeue();
-                if (pages[p] == null || drawn[p]) continue;
+                // Under the cover, the scenes' own pages: all of them, big ones too, waited for if still loading.
+                // A prefetch's or the next App's pages keep their pace.
+                bool covered = cover && (InScenes(p, appScenes) || InScenes(p, levelScenes));
+                if (!covered && (paced || (WarmBigBytes > 0 && PageBytes(p) > WarmBigBytes))) continue;
+                if (pages[p] == null && (!covered || WaitFor(p) == null)) continue;
+                warmList.RemoveAt(i);
                 Drawn(p);
                 lastUse[p] = ++useClock;
-                warmNextAt = Time.realtimeSinceStartup + PageBytes(p) / WarmBytesPerSecond;
-                if (warmQueue.Count == 0)
-                    Debug.Log(string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                        "T2D atlas: prefetched {0}: {1} pages drawn in {2:0.00} s, {3:0.0} MB resident, budget {4:0.0} MB",
-                        prefetchKey ?? "(done)", prefetchPages, Time.realtimeSinceStartup - prefetchStart, residentBytes / 1048576.0, BudgetBytes / 1048576.0));
+                if (!covered) warmNextAt = now + PageBytes(p) / WarmBytesPerSecond;
+                Note("warm " + PageName(p) + " " + Mb(p) + (covered ? " covered" : ""));
                 return pages[p];
             }
             return null;
@@ -431,8 +607,11 @@ namespace T2DCompat
         {
             Evict(PageBytes(page));
             HoldBallast();
+            float start = Time.realtimeSinceStartup;
             Texture2D t = Resources.Load<Texture2D>(Folder + PageName(page));
+            Note("load " + PageName(page) + " " + Mb(page) + " " + Ms(start));
             made[page] = false;
+            viaAsync[page] = false;
             if (t == null)
             {
                 // repack.py --raw: the page as RGBA 4444 texels in a TextAsset.
@@ -497,6 +676,8 @@ namespace T2DCompat
         // unless the page was loaded again since (Resources.Load gives back the same texture while it isn't unloaded).
         public static void ReleaseUnloaded()
         {
+            if (!loaded) return;
+            SlowFrame();
             StepBallast();
             foreach (Unloaded u in unloadedBefore)
             {
@@ -509,6 +690,47 @@ namespace T2DCompat
             List<Unloaded> swap = unloadedBefore;
             unloadedBefore = unloaded;
             unloaded = swap;
+            // After the swap, so that what Pump unloads waits two flushes like the rest.
+            Pump();
+        }
+
+        // ---- slow frames -------------------------------------------------------------------------
+
+        static readonly StringBuilder noteNow = new StringBuilder();
+        static string noteBefore = "";
+        static float lastFlushAt = -1;
+        static int slowLogs;
+
+        // What the atlas did since the last flush: switches, loads, waits, first draws, warm draws.
+        static void Note(string what)
+        {
+            if (SlowFrameMs <= 0) return;
+            if (noteNow.Length < 600) noteNow.Append(noteNow.Length > 0 ? ", " : "").Append(what);
+        }
+
+        // Each flush: a frame longer than SlowFrameMs since the last one is logged with what the atlas did in it and
+        // in the frame before (whose draws the render thread may have been working through), and the free memory.
+        static void SlowFrame()
+        {
+            float now = Time.realtimeSinceStartup;
+            float ms = lastFlushAt < 0 ? 0 : (now - lastFlushAt) * 1000f;
+            lastFlushAt = now;
+            if (SlowFrameMs > 0 && ms > SlowFrameMs && slowLogs++ < 200)
+                Debug.Log(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    "T2D atlas: slow frame {0:0} ms in {1}: [{2}] before: [{3}];{4} pages {5:0.0} MB, {6:0.0} not drawn yet, {7} loading, {8} waiting",
+                    ms, sceneLabel, noteNow, noteBefore, FreeLine(), residentBytes / 1048576.0, pendingBytes / 1048576.0, asyncLoads.Count, bgQueue.Count));
+            noteBefore = noteNow.ToString();
+            noteNow.Length = 0;
+        }
+
+        static string Ms(float since)
+        {
+            return ((Time.realtimeSinceStartup - since) * 1000f).ToString("0", System.Globalization.CultureInfo.InvariantCulture) + " ms";
+        }
+
+        static string Mb(int page)
+        {
+            return (PageBytes(page) / 1048576.0).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture) + " MB";
         }
 
         // Whether `need` more bytes of pages fit: in free video memory beyond the reserve, with the pages loaded but not
@@ -586,7 +808,7 @@ namespace T2DCompat
             }
             // Low outside a prefetch: pages that wait for a draw the scene may never make; the player's headroom first.
             // In a prefetch the ballast stays, or the pages still to come would take what it gave back.
-            bool prefetching = asyncLoads.Count > 0 || warmQueue.Count > 0;
+            bool prefetching = asyncLoads.Count > 0 || bgQueue.Count > 0 || warmList.Count > 0;
             bool waiting = pendingBytes > 0 || prefetching;
             bool low = free >= 0 && free < CdramReserveBytes / 2 && !prefetching;
             if (waiting && !low)
@@ -649,6 +871,7 @@ namespace T2DCompat
             pages = new Texture2D[pageW.Length];
             made = new bool[pageW.Length];
             drawn = new bool[pageW.Length];
+            viaAsync = new bool[pageW.Length];
             lastUse = new int[pageW.Length];
             wanted = new bool[pageW.Length];
             Debug.Log("T2D atlas: " + pageW.Length + " pages, " + tex.Length + " images, " + sceneNames.Length + " scenes");

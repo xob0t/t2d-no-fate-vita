@@ -475,12 +475,21 @@ namespace T2DCompat
 
         // A page the atlas prefetched (Atlas.NextWarm), drawn as one texel with the ColorTransform material at colour 0
         // and offset 0: its alpha is 0, so the blend leaves the screen as it was, but the player reads the page's
-        // texels for it now rather than at the page's first real draw.
+        // texels for it now rather than at the page's first real draw. Usually one page a frame; while a transition
+        // covers the screen, every page the new scene still waits for (Atlas.NextWarm says which).
         static void Warm(Camera camera)
         {
             if ((object)warmMaterial == null || (object)camera == null) return;
-            Texture2D page = Atlas.NextWarm();
-            if ((object)page == null) return;
+            for (int n = 0; n < 64; n++)
+            {
+                Texture2D page = Atlas.NextWarm();
+                if ((object)page == null) return;
+                WarmOne(camera, page);
+            }
+        }
+
+        static void WarmOne(Camera camera, Texture2D page)
+        {
             Init();
             if (warmMesh == null)
             {
