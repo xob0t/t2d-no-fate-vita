@@ -85,6 +85,7 @@ The repacker rounds each channel to 4 bits, and its check compares every frame a
 - Raw pages with `--raw`, the fallback (`T2D_ATLAS_PAGES=raw`). Each `pNNN.bytes` holds RGBA 4444 texels in Unity's layout, rows bottom first, a little-endian u16 per texel with R in the top nibble. Atlas.cs makes the texture with `LoadRawTextureData` and `Apply(false, true)`.
 
 Atlas.cs loads either: it tries `Resources.Load<Texture2D>` first, then the TextAsset.
+In the project the PNG pages larger than 1024 are 1024x1024 tiles instead, cut by `atlas/step.py` ([Loads without freezes](#loads-without-freezes)).
 The PNG pages take 30 MB in the project, the raw ones 513 MB; in the player both are 512 MB of texels.
 
 ### RGBA 4444 in the editor and the builder
@@ -141,6 +142,7 @@ Sticky pages, the other languages' fonts, stay once loaded, so a player in Japan
 
 - The budget follows free video memory. `BudgetBytes` is the bytes of pages that fit in CDRAM now: those resident and drawn, those unloaded but not released yet, and what CDRAM has free beyond `CdramReserveBytes` (6 MB); on a player that doesn't report free memory (Windows), `FixedBudgetBytes`, 150 MB. Before a page loads, pages no current scene wants go, least recently used first, until the page fits beside the pages loaded but not drawn yet. Pages the scenes want load anyway, and the player puts them in main memory, which is slower to sample; the log says so (`video memory full in ...`). Free CDRAM comes from `UnityEngine.PSVita.Diagnostics` (`compat/FreeMemory.cs`).
 - A mission briefing prefetches its level (`PrefetchApps`). `MissionBriefing.start` names the level through `Game.loadScriptByLevelID` (`EnterLevel` outside a level), and the atlas loads that level's pages beside the briefing's with `Resources.LoadAsync`; `SpriteBatch.Flush` then draws one a frame, smallest first, as one texel of the ColorTransform material with colour 0 and offset 0 (`NextWarm`), so the blend leaves the screen as it was while the player uploads the page. Draws are paced by `WarmBytesPerSecond` (14 MB/s). The prefetched pages stay wanted through the apps between the briefing and the level (`PrefetchKeep`: story mode's controls tutorial) and become the level's at its Enter. The probe's `-t2d-atlas-sync` loads them with `Resources.Load` instead.
+  [Loads without freezes](#loads-without-freezes) has what came after: the next App's pages ahead, the background loads a few at a time, tiles for the big pages.
 
 Measured entering Future War 1 from arcade mode's briefing (17 pages, 80 MB; runs `fw1m`, `r1a`, `r3a`, `r3b`):
 
@@ -168,6 +170,42 @@ Loading them at the demo's Enter froze its first frames for 17 to 19 s and took 
 The first demo, map 10, then draws about 100 MB of them, its worst frame 7.4 s (`idle2t`): splitting the scene by map is the fix still to make.
 
 Pages in main memory cost no frame time that the heartbeat shows: Future War 2, 3 and 4, Freeway, Steel Mill, the story's Future War 1 and the Factory each have 24 to 40 MB of pages in main memory and run at p90 17.2 to 17.5 ms, as the levels with none do ([build.md](build.md#levels)).
+
+### Loads without freezes
+
+With the prefetch, every level still froze for 0.6 to 0.9 s two or three times before it started, though never once it had (`b4s4`, `b5a5`, `b5s2`, `t3s2`; the stalls every 20 s from 70 s on were the probe's screenshots).
+The slow-frame log (below) and a `T2D_TRACE` run found three causes:
+
+- The attract cutscene's start, at 12 s (608 to 1,082 ms): its pages loaded with `Resources.Load` while the sound loader's `LoadAsync` clips were still in flight, and a synchronous load waits for those (the Switch alone took 16 to 631 ms), then their first draws read the texels.
+- The briefing's start (613 to 688 ms; 375 ms before the prefetch): the briefing's own pages, read at their first draw, and its music starting right after the prefetch had queued all 17 to 22 of the level's `LoadAsync` loads.
+- During the briefing, in the levels with a 4096x4096 layer (Future War 2 and 3, Steel Mill, the Factory: 685 to 697 ms each): a `LoadAsync` texture's integration on the main thread. That frame calls nothing of the atlas, and main memory drops by the page's 32 MB in it. The warm draw after it is cheap: the Factory's two 32 MB pages, held back to the level's start, drew in one 193 ms frame (`n2s2`). On this player integration costs about 21 ms a MB, and can't be split.
+
+What does it now, each a field that the probe's `-t2d-set` can turn off for a comparison run (`*:T2DCompat.Atlas.<field>=...`):
+
+- Tiles (the build step): a page larger than 1024 goes to the project as 1024x1024 tiles, `pNNN_K.png`, K row by row from the bottom, with the page's import settings (`atlas/step.py`; `tiles.bytes` holds the tile size; `T2D_ATLAS_PAGES=raw` has none). 22 pages make 190 tiles. Atlas.cs numbers the tiles after the 106 pages, and a scene wants a big page's tiles instead of the page; `PageCount` stays 106. `SpriteBatch.SubmitTiled` cuts a big page's quad along the tiles' edges, one quad per tile it covers; the quad is a parallelogram, so a point's place follows its UV linearly. A flipped frame's UVs (uv - 1) move back into [0, 1] first, and tiles clamp instead of wrapping. `atlas/check/tilecheck.py` drew every frame of the 22 pages that way in all four flips, at 1:1 and 1.37x: 0 pixels differ at 1:1 and 0.016% at 1.37x, at texel edges where the float rounding falls either way.
+- `Ahead`: an App always followed by the same one (`AheadApps`: BBSplash, ReefLogo, Attract, MainMenu, then MissionBriefing) loads and warms the next one's pages from `AheadDelayMs` (1 s) after its own start, so the next App's Enter finds them drawn (`-1 +0 pages, 0.0 not drawn yet`). The log names the next scene by number (`ahead scene 19`): drive.py's `until` reads the whole log for an App's name.
+- `AsyncSwitch`: a Switch loads the scenes' own pages with `LoadAsync` too, and `Get` waits for one still loading (`WaitFor`), except the first Switch, the splash's at boot: there its pages integrated in one 0.7 to 2 s frame while the clips loaded.
+- `PrefetchInFlight` (2) and `PrefetchDelayMs` (0.5 s): the prefetch's and the next App's loads wait in a queue, smallest first, and start a few at a time, so a synchronous load on the main thread (the briefing's music) waits behind few.
+- `SoundLoads.HoldForPages`: the sound loader starts no clip load while pages load (`Atlas.Busy`, joined in `Probe.Install`). At boot a 2 MB page's integration took one ~200 ms frame while the clips loaded, and 40 ms after.
+- `WarmAll`: every wanted page not drawn yet gets its invisible draw, not only the prefetch's, `WarmDelayMs` (0.5 s) after a Switch so that the scene's own first draws come first. A page from `Resources.Load` is warmed only under a transition's cover (its first draw reads the texels, about 80 ms a MB).
+- `CoverMs` (0.3 s): `Transition.getApp` makes the next App while the fade covers the screen, so for that long after an App's Enter, and a level's after a briefing, its own pages still waiting are warmed all at once, unpaced, and still-loading ones are waited for. Pages over `WarmBigBytes` (8 MB; with tiles, none) warm only then.
+- A page a miss loaded stays wanted until the next Switch: with CDRAM full, evictions made the Factory load p007, p043 and p065 again every few frames.
+- `SlowFrameMs` (100): a frame longer than that logs what the atlas did in it and in the frame before: Switches, loads with their time, waits, finished loads, first draws (`sync` or `async`) and warm draws, and the free memory (`T2D atlas: slow frame ...`).
+
+Measured from boot to a minute of play through the arcade briefing with `-t2d-heartbeat 5 -t2d-stalls 100` and no screenshots but one at 95 s (`work/runs/hitch/run.sh`; the level-select list's 4 and 2, arcade 5). Before is the code before these changes (`b4s4`, `b5a5`, `b5s2`, with `-t2d-stalls 500` and screenshots from 70 s, so the level's worst frames there are screenshots), after is `f6s4`, `f6a5`, `f6s2` (screenshots of `m5s4` and `m5s2` checked the tiles). Times are the worst frame of each part, in ms; after, the Attract's and the briefing's first frames did no atlas work (`slow frame ... [switch app:Attract 0 ms]`, nothing loading): that is the game's own start of them.
+
+| Level | | Attract's start | Briefing's start | Rest of the briefing | Level's start | Level's other frames over 100 ms | Level p50 / p90 | CDRAM / LPDDR free in the level | Pages resident |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| L04 Future War 2 | before | 776 | 417 | 694 | under 500 | screenshots only | 16.7 / 17.1-17.4 | 35.5-38.5 / 162 MB | 22, 74 MB, 32 in main memory |
+| | after | 184 (221 later in the attract) | 329 (129 in `t4s4`) | 53 | 136 | none | 16.7 / 17.2-17.4 | 12.5 / 188 MB | 37, 74 MB |
+| L08 Freeway | before | 608 | 653 | 184 | under 500 | screenshots only | 16.7 / 17.3-17.5 | 13.5-16.5 / 186 MB | 26, 72 MB |
+| | after | 127 (175 later) | under 100 | 88 | under 100 | none (worst 18.8) | 16.7 / 17.3-17.5 | 12.5 / 190 MB | 36, 72 MB |
+| L12 Cyberdyne Factory | before | 945 | 635 | 694, 756 | 176 | 3 misses, 175-184 each | 16.7 / 17.2-17.4 | 3.5-12.5 / 154 MB | 21-24, 108-114 MB |
+| | after | 193 (151 later) | 156 | 196 | 197 | 3 misses, 216-232 each | 16.6-16.7 / 17.3-17.5 | 6.5-12.5 / 154 MB | 54-57, 108-114 MB |
+
+What is left over 100 ms: the Attract's and the briefing's own first frames, frames of 110 to 220 ms in the attract around 23 to 25 s, when the clips finish loading, the level's first frame under the fade (136 to 197 ms), and the Factory's three misses, pages the scene data lacks. At boot the splash's frames after the first stay under 150 ms; with `AsyncSwitch` on its Switch too, one of them took 0.7 to 2 s (`m5s4`).
+Tiles cost draws: the Factory runs 38 to 64 SpriteBatch runs a frame (86 at most) against 8 to 35 (55), Future War 2 18 to 21 against 7 to 9; frame time stays where it was.
+Memory is the same bytes in more textures; with tiles the player puts more of a level in CDRAM, as the big layers no longer need 32 MB in one piece (Future War 2: CDRAM 12.5 MB free instead of 38.5, main memory 188 MB instead of 162).
 
 
 ## The rules
@@ -247,6 +285,8 @@ The PNG pages run on the console in every level played so far ([build.md](build.
 
 - Raw pages, now only the fallback, cost a managed copy of each page while it loads: 2 MB for a normal page, 32 MB for a 4096×4096 one. The managed heap grows to the largest of these and doesn't shrink.
 - Load time per page for raw pages on the console; PNG pages are measured above.
+- Raw pages aren't tiled, so a 4096x4096 one still integrates in one 0.7 s frame.
+- The tiles' edges were checked on the console only by eye, in screenshots of the Factory and Future War 2 (`m5s2`, `m5s4`), and by `atlas/check/tilecheck.py` off it.
 - Whether the Vita's GPU wraps non-power-of-two textures. All pages are powers of two, which costs 30% on the oversize layers; NPOT sizes would bring the Factory to about 90 MB.
 - The scene data comes from static analysis. About 250 images, a quarter of a pack, are reachable only in ways it can't follow, through arithmetic on ids, ids in int[] tables, native jump tables that inline a constructor. Those draws miss and load at once. Play through every scene with the miss log on and feed `MissReport` back into `scenes.json`.
 - Tanker Chase has no hook of its own; level 8 loads Freeway Chase's and Tanker Chase's pages together, 72 MB.

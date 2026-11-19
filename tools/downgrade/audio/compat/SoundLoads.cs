@@ -24,6 +24,7 @@
 //
 // C# 5, as T2DCompat is compiled by the .NET Framework's csc. Part of T2DCompat; see Compat2018.cs.
 
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -124,8 +125,20 @@ namespace T2DCompat
             return 2;
         }
 
+        // Whether new loads wait: while the atlas loads pages (Probe.Install sets it to Atlas.Busy). A page's integration
+        // on the main thread waited for the clip read in flight, about 200 ms a page while the clips loaded at boot.
+        public static bool HoldForPages = true;
+        public static Func<bool> Hold;
+
+        // From Atlas, each frame its background loads are done: starts the loads that waited.
+        public static void Resume()
+        {
+            if (loading < InFlight && queued > done + loading) Pump();
+        }
+
         static void Pump()
         {
+            if (HoldForPages && Hold != null && Hold()) return;
             for (int p = 0; p < Priorities && loading < InFlight; p++)
             {
                 Queue<Entry> queue = pending[p];

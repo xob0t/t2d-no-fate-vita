@@ -279,6 +279,8 @@ namespace T2DCompat
         {
             if (Trace.On) Trace.Enter("SpriteBatch.Submit");
             if (page == -2) return zorder;
+            int cols = 1, rows = 1, first = page >= 0 ? Atlas.Tiles(page, out cols, out rows) : -1;
+            if (first >= 0) return SubmitTiled(first, cols, rows, material, colored, zorder);
             Texture tex = page == -1 ? (Texture)sTex : Atlas.Get(page);
             if (!tScreen)
             {
@@ -287,6 +289,58 @@ namespace T2DCompat
             }
             Queue(material, tex, colored, zorder);
             return zorder - 0.25;
+        }
+
+        static readonly Vector3[] fullV = new Vector3[4];
+        static readonly Vector2[] fullT = new Vector2[4];
+
+        // A frame of a page the build cut into tiles (Atlas.Tiles: cols x rows, row by row from the bottom): the quad cut
+        // along the tiles' edges, one quad per tile it covers, each drawn as Submit draws a quad. The quad is a
+        // parallelogram (an affine map of the frame's rect), so a point's place follows its UV linearly. A flipped frame's
+        // UVs are the rect's other side one texture to the left (uv - 1, read through Repeat): moved back into [0, 1]
+        // here, since a tile's Repeat would wrap into itself, not into its neighbour. The tiles clamp, so a pixel centre
+        // that falls exactly on a tile's edge reads the texel beside the page's instead of one 1024 texels away.
+        static double SubmitTiled(int first, int cols, int rows, Material material, bool colored, double zorder)
+        {
+            Array.Copy(quadV, fullV, 4);
+            Array.Copy(quadT, fullT, 4);
+            // Corners: 0 right top, 1 right bottom, 2 left top, 3 left bottom.
+            double uL = fullT[2].x, uR = fullT[0].x, vB = fullT[1].y, vT = fullT[0].y;
+            if (Math.Min(uL, uR) < -1e-6) { uL += 1; uR += 1; }
+            if (Math.Min(vB, vT) < -1e-6) { vB += 1; vT += 1; }
+            if (uL == uR || vB == vT) return zorder;
+            double u0 = Math.Min(uL, uR), u1 = Math.Max(uL, uR), v0 = Math.Min(vB, vT), v1 = Math.Max(vB, vT);
+            int c0 = Math.Max(0, (int)Math.Floor(u0 * cols)), c1 = Math.Min(cols - 1, (int)Math.Ceiling(u1 * cols) - 1);
+            int r0 = Math.Max(0, (int)Math.Floor(v0 * rows)), r1 = Math.Min(rows - 1, (int)Math.Ceiling(v1 * rows) - 1);
+            Vector3 o = fullV[3], du = fullV[1] - fullV[3], dv = fullV[2] - fullV[3];
+            bool any = false;
+            for (int r = r0; r <= r1; r++)
+                for (int c = c0; c <= c1; c++)
+                {
+                    double a = Math.Max(u0, c / (double)cols), b = Math.Min(u1, (c + 1) / (double)cols);
+                    double e = Math.Max(v0, r / (double)rows), f = Math.Min(v1, (r + 1) / (double)rows);
+                    if (b <= a || f <= e) continue;
+                    // Where the tile's part lies along the quad: s from the left corners to the right, q from the
+                    // bottom ones to the top.
+                    double sa = (a - uL) / (uR - uL), sb = (b - uL) / (uR - uL);
+                    double qe = (e - vB) / (vT - vB), qf = (f - vB) / (vT - vB);
+                    double sL = Math.Min(sa, sb), sR = Math.Max(sa, sb), qB = Math.Min(qe, qf), qT = Math.Max(qe, qf);
+                    quadV[0] = o + du * (float)sR + dv * (float)qT;
+                    quadV[1] = o + du * (float)sR + dv * (float)qB;
+                    quadV[2] = o + du * (float)sL + dv * (float)qT;
+                    quadV[3] = o + du * (float)sL + dv * (float)qB;
+                    float tuL = (float)((uL + sL * (uR - uL)) * cols - c), tuR = (float)((uL + sR * (uR - uL)) * cols - c);
+                    float tvB = (float)((vB + qB * (vT - vB)) * rows - r), tvT = (float)((vB + qT * (vT - vB)) * rows - r);
+                    quadT[0] = new Vector2(tuR, tvT);
+                    quadT[1] = new Vector2(tuR, tvB);
+                    quadT[2] = new Vector2(tuL, tvT);
+                    quadT[3] = new Vector2(tuL, tvB);
+                    Texture tex = Atlas.Get(first + r * cols + c);
+                    if (!tScreen) DrawNow(material, tex, colored);
+                    else Queue(material, tex, colored, zorder);
+                    any = true;
+                }
+            return tScreen && any ? zorder - 0.25 : zorder;
         }
 
         // ---- the screen queue -----------------------------------------------------------------------------------
@@ -500,12 +554,21 @@ namespace T2DCompat
 
         // A page the atlas prefetched (Atlas.NextWarm), drawn as one texel with the ColorTransform material at colour 0
         // and offset 0: its alpha is 0, so the blend leaves the screen as it was, but the player reads the page's
-        // texels for it now rather than at the page's first real draw.
+        // texels for it now rather than at the page's first real draw. Usually one page a frame; while a transition
+        // covers the screen, every page the new scene still waits for (Atlas.NextWarm says which).
         static void Warm(Camera camera)
         {
             if ((object)warmMaterial == null || (object)camera == null) return;
-            Texture2D page = Atlas.NextWarm();
-            if ((object)page == null) return;
+            for (int n = 0; n < 64; n++)
+            {
+                Texture2D page = Atlas.NextWarm();
+                if ((object)page == null) return;
+                WarmOne(camera, page);
+            }
+        }
+
+        static void WarmOne(Camera camera, Texture2D page)
+        {
             Init();
             if (warmMesh == null)
             {
