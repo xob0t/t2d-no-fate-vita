@@ -143,6 +143,7 @@ namespace T2DCompat
         static float bgStartAt;
         static readonly Dictionary<int, ResourceRequest> asyncLoads = new Dictionary<int, ResourceRequest>();
         static readonly List<int> doneLoads = new List<int>();
+        static readonly Dictionary<int, float> asyncStarted = new Dictionary<int, float>();
         static long asyncBytes;
         static bool[] viaAsync;     // loaded with LoadAsync, for the slow-frame log
         static bool[] wanted;
@@ -404,7 +405,14 @@ namespace T2DCompat
                 foreach (int s in set)
                 {
                     foreach (int p in scenePages[s]) wanted[p] = true;
-                    if (label.Length > 0) label.Append(set == prefetchScenes ? " + prefetch " : set == aheadScenes ? " + ahead " : " + ");
+                    // The next App's scene by number only: drive.py's waits (until app:MainMenu, until MissionBriefing)
+                    // read the log for the App's name, and must not find it before the App starts.
+                    if (set == aheadScenes)
+                    {
+                        label.Append(" + ahead scene ").Append(s);
+                        continue;
+                    }
+                    if (label.Length > 0) label.Append(set == prefetchScenes ? " + prefetch " : " + ");
                     label.Append(sceneNames[s]);
                 }
             sceneLabel = label.Length > 0 ? label.ToString() : key;
@@ -509,6 +517,7 @@ namespace T2DCompat
                 return;
             }
             asyncLoads[page] = request;
+            asyncStarted[page] = Time.realtimeSinceStartup;
             asyncBytes += PageBytes(page);
         }
 
@@ -517,7 +526,11 @@ namespace T2DCompat
         {
             asyncLoads.Remove(page);
             asyncBytes -= PageBytes(page);
+            float start = Time.realtimeSinceStartup;
             var t = request.asset as Texture2D;
+            float issued;
+            if (asyncStarted.TryGetValue(page, out issued)) asyncStarted.Remove(page);
+            Note("done " + PageName(page) + " " + Mb(page) + " after " + Ms(issued) + " (" + Ms(start) + ")");
             if (pages[page] != null) return;
             if (t == null)
             {
@@ -549,7 +562,7 @@ namespace T2DCompat
                 if (keys.TryGetValue(key, out scenes))
                 {
                     aheadScenes = scenes;
-                    Switch("ahead " + key);
+                    Switch("ahead");
                 }
             }
             IssueBackground();
