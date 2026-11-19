@@ -183,7 +183,7 @@ namespace T2DCompat
                 if (Trace.On)
                 {
                     line.Append(" traced=").Append(Trace.MainCount - tickTraced).Append(", last entered:\n");
-                    line.Append(Trace.MainTrail(first ? 12 : 3).TrimEnd());
+                    line.Append(Trace.MainTrail(first ? 64 : 3).TrimEnd());
                 }
                 Debug.Log(line.ToString());
             }
