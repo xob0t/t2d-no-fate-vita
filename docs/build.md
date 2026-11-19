@@ -253,7 +253,7 @@ The blockers met on the way, in order:
 | The catch-all around the settings' Deserialize | `SaveSettings.loadSettings` | repair | `rules/Saves.cs` |
 | A switch through a byte-indexed jump table, case bodies lost | `Button.staticCallbacks` and five level methods | Rewind (issue 29) | open: needs a Rewind fix |
 
-With Rewind patches 0001 to 0031 and these rules the code stage leaves 69 gap methods with 405 marker sites.
+With Rewind patches 0001 to 0031 and these rules the code stage leaves 69 gap methods with 405 marker sites; the rules for the main menu and Future War 1 (docs/repairs.md) take that to 50 methods with 319 sites.
 
 Measured on that console with `-t2d-heartbeat 5` (runs `work/runs/boot4`, `menu1`):
 
