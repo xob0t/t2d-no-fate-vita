@@ -101,7 +101,39 @@ namespace T2DCompat
                    Time.frameCount + Memory();
         }
 
+        void Awake() { Debug.Log("T2D_PROBE awake " + Stamp()); }
+        void Start() { Debug.Log("T2D_PROBE start " + Stamp()); }
+
+        int tickedFrame = -1;
+        static int ticks, errors;
+
         void Update()
+        {
+            Tick("update");
+        }
+
+        // From Update, and from SpriteBatch.Flush (the game's OnRenderObject) as a fallback: once a frame.
+        public static void FromRender()
+        {
+            if (probe != null) probe.Tick("render");
+        }
+
+        void Tick(string from)
+        {
+            if (tickedFrame == Time.frameCount) return;
+            tickedFrame = Time.frameCount;
+            if (ticks++ == 0) Debug.Log("T2D_PROBE first tick from " + from + " " + Stamp());
+            try
+            {
+                Step();
+            }
+            catch (Exception e)
+            {
+                if (errors++ < 5) Debug.Log("T2D_PROBE error " + e);
+            }
+        }
+
+        void Step()
         {
             double now = PlayerLog.Seconds;
             if (bootFrames < 5)

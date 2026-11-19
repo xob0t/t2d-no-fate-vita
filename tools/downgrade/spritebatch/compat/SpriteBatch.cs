@@ -381,6 +381,7 @@ namespace T2DCompat
         // Draws the queued screen sprites with the camera they were drawn for, and empties the queue.
         public static void Flush(Camera camera)
         {
+            Probe.FromRender();
             int sprites = 0;
             if (runCount > 0)
             {
