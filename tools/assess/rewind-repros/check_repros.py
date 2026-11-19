@@ -83,6 +83,32 @@ def not_silent(text):
     return True, ''
 
 
+def cases_reach(bodies):
+    """Passes when every case value's label (or "default:", for a value with no label) leads, directly or through
+    "goto case", to its body's call first."""
+    def f(text):
+        for call, values in bodies.items():
+            for v in values:
+                seen, label = set(), v
+                while True:
+                    m = re.search(rf'\bcase {label}:', text) or (label == v and re.search(r'\bdefault:', text))
+                    if not m:
+                        return False, f'no "case {label}:" and no default'
+                    nxt = re.search(r'\b(Walk|Climb|Swim)\(|goto case (-?\d+);', text[m.end():])
+                    if nxt is None:
+                        return False, f'case {v} reaches no body'
+                    if nxt.group(1):
+                        if nxt.group(1) != call:
+                            return False, f'case {v} reaches {nxt.group(1)}, not {call}'
+                        break
+                    label = nxt.group(2)
+                    if label in seen:
+                        return False, f'case {v}: goto loop'
+                    seen.add(label)
+        return True, ''
+    return f
+
+
 def il_calls_base_ctor(base):
     def f(il):
         if f'call System.Void {base}::.ctor()' in il:
@@ -213,6 +239,18 @@ REPROS = [
           all_of(no('__native_', '__klass()'), has('new string[')), native=r'call|jmp'),
     Repro('4', 'signed modulo by a power of two', 'Issue4', 'int Issue4_Mod4(',
           'Issue4_Issue4_Mod4', 'return ticks % 4;', has('% 4'), native=r'.'),
+    Repro('29', 'switch through a byte-indexed jump table', 'Issue29', 'void Issue29_ByteTable(',
+          'Issue29_Issue29_ByteTable', 'switch (tile) { case 0: case 1: ... Walk(tile); break; case 3: ... Climb(tile); break; case 6: ... Swim(tile); break; }',
+          all_of(no('__call_indirect', '__Rewind.Opaque', '__Rewind.Effect'),
+                 cases_reach({'Walk': [0, 1, 2, 5, 8, 9, 13, 21, 22, 29], 'Climb': [3, 4, 10, 11, 17, 18, 25],
+                              'Swim': [6, 7, 14, 15, 16, 23, 24, 28]})),
+          native=r'movzx|cmp|jmp|lea\s+r..?, \[rip'),
+    Repro('29', 'switch through a byte-indexed jump table, values from 400', 'Issue29', 'void Issue29_ByteTableFrom400(',
+          'Issue29_Issue29_ByteTableFrom400', 'switch (id) { case 400: ... Walk(id); break; case 402: ... Climb(id); break; case 406: ... Swim(id); break; }',
+          all_of(no('__call_indirect', '__Rewind.Opaque', '__Rewind.Effect'),
+                 cases_reach({'Walk': [400, 401, 404, 405, 409, 412, 413, 420, 427], 'Climb': [402, 403, 410, 411, 418, 419, 426],
+                              'Swim': [406, 407, 414, 415, 416, 422, 423, 429]})),
+          native=r'movzx|cmp|add|sub|jmp|lea\s+r..?, \[rip'),
 ]
 
 
