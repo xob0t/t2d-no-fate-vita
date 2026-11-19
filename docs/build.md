@@ -103,7 +103,7 @@ uv run build.py --dry-run             # print the setup command and the stages, 
 4. `build`: the editor-free builder (`tools/builder`, from Butcher's port) writes the PS Vita player into `builds/t2d-2018.2.19f1-vita`: the player's data, the code module from UnityLinker and IL2CPP, and the files Unity's build copies. It writes `builds/t2d-2018.2.19f1-vita.incomplete` before its first write and removes it when the player is whole; while it is there, `package` and `vita.py`'s `install`, `sync` and `seed` refuse the folder, since a build that stopped at IL2CPP leaves the new data beside the last code module.
 5. `package`: makes `builds/t2d-2018.2.19f1-vita.vpk` with the title ID `TNOF00001`, with LiveArea art from the game's Steam store images (`livearea.py`).
 
-`build.py` holds the `vita-build` lock from `tools/downgrade/lock.py` for the whole run.
+`build.py` holds the `vita-build` lock from `tools/downgrade/lock.py` for the whole run, setup included; `tools/setup.py` run alone takes it too while it changes `tools/external` (not with `--dry-run`), so two setups never update Rewind's checkout at once, nor one under a running pipeline.
 If another job runs the pipeline, it waits.
 
 | Option | Effect |
