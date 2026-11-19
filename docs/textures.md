@@ -192,19 +192,19 @@ What does it now, each a field that the probe's `-t2d-set` can turn off for a co
 - A page a miss loaded stays wanted until the next Switch: with CDRAM full, evictions made the Factory load p007, p043 and p065 again every few frames.
 - `SlowFrameMs` (100): a frame longer than that logs what the atlas did in it and in the frame before: Switches, loads with their time, waits, finished loads, first draws (`sync` or `async`) and warm draws, and the free memory (`T2D atlas: slow frame ...`).
 
-Measured from boot to a minute of play through the arcade briefing with `-t2d-heartbeat 5 -t2d-stalls 100` and no screenshots but one at 95 s (`work/runs/hitch/run.sh`; the level-select list's 4 and 2, arcade 5). Before is the code before these changes (`b4s4`, `b5a5`, `b5s2`, with `-t2d-stalls 500` and screenshots from 70 s, so the level's worst frames there are screenshots), after is `m5s4`, `m5a5`, `m5s2`. Times are the worst frame of each part, in ms.
+Measured from boot to a minute of play through the arcade briefing with `-t2d-heartbeat 5 -t2d-stalls 100` and no screenshots but one at 95 s (`work/runs/hitch/run.sh`; the level-select list's 4 and 2, arcade 5). Before is the code before these changes (`b4s4`, `b5a5`, `b5s2`, with `-t2d-stalls 500` and screenshots from 70 s, so the level's worst frames there are screenshots), after is `f6s4`, `f6a5`, `f6s2` (screenshots of `m5s4` and `m5s2` checked the tiles). Times are the worst frame of each part, in ms; after, the Attract's and the briefing's first frames did no atlas work (`slow frame ... [switch app:Attract 0 ms]`, nothing loading): that is the game's own start of them.
 
 | Level | | Attract's start | Briefing's start | Rest of the briefing | Level's start | Level's other frames over 100 ms | Level p50 / p90 | CDRAM / LPDDR free in the level | Pages resident |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | L04 Future War 2 | before | 776 | 417 | 694 | under 500 | screenshots only | 16.7 / 17.1-17.4 | 35.5-38.5 / 162 MB | 22, 74 MB, 32 in main memory |
-| | after | under 100 (201 later in the attract) | 129 | 128 | under 100 | none | 16.7 / 17.2-17.4 | 12.5 / 188 MB | 37, 74 MB |
+| | after | 184 (221 later in the attract) | 329 (129 in `t4s4`) | 53 | 136 | none | 16.7 / 17.2-17.4 | 12.5 / 188 MB | 37, 74 MB |
 | L08 Freeway | before | 608 | 653 | 184 | under 500 | screenshots only | 16.7 / 17.3-17.5 | 13.5-16.5 / 186 MB | 26, 72 MB |
-| | after | under 100 (174 later) | 158 | 90 | under 100 | none (worst 18.9) | 16.7 / 17.3-17.5 | 12.5 / 190 MB | 36, 72 MB |
+| | after | 127 (175 later) | under 100 | 88 | under 100 | none (worst 18.8) | 16.7 / 17.3-17.5 | 12.5 / 190 MB | 36, 72 MB |
 | L12 Cyberdyne Factory | before | 945 | 635 | 694, 756 | 176 | 3 misses, 175-184 each | 16.7 / 17.2-17.4 | 3.5-12.5 / 154 MB | 21-24, 108-114 MB |
-| | after | under 100 (179 later) | 146 | 195 | 196 | 3 misses, 187-189 each | 16.6-16.7 / 17.2-17.8 | 6.5-12.5 / 154 MB | 54-57, 108-114 MB |
+| | after | 193 (151 later) | 156 | 196 | 197 | 3 misses, 216-232 each | 16.6-16.7 / 17.3-17.5 | 6.5-12.5 / 154 MB | 54-57, 108-114 MB |
 
-What is left over 100 ms: the splash's frames at boot (below), frames of 110 to 200 ms in the attract around 23 to 25 s, when the clips finish loading, the level's first frame under the fade (about 190 ms), and the Factory's three misses, pages the scene data lacks.
-Tiles cost draws: the Factory runs 38 to 66 SpriteBatch runs a frame (86 at most) against 8 to 35 (55), Future War 2 18 to 21 against 7 to 9; frame time stays where it was.
+What is left over 100 ms: the Attract's and the briefing's own first frames, frames of 110 to 220 ms in the attract around 23 to 25 s, when the clips finish loading, the level's first frame under the fade (136 to 197 ms), and the Factory's three misses, pages the scene data lacks. At boot the splash's frames after the first stay under 150 ms; with `AsyncSwitch` on its Switch too, one of them took 0.7 to 2 s (`m5s4`).
+Tiles cost draws: the Factory runs 38 to 64 SpriteBatch runs a frame (86 at most) against 8 to 35 (55), Future War 2 18 to 21 against 7 to 9; frame time stays where it was.
 Memory is the same bytes in more textures; with tiles the player puts more of a level in CDRAM, as the big layers no longer need 32 MB in one piece (Future War 2: CDRAM 12.5 MB free instead of 38.5, main memory 188 MB instead of 162).
 
 
