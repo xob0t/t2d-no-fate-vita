@@ -6,8 +6,8 @@ The pipeline only reads the game: it never runs its executables and never writes
 It writes the recovered code, the export and the Unity project to `work/`, the player and the VPK to `builds/`, and the logs to `artifacts/`.
 Prose here is one sentence per line, so a diff shows only the sentences that changed.
 
-**The port doesn't play yet.**
-The pipeline runs end to end, but the code it builds still has Rewind's gaps and references Unity 2018.2 doesn't have; [Where it stands](#where-it-stands) has the details.
+**The port plays its first levels, with gaps.**
+The pipeline runs end to end, and on the console Future War 1 and Desert Town play, but 39 methods still have Rewind's gaps; [Where it stands](#where-it-stands) has the details.
 
 You need Windows 10 or 11 on x64, Git, and the game from Steam.
 With [uv](https://docs.astral.sh/uv/) installed, the short version is:
@@ -234,9 +234,15 @@ How the C++ compile was cleared, compiling each of the 20 `Bulk_Recovered.T2D_*.
 
 On 2026-11-19 the VPK installed on the user's PS Vita (vitacompanion's `install`, 334 MB in 2.5 min) and booted to the main menu ([vita.md](vita.md) has the tools).
 The splash, the publisher's logo, the attract cutscene and the menu draw right at 960x544, the cursor moves, and the menu runs at 60 fps.
-Choosing a menu item stops at a gap: `Button.staticCallbacks`, the buttons' actions, is a switch Rewind loses with its case bodies ([rewind-issues.md](rewind-issues.md), issue 29).
-The same issue is in `Game.start`, `GameMap.solid`, `GameObject.move`, `Player.setGroundTile` and `Sprites.addFromJSON`, so no level can run until Rewind recovers that switch; the attract demo, which the menu starts when left alone, stops in `Sprites.addFromJSON`.
+Choosing a menu item stopped at a gap: `Button.staticCallbacks`, the buttons' actions, was a switch Rewind lost with its case bodies ([rewind-issues.md](rewind-issues.md), issue 29), as were five level methods.
+Rewind patch 0032 recovers them.
 
+With it, both ways into a level play.
+Arcade mode (Start, then the second item) goes through the mission briefing to Future War 1, which plays at 60 fps: the d-pad walks and the screen scrolls, Square fires, Cross jumps, the endoskeletons, turrets and the HK shoot back, a turret blows up for 500 points and leaves a pickup (runs `arcade1`, `fw1m`, `fw1s`).
+Story mode (the first item) plays the intro cutscenes, the briefing and the controls tutorial, then its first level, Desert Town, where Sarah walks, the HUD and the in-level control hints draw, and a biker kills her into the Continue screen (`level1a`).
+Start skips the cutscenes and the briefing.
+
+The blockers met on the way, in order:
 The blockers met on the way, in order:
 
 | What | Where | Kind | Fix |
@@ -254,20 +260,30 @@ The blockers met on the way, in order:
 | The catch-all around the settings' Deserialize | `SaveSettings.loadSettings` | repair | `rules/Saves.cs` |
 | A switch through a byte-indexed jump table, case bodies lost | `Button.staticCallbacks` and five level methods | Rewind (issue 29) | Rewind patch 0032 |
 | r9 taken as clobbered by the write-barrier call | `Sprites.addFromJSON` (`FWElevator.type`, `FW3BossLift.type`) | Rewind (issue 30) | `rules/Barriers.cs` |
+| Long stack slots holding 0 handed to reference parameters, which psp2snc rejects once the methods are whole | `HUD.draw`, `Game.draw`, `MissionBriefing.draw`; `Game.start`'s uncast `Elevator` | repair | anchors in `rules/Invokers.cs`, `Calls.cs`, `Inlined.cs` |
+| Exceptions with no stack on a retail console | Unity's PS Vita player (`sceKernelBacktraceSelf`) | platform | the `T2D_TRACE=1` build switch: the log lists the game methods entered last |
+| The controls tutorial's gaps: a vtable read, two `drawString` invokers, merged `InitializeArray` handles | `ControlsExplanation.draw`, `setupScene`; `Sarah.changeImage` | repair | `rules/ControlsExplanation.cs` |
+| `other.y` lost across the barrier (xmm1) | `Platform.doPlatformCheck` | Rewind (issue 30) | `rules/Barriers.cs` |
+| The level stayed black: a page evicted or switched out mid-frame was destroyed before the queued sprites drew, and `SpriteBatch.Flush` threw `ArgumentNullException` | `Atlas.UnloadPage` | atlas | the texture is released two flushes later (`Atlas.ReleaseUnloaded`) |
+| `NullReferenceException` every frame in the controls tutorial (black), in `BmpFont.drawString` of text 472 with `bmpFontMediumWhite`; the text table is right when run on the PC | `ControlsExplanation.draw` | ? | open; the level loads after it |
+| `__vtable()` gaps after game over in arcade mode | `HighscoreTable.update` (2 sites), `draw` (13) | repair | open |
+| Video memory nearly full in Future War 1: 17 pages, 80 MB, leave 4.5 MB of CDRAM, and the atlas budget is 150 MB | `Atlas.BudgetBytes` | atlas | open: the budget should follow free CDRAM |
+| A 5.1 s frame entering Future War 1 | the level load | performance | open |
 
-With Rewind patches 0001 to 0031 and these rules the code stage leaves 69 gap methods with 405 marker sites; the rules for the main menu and Future War 1 (docs/repairs.md) take that to 50 methods with 319 sites, and Rewind patch 0032 with the issue 30 rule to 43 methods with 301 sites.
+With Rewind patches 0001 to 0031 and these rules the code stage leaves 69 gap methods with 405 marker sites; the rules for the main menu and Future War 1 (docs/repairs.md) take that to 50 methods with 319 sites, and Rewind patch 0032 with the issue 30 rule to 43 methods with 301 sites; the rules for the tutorial and Desert Town to 39 with 289.
 
-Measured on that console with `-t2d-heartbeat 5` (runs `work/runs/boot4`, `menu1`):
+Measured on that console with `-t2d-heartbeat 5` (runs `work/runs/boot4`, `menu1`; for the level `fw1m`, a normal build with a screenshot every 30 s; Desert Town's from `level1a`, a `T2D_TRACE` build):
 
 | | Value |
 | --- | --- |
-| First frame | 14.2 s after launch. `Sounds.staticInit` asks for most of the 930 clips one after another, so start-up waits for them (9.7 s of waits; all 930 loaded at 18 s). With the audio rule A3, which makes those `Sound`s without their clips, 4.4 s, and the attract at 11 s instead of 21 s (runs `aboot1`, `aboot2`; [audio.md](audio.md#start-up)) |
-| Main menu | 26.7 s after launch, through the splash, the logo and the attract cutscene |
-| Main memory free (LPDDR) | 254 MB at start, 195 MB in the attract and the menu; managed heap 20 MB |
-| Video memory free (CDRAM) | 89 MB at start, 60 to 70 MB in the attract and the menu |
-| Frame time | splash, while the sounds load: p50 23.5 ms, p90 68 ms; attract and menu: p50 16.7 ms, p90 17.0 ms (60 fps; the worst frames, 0.7 s, are the probe's screenshots) |
-| Sprites a frame | splash 1 to 2, attract 4 to 8, menu 44 |
-| SpriteBatch runs a frame | menu 4, of which 3 change texture; attract 2 to 3 |
+| First frame | 14.2 s after launch. `Sounds.staticInit` asks for most of the 930 clips one after another, so start-up waits for them (9.7 s of waits; all 930 loaded at 18 s). With the audio rule A3, which makes those `Sound`s without their clips, 4.2 to 4.4 s, and the attract at 11 s instead of 21 s (runs `aboot1`, `aboot2`; [audio.md](audio.md#start-up)) |
+| Main menu | 31 to 34 s after launch when the attract cutscene plays to its end (26.7 s in `menu1`, which skipped it with Start) |
+| Future War 1's load | From the briefing's Start, the level's pages switch in 7 ms (`-2 +17 pages, 80 MB resident`), then one frame takes 5.1 s; it plays about 6 s after the Start |
+| Main memory free (LPDDR) | 254 MB at start, 195 MB in the attract and the menu, 186 MB in Future War 1, 190 MB in Desert Town; managed heap 20 MB in the menu, 21 to 23 MB in the levels |
+| Video memory free (CDRAM) | 89 MB at start, 60 to 70 MB in the attract and the menu; Future War 1, 80 MB of atlas pages resident: 4.5 to 6.5 MB; Desert Town, 40 MB: 33 to 40 MB |
+| Frame time | splash, while the sounds load: p50 23.5 ms, p90 68 ms; attract and menu: p50 16.7 ms, p90 17.0 ms; Future War 1 walking and fighting: p50 16.7 ms, p90 17.2 to 17.5 ms, 59.9 fps in the windows without a screenshot (the worst frames, 0.7 s, are the probe's screenshots) |
+| Sprites a frame | splash 1 to 2, attract 4 to 8, menu 44; Future War 1 26 to 63 (74 at most), 148 on its first frames; Desert Town 20 to 105 |
+| SpriteBatch runs a frame | menu 4, of which 3 change texture; attract 2 to 3; Future War 1 8 to 11 (15 at most), of which 6 to 8 change texture; Desert Town 7 to 12, 4 to 8 |
 
 ## When something fails
 
