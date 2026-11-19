@@ -58,6 +58,16 @@ namespace Repairs
             }
         }
 
+        // One argument of the marker's call, compiled to a value of kind want (a non-literal array length).
+        public static void CompileArg(MethodRepair repair, Marker marker, int index, IL il, Kind want)
+        {
+            var c = new ExprCompiler(repair, marker, il);
+            c.text = marker.Args[index];
+            c.pos = 0;
+            Node n = c.ParseExpr();
+            c.Convert(n.Emit(c, want), want);
+        }
+
         static Kind KindOf(TypeReference t)
         {
             switch (t.FullName)
@@ -127,6 +137,27 @@ namespace Repairs
             }
         }
 
+        sealed class Str : Node
+        {
+            public string Value;
+            public override Kind Emit(ExprCompiler c, Kind? want)
+            {
+                c.il.Emit(Instruction.Create(OpCodes.Ldstr, Value));
+                return Kind.Ref;
+            }
+        }
+
+        // Type.field: a static field of a type of the module, by the type's simple name.
+        FieldDefinition StaticField(string dotted)
+        {
+            int dot = dotted.LastIndexOf('.');
+            if (dot < 0) return null;
+            string typeName = dotted.Substring(0, dot), field = dotted.Substring(dot + 1);
+            var types = repair.Engine.Module.GetTypes().Where(t => t.Name == typeName).ToList();
+            if (types.Count != 1) return null;
+            return types[0].Fields.FirstOrDefault(f => f.Name == field && f.IsStatic);
+        }
+
         sealed class Name : Node
         {
             public string Id;
@@ -136,6 +167,13 @@ namespace Repairs
                 {
                     c.il.This();
                     return Kind.Ref;
+                }
+                if (Id.Contains("."))
+                {
+                    FieldDefinition f = c.StaticField(Id);
+                    if (f == null) throw c.Error("no static field " + Id);
+                    c.il.Emit(Instruction.Create(OpCodes.Ldsfld, c.repair.Engine.Module.ImportReference(f)));
+                    return KindOf(f.FieldType);
                 }
                 ParameterDefinition p = c.repair.Method.Parameters.FirstOrDefault(x => x.Name == Id);
                 if (p != null)
@@ -212,7 +250,7 @@ namespace Repairs
         {
             public string Fn;
             public List<Node> Args;
-            public bool IsStore { get { return Fn == "__store8" || Fn == "__store4"; } }
+            public bool IsStore { get { return Fn == "__store8" || Fn == "__store4" || Fn == "__ArraySetAt"; } }
 
             public override Kind Emit(ExprCompiler c, Kind? want)
             {
@@ -238,6 +276,20 @@ namespace Repairs
                         c.il.Emit(Instruction.Create(OpCodes.Ldelem_Any, c.repair.Engine.Module.ImportReference(elem)));
                         return KindOf(elem);
                     }
+                    case "__ArraySetAt":
+                    {
+                        // __ArraySetAt(array, index, value): IL2CPP's checked store into an array
+                        var arr = Args[0] as Name;
+                        VariableDefinition v = arr == null ? null : c.repair.Bound(arr.Id);
+                        var type = v == null ? null : v.VariableType as ArrayType;
+                        if (type == null) throw c.Error("__ArraySetAt's array is not bound to an array local");
+                        c.il.Ldloc(v);
+                        c.Convert(Args[1].Emit(c, Kind.I4), Kind.I4);
+                        Kind k = KindOf(type.ElementType);
+                        c.Convert(Args[2].Emit(c, k), k);
+                        c.il.Emit(Instruction.Create(OpCodes.Stelem_Any, c.repair.Engine.Module.ImportReference(type.ElementType)));
+                        return Kind.Ref;
+                    }
                     case "__store8":
                     case "__store4":
                     {
@@ -246,6 +298,16 @@ namespace Repairs
                         c.Convert(Args[1].Emit(c, k), k);
                         c.il.Emit(Instruction.Create(OpCodes.Stelem_Any, c.repair.Engine.Module.ImportReference(elem)));
                         return Kind.Ref;
+                    }
+                }
+                if (Fn.EndsWith(".get_Length") && Args.Count == 0)
+                {
+                    FieldDefinition f = c.StaticField(Fn.Substring(0, Fn.Length - ".get_Length".Length));
+                    if (f != null && f.FieldType is ArrayType)
+                    {
+                        c.il.Emit(Instruction.Create(OpCodes.Ldsfld, c.repair.Engine.Module.ImportReference(f)));
+                        c.il.Op(OpCodes.Ldlen).Op(OpCodes.Conv_I4);
+                        return Kind.I4;
                     }
                 }
                 throw c.Error("function " + Fn + " is not supported");
@@ -338,6 +400,7 @@ namespace Repairs
                 return inner;
             }
             if (pos < text.Length && char.IsDigit(text[pos])) return ParseNumber("");
+            if (pos < text.Length && text[pos] == '"') return ParseString();
             int start = pos;
             while (pos < text.Length && (char.IsLetterOrDigit(text[pos]) || text[pos] == '_' || text[pos] == '.')) pos++;
             string id = text.Substring(start, pos - start);
@@ -353,6 +416,26 @@ namespace Repairs
                 return new Call { Fn = id, Args = args };
             }
             return new Name { Id = id };
+        }
+
+        // A C# string literal as Rewind prints it ("...", with \" \\ \n \t \r escapes).
+        Node ParseString()
+        {
+            var sb = new System.Text.StringBuilder();
+            pos++;
+            while (pos < text.Length && text[pos] != '"')
+            {
+                char ch = text[pos++];
+                if (ch == '\\' && pos < text.Length)
+                {
+                    char e = text[pos++];
+                    ch = e == 'n' ? '\n' : e == 't' ? '\t' : e == 'r' ? '\r' : e == '0' ? '\0' : e;
+                }
+                sb.Append(ch);
+            }
+            if (pos >= text.Length) throw Error("unterminated string");
+            pos++;
+            return new Str { Value = sb.ToString() };
         }
 
         Node ParseNumber(string sign)

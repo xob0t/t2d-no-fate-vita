@@ -270,7 +270,13 @@ namespace Repairs
 
         public static Engine Run(ModuleDefinition module, Mode mode, Func<string, bool> only, bool patterns)
         {
+            return Run(module, mode, only, patterns, null);
+        }
+
+        public static Engine Run(ModuleDefinition module, Mode mode, Func<string, bool> only, bool patterns, NativeFacts facts)
+        {
             var engine = new Engine(module, mode);
+            engine.Facts = facts;
             foreach (System.Reflection.MethodInfo rule in typeof(Rules).GetMethods(System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic)
                          .Where(m => m.GetParameters().Length == 1 && m.GetParameters()[0].ParameterType == typeof(Engine)).OrderBy(m => m.Name))
             {
@@ -306,6 +312,23 @@ namespace Repairs
         }
 
         public int PatternsKept, PatternsDropped;
+
+        // native/array_facts.py's facts, for the generated repairs (Generated.cs).
+        public NativeFacts Facts;
+
+        // A generated repair's method: its body hash must match exactly (an error, not a warning),
+        // since its sites are checked by the native facts and not by a hash each.
+        public MethodRepair GeneratedMethod(string key, string hash)
+        {
+            int before = Warnings.Count;
+            MethodRepair r = Method(key, hash);
+            if (Warnings.Count > before)
+            {
+                Errors.Add(Warnings[before] + " (a generated repair: regenerate the facts and re-pin)");
+                Warnings.RemoveAt(before);
+            }
+            return r;
+        }
 
         internal void Fail(string key, string message)
         {
@@ -596,13 +619,30 @@ namespace Repairs
         public Site SkipBarrier()
         {
             if (Marker == null) return this;
-            Instruction a = Marker.Call.Next, b = a == null ? null : a.Next, c = b == null ? null : b.Next;
-            bool shape = Marker.IsValue && Marker.Text.StartsWith("__load4(") && a != null && Markers.ConstI4(a) == 0
-                         && b.OpCode == OpCodes.Ceq && c.OpCode == OpCodes.Brtrue;
-            if (!shape) throw new RepairException(repair.Key + ": marker " + Marker.Index + " is not a write barrier's flag test");
-            var past = (Instruction)c.Operand;
+            if (!Marker.IsValue || !Marker.Text.StartsWith("__load4("))
+                throw new RepairException(repair.Key + ": marker " + Marker.Index + " is not a write barrier's flag test");
             repair.MayRemove("__statics()", "__load8(", "__atomic_compare_exchange(");
-            return Replace(0, 3, il => il.Br(past));
+            Instruction a = Marker.Call.Next;
+            Instruction past = FlagTest(a);
+            if (past != null) return Replace(0, 3, il => il.Br(past));
+            // the flag kept in a local and tested after the store: `v = flag; <store>; if (v != 0) {...}`
+            VariableDefinition v = a.OpCode.Name.StartsWith("stloc") ? Fingerprint.Local(a, Body) : null;
+            IList<Instruction> all = Body.Instructions;
+            var uses = v == null ? new List<Instruction>() : all.Where(i => i != a && Fingerprint.Local(i, Body) == v).ToList();
+            if (uses.Count != 1 || !uses[0].OpCode.Name.StartsWith("ldloc") || (past = FlagTest(uses[0].Next)) == null
+                || all.IndexOf(uses[0]) < all.IndexOf(a) || all.IndexOf(uses[0]) - all.IndexOf(a) > 2 * Fingerprint.Window)
+                throw new RepairException(repair.Key + ": marker " + Marker.Index + " is not a write barrier's flag test");
+            int test = all.IndexOf(uses[0]);
+            Edit.ReplaceRange(Body, test, test + 3, new[] { Instruction.Create(OpCodes.Br, past) }, repair.Key);
+            return Replace(0, 1, il => { });
+        }
+
+        // `ldc.i4.0; ceq; brtrue past` from ins on: past, or null.
+        static Instruction FlagTest(Instruction ins)
+        {
+            Instruction b = ins == null ? null : ins.Next, c = b == null ? null : b.Next;
+            if (c == null || Markers.ConstI4(ins) != 0 || b.OpCode != OpCodes.Ceq || c.OpCode != OpCodes.Brtrue) return null;
+            return (Instruction)c.Operand;
         }
 
         // The marker's own text, compiled with the rule's bindings (Expr.cs).
@@ -711,6 +751,12 @@ namespace Repairs
                 case "System.String": return module.TypeSystem.String;
                 case "System.Object": return module.TypeSystem.Object;
                 case "System.Byte": return module.TypeSystem.Byte;
+                case "System.SByte": return module.TypeSystem.SByte;
+                case "System.Int16": return module.TypeSystem.Int16;
+                case "System.UInt16": return module.TypeSystem.UInt16;
+                case "System.UInt32": return module.TypeSystem.UInt32;
+                case "System.UInt64": return module.TypeSystem.UInt64;
+                case "System.Char": return module.TypeSystem.Char;
             }
             TypeDefinition own = module.GetType(name.Replace('+', '/'));
             if (own != null) return own;
