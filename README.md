@@ -1,5 +1,3 @@
-<img src="assets/icon.svg" width="64" height="64" alt="">
-
 # Terminator 2D: NO FATE Vita
 
 A work in progress: [Terminator 2D: NO FATE](https://store.steampowered.com/app/1718460/) on a PS Vita. A pipeline takes the Steam release (Unity 6000.0.60f1, IL2CPP) and rebuilds it as a Unity 2018.2 project, since 2018.2 is the last Unity with a Vita build module, then builds that for the Vita. It follows [Huntdown's port](https://github.com/xob0t/huntdown-vita) and Butcher's, and reuses their tools where they fit.
