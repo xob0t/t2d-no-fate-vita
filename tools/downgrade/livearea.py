@@ -6,7 +6,7 @@
 The images come from Steam's public CDN (no Steam client, no game launch), downloaded once into
 work/livearea/store/ and read from there afterwards. Writes to work/livearea/:
 
-  icon0.png     128x128   bubble: the endoskeleton's head with its red eyes (vertical key art)
+  icon0.png     128x128   bubble: Sarah Connor in sunglasses with her rifle (vertical key art)
   bg0.png       840x500   LiveArea background: the library hero art's middle
   gate.png      280x158   LiveArea start gate: the store header with its logo
   pic0.png      960x544   shown while the app starts: the store header with its logo
@@ -41,7 +41,7 @@ SOURCES = {
     # Library hero art, 1920x620, without the logo: the T-1000, Sarah Connor and the endoskeleton in the middle.
     'hero.jpg': (CDN + 'library_hero.jpg', 'f0b9c38e4860880f8d12b2b03be2bcf4b4357ed135e8ddc5efcbb6109d74cb48'),
 }
-ICON_CROP = (330, 90, 560, 320)  # the endoskeleton's head and red eyes in library.jpg
+ICON_CROP = (195, 225, 435, 465)  # Sarah Connor, sunglasses and rifle, in library.jpg: reads at bubble size
 HERO_CROP = (560, 0, 1602, 620)  # the hero art's middle, at bg0's 840:500
 CAPSULE_CROP = (0, 0, 379, 215)  # the header's left part, with the whole logo, at pic0's 960:544
 
