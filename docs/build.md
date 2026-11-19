@@ -229,14 +229,43 @@ How the C++ compile was cleared, compiling each of the 20 `Bulk_Recovered.T2D_*.
 - `TypeGapValues` typed what was left, all in gap methods: inlined boxes (until the `box` pattern took most of them), long slots whose address is kept in a value (`HUD.draw`), and the last 3 card indexes.
 - The `-O3` failure: psp2snc exits 1 with no message on `AssetsStaticMap.staticInit1`, 66,888 lines of C++ that build a table of int arrays, one `InitializeArray` after another. Bisecting `Bulk_Recovered.T2D_2.cpp` by function found it. The file compiles in 10 s with only that function at `#pragma control %push O=0`, and functions of 12,000 lines compile at `-O3`; sharing its 6,456 temporaries doesn't help, so it is the length. The rewriter's last pass, `SplitLongMethods` (`rewriter/SplitMethods.cs`), cuts a straight-line method of more than 16,000 instructions at empty-stack points into static parts of at most 6,000, passing locals used by several parts by reference.
 
-The game is not expected to run yet: every one of the 100 gap methods in `Recovered.T2D` throws when it reaches a marker.
+### On the console
 
-Before the game can start, in order:
+On 2026-11-19 the VPK installed on the user's PS Vita (vitacompanion's `install`, 334 MB in 2.5 min) and booted to the main menu ([vita.md](vita.md) has the tools).
+The splash, the publisher's logo, the attract cutscene and the menu draw right at 960x544, the cursor moves, and the menu runs at 60 fps.
+Choosing a menu item stops at a gap: `Button.staticCallbacks`, the buttons' actions, is a switch Rewind loses with its case bodies ([rewind-issues.md](rewind-issues.md), issue 29).
+The same issue is in `Game.start`, `GameMap.solid`, `GameObject.move`, `Player.setGroundTile` and `Sprites.addFromJSON`, so no level can run until Rewind recovers that switch; the attract demo, which the menu starts when left alone, stops in `Sprites.addFromJSON`.
 
-1. Fold the inlined binding calls back into the public API they came from (a rewriter pass), and repair or replace the methods that reference class library internals.
-2. Repair the gap methods the game runs at start: `UnityMain` and what it calls first. Rewind fixes for the issues in [rewind-issues.md](rewind-issues.md) go in `tools/rewind/patches` and cut the number before any hand repair.
-3. The platform layer in `tools/downgrade/compat` (input in place of InControl, saves, store stubs) and the shaders in `tools/downgrade/shaders`.
-4. The texture memory problem: twelve 4096×4096 atlases decoded at run time ([assessment](assessment.md#risks-outside-the-code)).
+The blockers met on the way, in order:
+
+| What | Where | Kind | Fix |
+| --- | --- | --- | --- |
+| No player log on a retail console | Unity's PS Vita player | platform | `compat/Log.cs` writes `ux0:data/T2DNoFate/log.txt` |
+| The player never left the first frame: FixedUpdate (the game's main loop) ran over and over | `TimeManager.asset`, `Fixed Timestep: 0` (Unity 6 keeps it as a rational) | asset | `asset_rules.time_overlay`: the game's 1/60 s |
+| `Camera.rect` set through a cached internal-call pointer | `UnityMain.ScreenStuff`, `FixedUpdate` | Rewind (section 28) | a repair rule, then Rewind patch 0029 |
+| One-character strings allocated in place | `StringExt.charAt`, `split`, `Text.processTextFile` | repair | `rules/OneCharStrings.cs` |
+| Write barriers the family patterns don't take | `AssetsEmbed.loadBytes`, `SaveSettings.loadSettings` | repair | `rules/Barriers.cs`, `rules/Saves.cs` |
+| Float comparison through the interface invoker | `haxe.lang.Runtime.eq` | repair | `rules/HaxeRuntime.cs` |
+| Lost stack argument | `BmpFont.drawScaled` (and `TitleText.draw` until patch 0028) | Rewind (issue 21) | `rules/MissingArgs.cs` |
+| BmpFont calls through slot invokers | `TextButton.draw` | repair | `rules/Invokers.cs` |
+| Element fields read untyped | `Menu.moveCursor`, `Button.drawLock` | repair | `rules/UntypedFields.cs` |
+| A virtual call and a dropped jump-table read | `Menu.cursorMoved`, `Button.setupEffect` | repair | `rules/Menus.cs` |
+| The catch-all around the settings' Deserialize | `SaveSettings.loadSettings` | repair | `rules/Saves.cs` |
+| A switch through a byte-indexed jump table, case bodies lost | `Button.staticCallbacks` and five level methods | Rewind (issue 29) | open: needs a Rewind fix |
+
+With Rewind patches 0001 to 0031 and these rules the code stage leaves 69 gap methods with 405 marker sites.
+
+Measured on that console with `-t2d-heartbeat 5` (runs `work/runs/boot4`, `menu1`):
+
+| | Value |
+| --- | --- |
+| First frame | 14.2 s after launch. `Sounds.staticInit` asks for most of the 930 clips one after another, so start-up waits for them (9.7 s of waits; all 930 loaded at 18 s) |
+| Main menu | 26.7 s after launch, through the splash, the logo and the attract cutscene |
+| Main memory free (LPDDR) | 254 MB at start, 195 MB in the attract and the menu; managed heap 20 MB |
+| Video memory free (CDRAM) | 89 MB at start, 60 to 70 MB in the attract and the menu |
+| Frame time | splash, while the sounds load: p50 23.5 ms, p90 68 ms; attract and menu: p50 16.7 ms, p90 17.0 ms (60 fps; the worst frames, 0.7 s, are the probe's screenshots) |
+| Sprites a frame | splash 1 to 2, attract 4 to 8, menu 44 |
+| SpriteBatch runs a frame | menu 4, of which 3 change texture; attract 2 to 3 |
 
 ## When something fails
 
