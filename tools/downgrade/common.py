@@ -458,7 +458,7 @@ def apply_patch(patch: Path, folder: Path):
         path.write_bytes(newline.join(patched + source[done:]).encode('utf-8'))
 
 
-SHADER_NAME = re.compile(r'\s*Shader\s+"([^"]+)"')  # a .shader file's name line
+SHADER_NAME = re.compile(r'(?:\s*//[^\n]*\n)*\s*Shader\s+"([^"]+)"')  # a .shader file's name line, after any // comments
 
 # Serialized YAML assets with one main object, which Unity names after the file (m_Name) ...
 NATIVE_ASSETS = {
