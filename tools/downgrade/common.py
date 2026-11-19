@@ -116,14 +116,15 @@ def build_folder(platform, backend='mono', scenes=False, version=TARGET, unity=F
     return BUILDS / f't2d-{version}{vita_suffix(platform)}{editor}{il2cpp}{"-scenes" if scenes else ""}'
 
 
-# Rewind (github.com/ratman-bit/Rewind-IL2CPP-Decompiler, Apache-2.0), which recovers the game's IL from
-# GameAssembly.dll and global-metadata.dat: cloned at a pinned commit into tools/external/rewind, this
-# repository's patches (tools/rewind/patches/*.patch, in name order) applied, and built with the pinned
-# .NET 10 SDK. setup.py records what it built from in REWIND_STAMP, so a new commit or patch rebuilds it.
-REWIND_REPOSITORY = 'https://github.com/ratman-bit/Rewind-IL2CPP-Decompiler'
-REWIND_COMMIT = 'ea8e3050b2f8a0bb0fc64df0720b63998646eb58'
+# Rewind (Apache-2.0), which recovers the game's IL from GameAssembly.dll and global-metadata.dat: this
+# project's fork of github.com/ratman-bit/Rewind-IL2CPP-Decompiler, which carries its fixes as commits on
+# upstream's ea8e305 (see tools/rewind/README.md), cloned at a pinned commit into tools/external/rewind and
+# built with the pinned .NET 10 SDK. setup.py records what it built from in REWIND_STAMP, so a new commit
+# rebuilds it. The REWIND_REPOSITORY environment variable clones from elsewhere (a local clone of the fork,
+# to test a commit before it is pushed); the commit is still REWIND_COMMIT.
+REWIND_REPOSITORY = os.environ.get('REWIND_REPOSITORY') or 'https://github.com/xob0t/Rewind-IL2CPP-Decompiler'
+REWIND_COMMIT = '56ccf43b5f58d240ac2bb166e6de662ec8a9c119'
 REWIND = EXTERNAL / 'rewind'
-REWIND_PATCHES = TOOLS / 'rewind' / 'patches'
 REWIND_EXE = REWIND / 'src' / 'Rewind.Cli' / 'bin' / 'Release' / 'net10.0' / 'rewind.exe'
 REWIND_STAMP = REWIND / '.t2d-build.txt'
 # The signature library for the game's exact Unity (built by tools/assess/sigtest and pdbsyms.py, shipped

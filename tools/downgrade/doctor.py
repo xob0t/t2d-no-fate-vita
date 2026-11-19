@@ -31,7 +31,6 @@ from common import (
     GAME_NAME,
     REWIND_COMMIT,
     REWIND_EXE,
-    REWIND_PATCHES,
     REWIND_SIGNATURES,
     REWIND_STAMP,
     ROOT,
@@ -375,16 +374,9 @@ def free_gb(path: Path):
     return shutil.disk_usage(path).free / 2**30
 
 
-def rewind_patches():
-    """This repository's patches to Rewind, in the order setup.py applies them."""
-    return sorted(REWIND_PATCHES.glob('*.patch')) if REWIND_PATCHES.is_dir() else []
-
-
 def rewind_build_key():
-    """What Rewind's build depends on: the pinned commit and the patches, by hash."""
-    lines = [f'commit {REWIND_COMMIT}', f'dotnet {DOTNET10_VERSION}']
-    lines += [f'patch {p.name} {file_hash(p)}' for p in rewind_patches()]
-    return '\n'.join(lines) + '\n'
+    """What Rewind's build depends on: the pinned commit of the fork and the .NET SDK."""
+    return f'commit {REWIND_COMMIT}\ndotnet {DOTNET10_VERSION}\n'
 
 
 # ---------------------------------------------------------------- checks
@@ -458,9 +450,8 @@ def check_rewind():
         return Check('Rewind', False, f'not built ({REWIND_EXE})', fix)
     stamp = read_text(REWIND_STAMP)
     if stamp != rewind_build_key():
-        return Check('Rewind', False, 'built from another commit or other patches; setup.py builds it again', fix)
-    patches = len(rewind_patches())
-    return Check('Rewind', True, f'{REWIND_COMMIT[:7]}, {patches} patch{"es" * (patches != 1)} ({REWIND_EXE.parent})')
+        return Check('Rewind', False, 'built from another commit; setup.py builds it again', fix)
+    return Check('Rewind', True, f'{REWIND_COMMIT[:7]} ({REWIND_EXE.parent})')
 
 
 def check_signatures():

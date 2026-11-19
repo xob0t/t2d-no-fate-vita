@@ -15,7 +15,7 @@ Any drift between a rule and Rewind's output fails the build.
 Everything here was measured on two Rewind outputs of the Steam build (24040403):
 `work/rewind-steam-60f1`, made with the 6000.0.60f1 signature library, and `work/rewind-fix/runtime/fixed60`, the same with Rewind's runtime-helper fixes.
 The prototypes now target fixed60, which is what the pipeline will use.
-The pipeline now runs Rewind with this repository's patches (`tools/rewind/patches`, 22 then, 27 now), and the rules were checked against that output; see [After the patch series](#after-the-patch-series).
+The pipeline now runs Rewind with this project's fixes (patches in `tools/rewind/patches` then, 22 at the time; since 2026-11-20 commits on [the fork](https://github.com/xob0t/Rewind-IL2CPP-Decompiler)), and the rules were checked against that output; see [After the patch series](#after-the-patch-series).
 
 ## The four candidates
 

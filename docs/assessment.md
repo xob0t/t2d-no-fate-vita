@@ -21,7 +21,7 @@ Nothing was ported then.
 As of 2026-11-19, later the same day:
 
 - A signature library for 6000.0.60f1, built without the Unity editor, ships in `tools/rewind/signatures`.
-- 27 patches to Rewind (`tools/rewind/patches`) fix most of the [draft issues](rewind-issues.md); issues 1 to 21 have a game-free repro. Whole game 78.9%, Assembly-CSharp 93.2%.
+- 27 patches to Rewind (then `tools/rewind/patches`; now the first commits of [the fork](https://github.com/xob0t/Rewind-IL2CPP-Decompiler)) fix most of the [draft issues](rewind-issues.md); issues 1 to 21 have a game-free repro. Whole game 78.9%, Assembly-CSharp 93.2%.
 - The pipeline ([build.md](build.md)) runs from the game folder through setup, recovery, AssetRipper, the code stage and the project, and the builder writes every data file of the PS Vita player. It stops in the C++ compile of the recovered code.
 - A repair engine fills Rewind's gaps with rules compiled at build time, without shipping game code ([repairs.md](repairs.md)).
 - The platform layer replaces InControl, takes out Steamworks, Epic and GOG, and keeps the saves ([platform.md](platform.md)). With the fold-back passes ([tools/downgrade/foldback/README.md](../tools/downgrade/foldback/README.md)), unresolved references go from 245 to 0.
@@ -33,7 +33,7 @@ As of 2026-11-19, later the same day:
 | Item | Version, source |
 | --- | --- |
 | Game | Steam release, app 1718460, build 24040403 (depot 1718464, manifest 503866610356912072), in `C:\Program Files (x86)\Steam\steamapps\common\Terminator 2D NO FATE`, read only |
-| Rewind | Built from source at commit `ea8e3050b2f8a0bb0fc64df0720b63998646eb58` (2026-11-18) in `tools/external/rewind`, with the 27 patches applied by `tools/setup.py`. Upstream main was still that commit on 2026-11-19. The release installers are unsigned, so they weren't used. |
+| Rewind | Built from source at commit `ea8e3050b2f8a0bb0fc64df0720b63998646eb58` (2026-11-18) in `tools/external/rewind`, with the 27 patches applied by `tools/setup.py` (setup now builds the fork, which has them as commits). Upstream main was still that commit on 2026-11-19. The release installers are unsigned, so they weren't used. |
 | Signature library | `tools/rewind/signatures/unity-6000.0.60f1-windows-x64.sig`, built here ([below](#signature-library)) |
 | .NET SDK | 10.0.404, a private copy in `tools/external/dotnet10`, installed with Microsoft's `dotnet-install.ps1`. The machine's NuGet config has no sources, so builds pass `--source https://api.nuget.org/v3/index.json`. |
 | Mono.Cecil | 0.11.6 for the measuring tool; 0.10.0-beta6 (huntdown's and butcher's) for the load check and the pipeline's rewriter |
@@ -111,7 +111,7 @@ InControl is replaced and Steamworks taken out by the platform layer, and mscorl
 The patches were written on four branches of `ea8e305`, then combined: runtime (patches 0001 to 0006: helpers behind thunks, the library's array and object allocators, the static-field write barrier, the metadata initializer, floating-point arguments of unknown calls, array accessors), memory (0007 to 0011: wide stores over inherited fields, tail-merged virtual calls, invokers specialized for one slot, offset-0 field addresses, string indexing), markers (0012 to 0017: every unrecovered part marked, base constructor calls, inlined constructors, the inlined object hash, small structs, one reference per assembly) and numeric (0018 to 0021: FP negation, bits read as a double, 8-byte struct returns, narrowing of a 64-bit field read as 32 bits).
 Patch 0022 marks every changed file, as Apache-2.0 asks.
 Patches 0023 to 0027 came from the C++ compile of the recovered code: card markings in more shapes, long stack slots that held a reference, stored casts and struct addresses, merged statics pointers, and inlined compare-exchange on a reference field ([rewind-issues.md](rewind-issues.md), issues 22 to 27).
-`tools/rewind/patches/NOTICE.md` lists them; each has a `REWIND_NO_*` switch that turns it off.
+[tools/rewind/README.md](../tools/rewind/README.md) lists them (patch NNNN is the fork's change commit NN); most have a `REWIND_NO_*` switch that turns them off.
 
 Complete bodies with the rebuilt library, upstream, each branch alone and all combined:
 
@@ -409,7 +409,7 @@ Next steps:
 
 ## Reproducing
 
-[build.md](build.md) has the setup and the pipeline: `uv run build.py` installs everything (Rewind with the 27 patches, the 60f1 library, Unity 2018.2's files) and runs the stages, and `pipeline.py recover` writes Rewind's assemblies to `work/recover/assemblies`.
+[build.md](build.md) has the setup and the pipeline: `uv run build.py` installs everything (Rewind's fork, the 60f1 library, Unity 2018.2's files) and runs the stages, and `pipeline.py recover` writes Rewind's assemblies to `work/recover/assemblies`.
 The commands below are the assessment's own measurements, for Git Bash on Windows, after setup and `recover`.
 Paths are relative to the repository; `work/` holds every output.
 
@@ -425,7 +425,7 @@ U2018=tools/external/unity-2018.2.19f1/Editor/Data
 OUT=work/recover/assemblies
 mkdir -p work/stats work/ilverify work/apigap
 
-# The measuring tool, and rewind-lab from setup's patched Rewind tree
+# The measuring tool, and rewind-lab from setup's Rewind tree (the fork)
 $DOTNET build -c Release tools/assess/RewindStats -o work/bin/RewindStats $NUGET
 $DOTNET build -c Release tools/external/rewind/src/Rewind.Lab $NUGET
 
@@ -480,7 +480,7 @@ analyzeHeadless C:/t2dghidra/proj T2D -process GameAssembly.dll -noanalysis -scr
   -postScript ApplyDumpAndDecompile.java C:/t2dghidra/tables work/stats/sig-apply-6000.0.60f1.txt work/spotcheck/targets.tsv work/spotcheck
 ```
 
-The first measurement ran upstream Rewind with `rewind decompile "$GAME" -o work/rewind-steam/out` and the 85f2 library; `tools/setup.py` builds the patched one, and `REWIND_NO_*` switches turn single patches off.
+The first measurement ran upstream Rewind with `rewind decompile "$GAME" -o work/rewind-steam/out` and the 85f2 library; `tools/setup.py` builds the fork, and `REWIND_NO_*` switches turn most single changes off.
 The console tests have their own READMEs: `tools/assess/vita-texture-test`, `tools/assess/vita-mesh-test`, `tools/downgrade/audio/vita-audio-test` and the shader test in [shaders.md](shaders.md); each runs inside the shared `vita-device` lock.
 The bring-up probe's commands are in `tools/assess/bringup/README.md`.
 
@@ -517,4 +517,4 @@ They read the game and Rewind's output and write only under `work/`.
 ## Rewind issues
 
 [rewind-issues.md](rewind-issues.md) holds 21 draft issues for Rewind, each with a game-free repro and a Status line; none is filed yet.
-Upstream main is still `ea8e305`, so the fixes exist only as this repository's patches.
+Upstream main is still `ea8e305`, so the fixes exist only in the fork ([the fork](https://github.com/xob0t/Rewind-IL2CPP-Decompiler)), offered upstream.

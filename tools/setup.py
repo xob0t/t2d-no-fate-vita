@@ -11,9 +11,10 @@ about 1.2 GB (CGIncludes, the engine and class libraries, IL2CPP, the built-in r
 player), into tools/external/unity-<version>, with 7-Zip (an installed one, or 7-Zip's own package from
 GitHub). The Unity installers come from Unity's CDN, the PS Vita module from its archive.org copy.
 
-Rewind, which recovers the game's code from its IL2CPP build, is cloned with Git at a pinned commit into
-tools/external/rewind, this repository's patches (tools/rewind/patches/*.patch) are applied in name
-order, and it is built with the pinned .NET 10 SDK; a change of commit or patches builds it again.
+Rewind, which recovers the game's code from its IL2CPP build, is this project's fork of it (its fixes are
+commits there; see tools/rewind/README.md), cloned with Git at a pinned commit into tools/external/rewind
+and built with the pinned .NET 10 SDK; a change of commit builds it again. REWIND_REPOSITORY (an
+environment variable) clones from another URL or a local clone instead.
 
 Every download is checked against a pinned hash (SHA-256; SHA-512 for the .NET SDKs, from Microsoft's
 release metadata; SHA-1 for the PS Vita SDK's files, the only one archive.org lists), and the Unity
@@ -152,18 +153,17 @@ class Setup:
     # ------------------------------------------------------------ Rewind
 
     def rewind(self):
-        """Rewind at REWIND_COMMIT with this repository's patches, built with the .NET 10 SDK. A clone that
-        has local changes other than the patches is cloned again, as is one at another commit."""
+        """This project's fork of Rewind at REWIND_COMMIT, built with the .NET 10 SDK. An existing clone is
+        pointed at REWIND_REPOSITORY, fetched and checked out at the commit, with local changes dropped."""
         key = doctor.rewind_build_key()
         if REWIND_EXE.exists() and doctor.read_text(REWIND_STAMP) == key:
             self.say('rewind', f'already built at {REWIND_COMMIT[:7]} ({REWIND_EXE.parent})')
             return
-        patches = doctor.rewind_patches()
         if self.args.dry_run:
             self.say(
                 'rewind',
-                f'would clone {REWIND_REPOSITORY} at {REWIND_COMMIT[:7]} into {REWIND}, apply {len(patches)} '
-                f'patch(es) from tools/rewind/patches and build it with .NET {DOTNET10_VERSION}',
+                f'would clone {REWIND_REPOSITORY} at {REWIND_COMMIT[:7]} into {REWIND} '
+                f'and build it with .NET {DOTNET10_VERSION}',
             )
             return
         git = shutil.which('git')
@@ -175,21 +175,13 @@ class Setup:
             with progress.step('Cloning Rewind'):
                 subprocess.run([git, 'clone', '--quiet', REWIND_REPOSITORY, str(REWIND)], check=True)
         else:
+            # A clone made before the switch to the fork (or from another REWIND_REPOSITORY) fetches from here now.
+            subprocess.run([git, '-C', str(REWIND), 'remote', 'set-url', 'origin', REWIND_REPOSITORY], check=True)
             with progress.step('Fetching Rewind'):
                 subprocess.run([git, '-C', str(REWIND), 'fetch', '--quiet', 'origin'], check=False)
-        # The pinned commit, with nothing else in the working tree: the patches apply to it alone.
+        # The pinned commit, with nothing else in the working tree.
         subprocess.run([git, '-C', str(REWIND), 'checkout', '--quiet', '--force', REWIND_COMMIT], check=True)
         subprocess.run([git, '-C', str(REWIND), 'clean', '--quiet', '-fdx', '-e', 'bin/', '-e', 'obj/'], check=True)
-        for patch in patches:
-            self.say('rewind', f'applying {patch.name}')
-            result = subprocess.run(
-                [git, '-C', str(REWIND), 'apply', '--whitespace=nowarn', str(patch)],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if result.returncode:
-                sys.exit(f'Rewind: {patch.name} does not apply at {REWIND_COMMIT[:7]}:\n{result.stderr}')
         dotnet = DOTNET10 / 'dotnet.exe'
         project = REWIND / 'src' / 'Rewind.Cli' / 'Rewind.Cli.csproj'
         log_path = WORK / 'rewind-build.log'
@@ -202,7 +194,7 @@ class Setup:
         if not REWIND_EXE.exists():
             sys.exit(f'Rewind: the build wrote no {REWIND_EXE}; see {log_path}')
         REWIND_STAMP.write_text(key, encoding='utf-8')
-        self.say('rewind', f'built at {REWIND_COMMIT[:7]} with {len(patches)} patch(es) ({REWIND_EXE.parent})')
+        self.say('rewind', f'built at {REWIND_COMMIT[:7]} ({REWIND_EXE.parent})')
 
     # ------------------------------------------------------------ Unity's files
 

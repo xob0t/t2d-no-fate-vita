@@ -2,7 +2,10 @@
 
 Candidate issues for [Rewind](https://github.com/ratman-bit/Rewind-IL2CPP-Decompiler), first found on a commercial Unity 6000.0.60f1 game (Windows x64, IL2CPP Master build, metadata v31.1) with Rewind built from commit `ea8e305`.
 None are filed yet.
-Each issue now has a game-free reproduction: a method in [Repros.cs](../tools/assess/rewind-repros/Repros.cs), written from scratch, that makes the same native pattern.
+The fixes are commits on this project's fork of Rewind, https://github.com/xob0t/Rewind-IL2CPP-Decompiler (`tools/setup.py` builds it; see [tools/rewind/README.md](../tools/rewind/README.md)), and a single upstream issue points at it.
+"Patch NNNN" below is the fork's change commit NN, in the same order; the fork's FORK.md maps issues to commits, and its `docs/fork-issues` has these drafts without the game.
+A new Rewind fix is a new commit on the fork, and `REWIND_COMMIT` in `tools/downgrade/common.py` moves to it.
+Issues 1 to 21, 29 and 30 have a game-free reproduction: a method in [Repros.cs](../tools/assess/rewind-repros/Repros.cs), written from scratch, that makes the same native pattern; the fork's `repros/` has a standalone copy, with identifiers that echoed the game's renamed.
 The game's names and addresses are kept only as "Seen in a real game" notes, which are not for filing.
 
 ## Reproducing
@@ -21,13 +24,13 @@ The report has, per repro, the expected C#, Rewind's C# and IL, and the native c
 ## Status
 
 Upstream main is still `ea8e305` (checked 2026-11-19), so nothing has been fixed upstream since the assessment.
-This repository's patches (`tools/rewind/patches`, applied by `tools/setup.py`) fix most of these issues; each issue below has a Status line.
+The fork's commits (until 2026-11-20 patches in `tools/rewind/patches`, applied by `tools/setup.py`) fix most of these issues; each issue below has a Status line.
 The repro checks were run on upstream main and on the patched build, both with the rebuilt 6000.0.60f1 library.
 
-- On upstream main only the controls and issue 1 pass (issue 1 through the library).
-- With the patches: 1, 3, 7, 8, 9, 11, 16 and 17 pass in full, and 6 and 10 in part (3 since patch 0026).
+- On upstream main only the controls and issue 1 pass (issue 1 through the library): 14 of 46 checks.
+- With the fork (checked 2026-11-20 at the fork's head, the same as with patches 0001 to 0033): 36 of 46 checks pass; 1, 3, 7, 8, 9, 11, 16, 17, 18, 21, 29 and 30 in full, and 6 and 10 in part.
 - 2, 13 and 19 fail their checks only on form: the values are right and nothing is marked, but a merged double or struct is still built from its bits.
-- 18 fails on a marked gap that remains; 4, 21, half of 6 and the local variant of the inlined constructors are open.
+- 4, half of 6 and the local variant of the inlined constructors are open.
 - Fixed on the game by the library alone, with or without the patches: 14, the metadata-init part of 1, and three items of 20.
 - Not about native code, so not in the repro project: 5 (open) and 12 (fixed by patch 0017).
 
