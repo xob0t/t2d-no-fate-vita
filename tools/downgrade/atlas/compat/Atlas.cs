@@ -66,6 +66,10 @@ namespace T2DCompat
         // and the apps between them and the level that keep what was prefetched (story mode's controls tutorial).
         public static readonly string[] PrefetchApps = { "MissionBriefing" };
         public static readonly string[] PrefetchKeep = { "LevelControls" };
+        // Scenes whose pages load at their first draw, not at the Enter: the four attract demos are one scene of 33
+        // pages, 190 MB (the usage analysis merges them), and loading them all froze the demo's first frames for 17 to
+        // 19 s and took CDRAM to 0.5 MB and main memory to 55 MB. Each demo draws a part of them.
+        public static readonly string[] LazyScenes = { "Demo / attract gameplay" };
         // Prefetch with Resources.LoadAsync (the probe's -t2d-atlas-sync turns it off). The loading thread then reads
         // the texels, and the first draw only uploads them: Future War 1's 19 pages took the briefing 7.8 s with no frame
         // over 0.4 s, against a 6.7 s freeze with Resources.Load.
@@ -107,7 +111,7 @@ namespace T2DCompat
         static readonly Queue<int> warmQueue = new Queue<int>();
         static readonly Dictionary<int, ResourceRequest> asyncLoads = new Dictionary<int, ResourceRequest>();
         static long asyncBytes;
-        static bool[] wanted;
+        static bool[] wanted, eager;
         static string sceneLabel = "(start)";
 
         static int misses;
@@ -312,12 +316,17 @@ namespace T2DCompat
         static void Switch(string key)
         {
             float start = Time.realtimeSinceStartup;
-            for (int i = 0; i < wanted.Length; i++) wanted[i] = false;
+            for (int i = 0; i < wanted.Length; i++) wanted[i] = eager[i] = false;
             var label = new StringBuilder();
             foreach (int[] set in new[] { appScenes, levelScenes, prefetchScenes })
                 foreach (int s in set)
                 {
-                    foreach (int p in scenePages[s]) wanted[p] = true;
+                    bool lazy = Array.IndexOf(LazyScenes, sceneNames[s]) >= 0;
+                    foreach (int p in scenePages[s])
+                    {
+                        wanted[p] = true;
+                        if (!lazy) eager[p] = true;
+                    }
                     if (label.Length > 0) label.Append(set == prefetchScenes ? " + prefetch " : " + ");
                     label.Append(sceneNames[s]);
                 }
@@ -331,7 +340,7 @@ namespace T2DCompat
                 }
             bool async = PrefetchAsync;
             for (int p = 0; p < pages.Length; p++)
-                if (wanted[p] && pages[p] == null && !asyncLoads.ContainsKey(p))
+                if (eager[p] && pages[p] == null && !asyncLoads.ContainsKey(p))
                 {
                     if (async && !InScenes(p, appScenes) && !InScenes(p, levelScenes))
                     {
@@ -651,6 +660,7 @@ namespace T2DCompat
             drawn = new bool[pageW.Length];
             lastUse = new int[pageW.Length];
             wanted = new bool[pageW.Length];
+            eager = new bool[pageW.Length];
             Debug.Log("T2D atlas: " + pageW.Length + " pages, " + tex.Length + " images, " + sceneNames.Length + " scenes");
         }
 
