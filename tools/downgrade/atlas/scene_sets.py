@@ -1,3 +1,4 @@
+# ruff: noqa: SIM115, UP031
 """Writes scenes.json, the rule data that says which images each scene of the game draws and which runtime keys
 enter that scene. repack.py groups frames into pages by it and writes scenes.bytes from it.
 
@@ -12,6 +13,7 @@ runtime hooks pass to Atlas (rules.md, R6):
 Usage: python -I scene_sets.py --usage work/atlas-usage --frames frames.json --out tools/downgrade/atlas/scenes.json
 (frames.json from frametable.py, for the image names.) Rerun it when the analysis changes.
 """
+
 import argparse
 import json
 import re
@@ -52,25 +54,31 @@ def main():
             keys.append('app:' + s['roots'][0])
         keys += EXTRA_KEYS.get(nm, [])
         if not keys:
-            raise SystemExit('scene %s: no runtime key' % nm)
-        out_scenes.append(dict(name=nm, keys=sorted(set(keys))))
+            raise SystemExit(f'scene {nm}: no runtime key')
+        out_scenes.append({'name': nm, 'keys': sorted(set(keys))})
         for i in s['images']:
             use.setdefault(name_of[i], []).append(k)
     every = [n for n, v in use.items() if len(v) == len(scenes)]
-    data = dict(
-        comment='Which images each scene draws (by Assets.IMAGE_* name) and the runtime keys that enter it. '
-                'Written by scene_sets.py from tools/assess/atlas-usage; "*" is every scene.',
-        level_apps=LEVEL_APPS,
-        scenes=out_scenes,
-        images={n: ('*' if n in every else use[n]) for n in sorted(use)},
-    )
+    data = {
+        'comment': 'Which images each scene draws (by Assets.IMAGE_* name) and the runtime keys that enter it. '
+        'Written by scene_sets.py from tools/assess/atlas-usage; "*" is every scene.',
+        'level_apps': LEVEL_APPS,
+        'scenes': out_scenes,
+        'images': {n: ('*' if n in every else use[n]) for n in sorted(use)},
+    }
     with open(a.out, 'w', newline='\n') as fh:
         fh.write('{\n')
-        fh.write(' "comment": %s,\n' % json.dumps(data['comment']))
-        fh.write(' "level_apps": %s,\n' % json.dumps(data['level_apps']))
-        fh.write(' "scenes": [\n%s\n ],\n' % ',\n'.join('  ' + json.dumps(s) for s in out_scenes))
-        fh.write(' "images": {\n%s\n }\n}\n' % ',\n'.join(
-            '  %s: %s' % (json.dumps(n), json.dumps(v, separators=(',', ':'))) for n, v in data['images'].items()))
+        fh.write(' "comment": {},\n'.format(json.dumps(data['comment'])))
+        fh.write(' "level_apps": {},\n'.format(json.dumps(data['level_apps'])))
+        fh.write(' "scenes": [\n{}\n ],\n'.format(',\n'.join('  ' + json.dumps(s) for s in out_scenes)))
+        fh.write(
+            ' "images": {{\n{}\n }}\n}}\n'.format(
+                ',\n'.join(
+                    '  {}: {}'.format(json.dumps(n), json.dumps(v, separators=(',', ':')))
+                    for n, v in data['images'].items()
+                )
+            )
+        )
     print('%d scenes, %d images (%d in every scene)' % (len(out_scenes), len(use), len(every)))
 
 

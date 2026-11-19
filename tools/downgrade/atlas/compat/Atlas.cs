@@ -18,7 +18,9 @@
 //                 u32 keys; per key string key, u16 n, u16 scenes[n]; u16 n, string level apps[n];
 //                 u16 n, u16 sticky pages[n]. Strings: u16 byte count, UTF-8.
 //   pNNN.png      the pages, imported as RGBA 4444, point filtered, Repeat wrapped (the game's flipped meshes
-//                 sample at uv - 1), no mipmaps, not readable.
+//                 sample at uv - 1), no mipmaps, not readable;
+//   or pNNN.bytes (repack.py --raw) RGBA 4444 texels, rows bottom first, made into a texture with
+//                 LoadRawTextureData and Apply(false, true), which frees the CPU copy.
 //
 // Residency: the pages of the current app's scene and of the current level's scene. An Enter unloads the pages
 // the new scenes don't need before it loads the ones they do, so the peak stays at one scene. A draw from a page
@@ -56,6 +58,7 @@ namespace T2DCompat
         static bool[] sticky;
 
         static Texture2D[] pages;
+        static bool[] made;         // made from a raw TextAsset (destroyed), not loaded as a Texture2D (unloaded)
         static int[] lastUse;
         static int useClock;
         static long residentBytes;
@@ -226,10 +229,24 @@ namespace T2DCompat
         {
             if (residentBytes + PageBytes(page) > BudgetBytes) Evict(PageBytes(page));
             Texture2D t = Resources.Load<Texture2D>(Folder + PageName(page));
+            made[page] = false;
             if (t == null)
             {
-                Debug.LogError("T2D atlas: page " + PageName(page) + " is not in Resources/" + Folder);
-                return null;
+                // repack.py --raw: the page as RGBA 4444 texels in a TextAsset.
+                TextAsset raw = Resources.Load<TextAsset>(Folder + PageName(page));
+                if (raw == null)
+                {
+                    Debug.LogError("T2D atlas: page " + PageName(page) + " is not in Resources/" + Folder);
+                    return null;
+                }
+                t = new Texture2D(pageW[page], pageH[page], TextureFormat.RGBA4444, false);
+                t.name = PageName(page);
+                t.LoadRawTextureData(raw.bytes);
+                t.filterMode = FilterMode.Point;
+                t.wrapMode = TextureWrapMode.Repeat;
+                t.Apply(false, true);
+                Resources.UnloadAsset(raw);
+                made[page] = true;
             }
             t.filterMode = FilterMode.Point;
             t.wrapMode = TextureWrapMode.Repeat;
@@ -244,7 +261,9 @@ namespace T2DCompat
             Texture2D t = pages[page];
             pages[page] = null;
             residentBytes -= PageBytes(page);
-            if (t != null) Resources.UnloadAsset(t);
+            if (t == null) return;
+            if (made[page]) UnityEngine.Object.Destroy(t);
+            else Resources.UnloadAsset(t);
         }
 
         // Unloads pages no current scene wants, least recently used first, until `need` more bytes fit.
@@ -293,6 +312,7 @@ namespace T2DCompat
             ReadFrames(Bytes("frames"));
             ReadScenes(Bytes("scenes"));
             pages = new Texture2D[pageW.Length];
+            made = new bool[pageW.Length];
             lastUse = new int[pageW.Length];
             wanted = new bool[pageW.Length];
             Debug.Log("T2D atlas: " + pageW.Length + " pages, " + tex.Length + " images, " + sceneNames.Length + " scenes");

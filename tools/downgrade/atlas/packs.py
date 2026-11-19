@@ -1,3 +1,4 @@
+# ruff: noqa: SIM115, UP031
 """The game's texture packs (TexturePack0..11): the PNG bytes of each, from an AssetRipper export's
 Resources/texturepack folder or straight from the game's resources.assets.
 
@@ -6,6 +7,7 @@ Texture2D.LoadImage), so they are TextAsset objects (class 49) holding a PNG: m_
 length-prefixed byte string. This reads a SerializedFile of format 22 (Unity 2022.2 and later) without type trees,
 which is what a player build has, or one with type trees when TextAsset's layout is the usual one.
 """
+
 import os
 import re
 import struct
@@ -28,13 +30,13 @@ def text_assets(path):
         if version < 22:
             raise ValueError('%s: SerializedFile format %d; only 22 and later are read' % (path, version))
         big = head[16] != 0
-        meta_size, file_size, data_offset = struct.unpack_from('>IQQ', head, 20)
+        meta_size, _file_size, data_offset = struct.unpack_from('>IQQ', head, 20)
         fh.seek(48)
         meta = fh.read(meta_size)
         e = '>' if big else '<'
         pos = 0
-        unity, pos = _cstr(meta, pos)
-        pos += 4                                    # target platform
+        _unity, pos = _cstr(meta, pos)
+        pos += 4  # target platform
         type_tree = meta[pos] != 0
         pos += 1
         (ntypes,) = struct.unpack_from(e + 'i', meta, pos)
@@ -57,17 +59,17 @@ def text_assets(path):
         out = {}
         for _ in range(nobj):
             pos = (pos + 3) & ~3
-            path_id, start, size, tindex = struct.unpack_from(e + 'qQIi', meta, pos)
+            _path_id, start, size, tindex = struct.unpack_from(e + 'qQIi', meta, pos)
             pos += 24
             if classes[tindex] != TEXT_ASSET:
                 continue
             fh.seek(data_offset + start)
             obj = fh.read(size)
             (n,) = struct.unpack_from(e + 'i', obj, 0)
-            name = obj[4:4 + n].decode('utf-8')
+            name = obj[4 : 4 + n].decode('utf-8')
             p = (4 + n + 3) & ~3
             (m,) = struct.unpack_from(e + 'i', obj, p)
-            out[name] = obj[p + 4:p + 4 + m]
+            out[name] = obj[p + 4 : p + 4 + m]
     return out
 
 
@@ -101,5 +103,5 @@ def from_folder(folder):
 def load(game=None, folder=None):
     packs = from_folder(folder) if folder else from_game(game)
     if not packs or sorted(packs) != list(range(len(packs))):
-        raise SystemExit('texture packs: found %s, want 0..n-1' % sorted(packs))
+        raise SystemExit(f'texture packs: found {sorted(packs)}, want 0..n-1')
     return packs

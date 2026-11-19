@@ -1,3 +1,4 @@
+# ruff: noqa: UP031
 """A small reader for the IL of Rewind's recovered assemblies, enough to evaluate the game's straight-line table
 initialisers (AssetsPack.staticInit2 and staticInit5..13, Assets' static constructor).
 
@@ -6,56 +7,134 @@ field RVA blobs) and runs a stack machine over code without branches. Values it 
 expressions, calls into the game) are Unknown; arrays are Python lists that start as None per element, so a
 caller can tell an element nobody stored from one stored as zero.
 """
+
 import struct
 
 import dnfile
 
 # Operand sizes. -1: switch (a count and that many 4-byte targets).
 _ONE = {
-    0x0E: 1, 0x0F: 1, 0x10: 1, 0x11: 1, 0x12: 1, 0x13: 1, 0x1F: 1, 0x20: 4, 0x21: 8, 0x22: 4, 0x23: 8,
-    0x27: 4, 0x28: 4, 0x29: 4, 0x45: -1, 0x6F: 4, 0x70: 4, 0x71: 4, 0x72: 4, 0x73: 4, 0x74: 4, 0x75: 4,
-    0x79: 4, 0x7B: 4, 0x7C: 4, 0x7D: 4, 0x7E: 4, 0x7F: 4, 0x80: 4, 0x81: 4, 0x8C: 4, 0x8D: 4, 0x8F: 4,
-    0xA3: 4, 0xA4: 4, 0xA5: 4, 0xC2: 4, 0xC6: 4, 0xD0: 4, 0xDD: 4, 0xDE: 1,
+    0x0E: 1,
+    0x0F: 1,
+    0x10: 1,
+    0x11: 1,
+    0x12: 1,
+    0x13: 1,
+    0x1F: 1,
+    0x20: 4,
+    0x21: 8,
+    0x22: 4,
+    0x23: 8,
+    0x27: 4,
+    0x28: 4,
+    0x29: 4,
+    0x45: -1,
+    0x6F: 4,
+    0x70: 4,
+    0x71: 4,
+    0x72: 4,
+    0x73: 4,
+    0x74: 4,
+    0x75: 4,
+    0x79: 4,
+    0x7B: 4,
+    0x7C: 4,
+    0x7D: 4,
+    0x7E: 4,
+    0x7F: 4,
+    0x80: 4,
+    0x81: 4,
+    0x8C: 4,
+    0x8D: 4,
+    0x8F: 4,
+    0xA3: 4,
+    0xA4: 4,
+    0xA5: 4,
+    0xC2: 4,
+    0xC6: 4,
+    0xD0: 4,
+    0xDD: 4,
+    0xDE: 1,
 }
-_ONE.update({op: 1 for op in range(0x2B, 0x38)})
-_ONE.update({op: 4 for op in range(0x38, 0x45)})
-_TWO = {0x06: 4, 0x07: 4, 0x09: 2, 0x0A: 2, 0x0B: 2, 0x0C: 2, 0x0D: 2, 0x0E: 2, 0x12: 1, 0x15: 4, 0x16: 4,
-        0x19: 1, 0x1C: 4, 0x1D: 4}
+_ONE.update(dict.fromkeys(range(43, 56), 1))
+_ONE.update(dict.fromkeys(range(56, 69), 4))
+_TWO = {
+    0x06: 4,
+    0x07: 4,
+    0x09: 2,
+    0x0A: 2,
+    0x0B: 2,
+    0x0C: 2,
+    0x0D: 2,
+    0x0E: 2,
+    0x12: 1,
+    0x15: 4,
+    0x16: 4,
+    0x19: 1,
+    0x1C: 4,
+    0x1D: 4,
+}
 BRANCHES = set(range(0x2B, 0x46)) | {0xDD, 0xDE}
 
 _NAMES = {
-    0x00: 'nop', 0x14: 'ldnull', 0x15: 'ldc.i4.m1', 0x1F: 'ldc.i4.s', 0x20: 'ldc.i4', 0x21: 'ldc.i8', 0x22: 'ldc.r4',
-    0x23: 'ldc.r8', 0x25: 'dup', 0x26: 'pop', 0x28: 'call', 0x2A: 'ret', 0x6F: 'callvirt', 0x72: 'ldstr',
-    0x73: 'newobj', 0x7E: 'ldsfld', 0x80: 'stsfld', 0x8D: 'newarr', 0xA4: 'stelem', 0xD0: 'ldtoken',
-    0x11: 'ldloc.s', 0x13: 'stloc.s', 0xFE0C: 'ldloc', 0xFE0E: 'stloc',
+    0x00: 'nop',
+    0x14: 'ldnull',
+    0x15: 'ldc.i4.m1',
+    0x1F: 'ldc.i4.s',
+    0x20: 'ldc.i4',
+    0x21: 'ldc.i8',
+    0x22: 'ldc.r4',
+    0x23: 'ldc.r8',
+    0x25: 'dup',
+    0x26: 'pop',
+    0x28: 'call',
+    0x2A: 'ret',
+    0x6F: 'callvirt',
+    0x72: 'ldstr',
+    0x73: 'newobj',
+    0x7E: 'ldsfld',
+    0x80: 'stsfld',
+    0x8D: 'newarr',
+    0xA4: 'stelem',
+    0xD0: 'ldtoken',
+    0x11: 'ldloc.s',
+    0x13: 'stloc.s',
+    0xFE0C: 'ldloc',
+    0xFE0E: 'stloc',
 }
 _NAMES.update({0x16 + k: 'ldc.i4.%d' % k for k in range(9)})
 _NAMES.update({0x06 + k: 'ldloc.%d' % k for k in range(4)})
 _NAMES.update({0x0A + k: 'stloc.%d' % k for k in range(4)})
-_NAMES.update({op: 'stelem.' + n for op, n in zip(range(0x9B, 0xA3), ('i', 'i1', 'i2', 'i4', 'i8', 'r4', 'r8', 'ref'))})
-_NAMES.update({op: 'conv' for op in (0x67, 0x68, 0x69, 0x6A, 0x6B, 0x6C, 0x6D, 0x6E, 0xD1, 0xD2, 0xD3, 0xD4, 0xE0)})
+_NAMES.update(
+    {
+        op: 'stelem.' + n
+        for op, n in zip(range(0x9B, 0xA3), ('i', 'i1', 'i2', 'i4', 'i8', 'r4', 'r8', 'ref'), strict=False)
+    }
+)
+_NAMES.update(dict.fromkeys((103, 104, 105, 106, 107, 108, 109, 110, 209, 210, 211, 212, 224), 'conv'))
 
 
 class Unknown:
     """A value the evaluator can't know. Arrays made by Rewind's opaque allocations are Unknown too; an
     InitializeArray on one gives it a blob (.blob)."""
+
     def __init__(self, what=''):
         self.what = what
         self.blob = None
 
     def __repr__(self):
-        return 'Unknown(%s)' % self.what
+        return f'Unknown({self.what})'
 
 
 class Ins:
-    __slots__ = ('offset', 'op', 'name', 'arg')
+    __slots__ = ('arg', 'name', 'offset', 'op')
 
     def __init__(self, offset, op, arg):
         self.offset, self.op, self.arg = offset, op, arg
-        self.name = _NAMES.get(op, '0x%X' % op)
+        self.name = _NAMES.get(op, f'0x{op:X}')
 
     def __repr__(self):
-        return 'IL_%04X %s %r' % (self.offset, self.name, self.arg)
+        return f'IL_{self.offset:04X} {self.name} {self.arg!r}'
 
 
 def _compressed(data, pos):
@@ -71,8 +150,8 @@ class Assembly:
     def __init__(self, path):
         self.pe = dnfile.dnPE(str(path))
         self.t = self.pe.net.mdtables
-        self.types = {}            # full name -> TypeDef row index (1-based)
-        self.field_owner = {}      # Field row index -> type full name
+        self.types = {}  # full name -> TypeDef row index (1-based)
+        self.field_owner = {}  # Field row index -> type full name
         self.method_owner = {}
         rows = self.t.TypeDef.rows
         for i, r in enumerate(rows, 1):
@@ -122,13 +201,16 @@ class Assembly:
             return 'type', self._typeref_name(table, index)
         if table == 0x06:
             r = self.t.MethodDef.rows[index - 1]
-            return 'method', (self.method_owner.get(index, '?'), str(r.Name)) + self._sig(r.Signature)
+            return 'method', (self.method_owner.get(index, '?'), str(r.Name), *self._sig(r.Signature))
         if table == 0x0A:
             r = self.t.MemberRef.rows[index - 1]
             cls = r.Class
-            owner = self._typeref_name({'TypeRef': 1, 'TypeDef': 2, 'TypeSpec': 0x1B}.get(cls.table.name, 0), cls.row_index) \
-                if cls.table is not None else '?'
-            return 'method', (owner, str(r.Name)) + self._sig(r.Signature)
+            owner = (
+                self._typeref_name({'TypeRef': 1, 'TypeDef': 2, 'TypeSpec': 0x1B}.get(cls.table.name, 0), cls.row_index)
+                if cls.table is not None
+                else '?'
+            )
+            return 'method', (owner, str(r.Name), *self._sig(r.Signature))
         if table == 0x2B:
             r = self.t.MethodSpec.rows[index - 1]
             m = r.Method
@@ -181,7 +263,7 @@ class Assembly:
             elif n == 0:
                 arg = None
             else:
-                raw = code[pos:pos + n]
+                raw = code[pos : pos + n]
                 pos += n
                 if op == 0x22:
                     arg = struct.unpack('<f', raw)[0]
@@ -190,7 +272,7 @@ class Assembly:
                 elif op == 0x21:
                     arg = struct.unpack('<q', raw)[0]
                 elif n == 1:
-                    arg = struct.unpack('<b', raw)[0] if op in (0x1F,) or 0x2B <= op <= 0x37 or op == 0xDE else raw[0]
+                    arg = struct.unpack('<b', raw)[0] if op == 0x1F or 0x2B <= op <= 0x37 or op == 0xDE else raw[0]
                 elif n == 2:
                     arg = struct.unpack('<H', raw)[0]
                 else:
@@ -207,7 +289,7 @@ class Assembly:
         for ins in self.body(method_row):
             op = ins.op
             if op in BRANCHES or op == 0x45:
-                raise ValueError('IL_%04X: a branch; this evaluator runs straight-line code only' % ins.offset)
+                raise ValueError(f'IL_{ins.offset:04X}: a branch; this evaluator runs straight-line code only')
             if op == 0x00:
                 continue
             if 0x16 <= op <= 0x1E:
@@ -235,8 +317,18 @@ class Assembly:
             elif op in (0x67, 0x68, 0x69, 0x6A, 0x6B, 0x6C, 0x6D, 0x6E, 0xD1, 0xD2, 0xD3, 0xD4, 0xE0):
                 v = stack.pop()
                 if isinstance(v, int):
-                    bits, signed = {0x67: (8, 1), 0x68: (16, 1), 0x69: (32, 1), 0x6A: (64, 1), 0xD1: (16, 0),
-                                    0xD2: (8, 0), 0x6D: (32, 0), 0x6E: (64, 0), 0xD3: (64, 1), 0xE0: (64, 0)}.get(op, (0, 0))
+                    bits, signed = {
+                        0x67: (8, 1),
+                        0x68: (16, 1),
+                        0x69: (32, 1),
+                        0x6A: (64, 1),
+                        0xD1: (16, 0),
+                        0xD2: (8, 0),
+                        0x6D: (32, 0),
+                        0x6E: (64, 0),
+                        0xD3: (64, 1),
+                        0xE0: (64, 0),
+                    }.get(op, (0, 0))
                     if bits:
                         v &= (1 << bits) - 1
                         if signed and v >> (bits - 1):
@@ -273,7 +365,7 @@ class Assembly:
             elif op == 0x2A:
                 break
             else:
-                raise ValueError('IL_%04X: opcode %s not handled' % (ins.offset, ins.name))
+                raise ValueError(f'IL_{ins.offset:04X}: opcode {ins.name} not handled')
         return statics, markers
 
     def _initialize(self, arr, field_row):

@@ -1,3 +1,4 @@
+# ruff: noqa: SIM115, TRY004, UP031
 """The game's frame table: for every image row of AssetsPack, its sheet size and, per frame, the texture pack, the
 rect in that pack and the trim. Read from the IL of Rewind's Assembly-CSharp.dll (no C# text parsing):
 
@@ -15,22 +16,29 @@ Rects are in pack pixels, y from the bottom (Unity's UV origin); the PNG row of 
 Usage: python -I frametable.py --asm <Rewind>/assemblies/Assembly-CSharp.dll --out frames.json
                                 [--game <game folder> --dump dump.cs]
 """
+
 import argparse
 import json
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import il  # noqa: E402
+import il
 
 PACK = 'com.bitmapbureau.terminator.AssetsPack'
 ASSETS = 'com.bitmapbureau.terminator.Assets'
 PACK_SIZE = 4096
-JAGGED = [('tex', 'staticInit5', 'imagetexframes_tex'), ('uvx', 'staticInit6', 'imagetexframes_uvx'),
-          ('uvy', 'staticInit7', 'imagetexframes_uvy'), ('uvw', 'staticInit8', 'imagetexframes_uvw'),
-          ('uvh', 'staticInit9', 'imagetexframes_uvh'), ('frw', 'staticInit10', 'imagetexframes_frw'),
-          ('frh', 'staticInit11', 'imagetexframes_frh'), ('ofx', 'staticInit12', 'imagetexframes_ofx'),
-          ('ofy', 'staticInit13', 'imagetexframes_ofy')]
+JAGGED = [
+    ('tex', 'staticInit5', 'imagetexframes_tex'),
+    ('uvx', 'staticInit6', 'imagetexframes_uvx'),
+    ('uvy', 'staticInit7', 'imagetexframes_uvy'),
+    ('uvw', 'staticInit8', 'imagetexframes_uvw'),
+    ('uvh', 'staticInit9', 'imagetexframes_uvh'),
+    ('frw', 'staticInit10', 'imagetexframes_frw'),
+    ('frh', 'staticInit11', 'imagetexframes_frh'),
+    ('ofx', 'staticInit12', 'imagetexframes_ofx'),
+    ('ofy', 'staticInit13', 'imagetexframes_ofy'),
+]
 BLOBS = ['imagewidth', 'imageheight', 'imagetexframes_sfw', 'imagetexframes_sfh']
 
 
@@ -40,8 +48,8 @@ def constants(asm):
     prev = None
     for ins in asm.body(asm.method(ASSETS, '.cctor')):
         if ins.op == 0x80 and prev is not None:
-            kind, (owner, name, _) = asm.token(ins.arg)
-            if owner == ASSETS and (name.startswith('IMAGE_') or name.startswith('MAP_')):
+            _kind, (owner, name, _) = asm.token(ins.arg)
+            if owner == ASSETS and (name.startswith(('IMAGE_', 'MAP_'))):
                 if 0x16 <= prev.op <= 0x1E:
                     out[name] = prev.op - 0x16
                 elif prev.op == 0x15:
@@ -68,7 +76,7 @@ def blob_fields(asm):
                 token = None
     missing = [b for b in BLOBS if b not in out]
     if missing:
-        raise ValueError('AssetsPack.staticInit: no blob for %s' % missing)
+        raise ValueError(f'AssetsPack.staticInit: no blob for {missing}')
     return out
 
 
@@ -76,7 +84,7 @@ def jagged(asm, method, field):
     statics, markers = asm.run(asm.method(PACK, method))
     arr = statics.get((PACK, field))
     if not isinstance(arr, list):
-        raise ValueError('%s: %s is not stored as an array' % (method, field))
+        raise ValueError(f'{method}: {field} is not stored as an array')
     return arr, markers
 
 
@@ -94,13 +102,16 @@ def read(asm_path, game=None, dump=None, log=print):
             raise ValueError('%s has %d rows, imageclassname %d' % (field, len(arr), n))
         holes = [(i, j) for i, row in enumerate(arr) for j, v in enumerate(row or []) if v is None]
         if any(row is None for row in arr):
-            raise ValueError('%s: rows never stored: %s' % (field, [i for i, r in enumerate(arr) if r is None][:10]))
-        gaps[key] = dict(markers=markers, unset=len(holes))
+            raise ValueError(f'{field}: rows never stored: {[i for i, r in enumerate(arr) if r is None][:10]}')
+        gaps[key] = {'markers': markers, 'unset': len(holes)}
         if holes and markers and key.startswith('uv'):
             if not (game and dump):
-                raise SystemExit('%s: Rewind left %d gaps in %s; pass --game and --dump to fill them from '
-                                 'GameAssembly.dll' % (field, len(holes), method))
+                raise SystemExit(
+                    '%s: Rewind left %d gaps in %s; pass --game and --dump to fill them from '
+                    'GameAssembly.dll' % (field, len(holes), method)
+                )
             import native
+
             va = native.dump_vas(dump, 'AssetsPack', [method])[method]
             values, unknown = native.Native(os.path.join(game, 'GameAssembly.dll')).double_stores(va, n)
             filled = 0
@@ -119,7 +130,7 @@ def read(asm_path, game=None, dump=None, log=print):
         tables[key] = arr
     names = {}
     for k, v in sorted(consts.items()):
-        if k.startswith('IMAGE_') and not k.startswith('IMAGE_ARRAY_'):   # IMAGE_ARRAY_* index arrayentries
+        if k.startswith('IMAGE_') and not k.startswith('IMAGE_ARRAY_'):  # IMAGE_ARRAY_* index arrayentries
             names.setdefault(v, k)
     images, problems = [], []
     for i in range(n):
@@ -131,12 +142,30 @@ def read(asm_path, game=None, dump=None, log=print):
                 if abs(g[k] * PACK_SIZE - v) > 1e-6:
                     problems.append('row %d frame %d: %s * 4096 = %r, not whole' % (i, j, k, g[k] * PACK_SIZE))
             if (uw, uh) != (g['frw'], g['frh']):
-                problems.append('row %d frame %d: uv size %dx%d, trimmed size %dx%d' % (i, j, uw, uh, g['frw'], g['frh']))
-            frames.append(dict(pack=g['tex'], x=x, y=y, w=uw, h=uh, ox=g['ofx'], oy=g['ofy']))
-        images.append(dict(row=i, id=cls[i], name=names.get(cls[i], '#%d' % cls[i]),
-                           width=blobs['imagewidth'][i], height=blobs['imageheight'][i],
-                           sfw=blobs['imagetexframes_sfw'][i], sfh=blobs['imagetexframes_sfh'][i], frames=frames))
-    return dict(rows=n, pack_size=PACK_SIZE, images=images, constants=consts, gaps=gaps, problems=problems)
+                problems.append(
+                    'row %d frame %d: uv size %dx%d, trimmed size %dx%d' % (i, j, uw, uh, g['frw'], g['frh'])
+                )
+            frames.append({'pack': g['tex'], 'x': x, 'y': y, 'w': uw, 'h': uh, 'ox': g['ofx'], 'oy': g['ofy']})
+        images.append(
+            {
+                'row': i,
+                'id': cls[i],
+                'name': names.get(cls[i], '#%d' % cls[i]),
+                'width': blobs['imagewidth'][i],
+                'height': blobs['imageheight'][i],
+                'sfw': blobs['imagetexframes_sfw'][i],
+                'sfh': blobs['imagetexframes_sfh'][i],
+                'frames': frames,
+            }
+        )
+    return {
+        'rows': n,
+        'pack_size': PACK_SIZE,
+        'images': images,
+        'constants': consts,
+        'gaps': gaps,
+        'problems': problems,
+    }
 
 
 def main():
@@ -148,7 +177,9 @@ def main():
     a = ap.parse_args()
     t = read(a.asm, a.game, a.dump)
     json.dump(t, open(a.out, 'w'), separators=(',', ':'))
-    print('rows %d, frames %d, problems %d' % (t['rows'], sum(len(i['frames']) for i in t['images']), len(t['problems'])))
+    print(
+        'rows %d, frames %d, problems %d' % (t['rows'], sum(len(i['frames']) for i in t['images']), len(t['problems']))
+    )
     for p in t['problems'][:20]:
         print('  ' + p)
 

@@ -1,3 +1,4 @@
+# ruff: noqa: SIM115
 """The double values IL2CPP stores one by one into small double[] arrays inside the game's generated table
 initialisers (AssetsPack.staticInit6..9), read from GameAssembly.dll. Some Rewind versions drop these stores (the
 bounds-checked store helper isn't translated); frametable.py fills such gaps from here.
@@ -16,6 +17,7 @@ function itself instead of being passed in:
 STORE_D is the call target most often reached with xmm2 just set; STORE_REF the one most often reached with r8
 just set.
 """
+
 import collections
 import re
 import struct
@@ -27,11 +29,11 @@ import pefile
 def dump_vas(dump_path, type_name, names):
     """VA of each method `names` of class `type_name` (the short name) in an Il2CppDumper dump.cs."""
     text = open(dump_path, encoding='utf-8', errors='replace').read()
-    m = re.search(r'\n(?:public |internal |private )?[^\n]*class %s\b[^\n]*\n\{' % re.escape(type_name), text)
+    m = re.search(rf'\n(?:public |internal |private )?[^\n]*class {re.escape(type_name)}\b[^\n]*\n\{{', text)
     if not m:
-        raise KeyError('class %s not in %s' % (type_name, dump_path))
+        raise KeyError(f'class {type_name} not in {dump_path}')
     end = text.find('\n}\n', m.end())
-    body = text[m.end():end]
+    body = text[m.end() : end]
     out = {}
     for mm in re.finditer(r'// VA: (0x[0-9A-Fa-f]+)[^\n]*\n\s*[^\n]*?\b(\w+)\(\)', body):
         if mm.group(2) in names:
@@ -67,9 +69,13 @@ class Native:
                     dstore[tgt] += 1
                 if any(r.startswith('r8') for r in recent):
                     rstore[tgt] += 1
-            recent.append(ins.op_str if ins.mnemonic in ('mov', 'movsd', 'movaps', 'movapd', 'xorps', 'xorpd', 'movq', 'lea') else '')
+            recent.append(
+                ins.op_str
+                if ins.mnemonic in ('mov', 'movsd', 'movaps', 'movapd', 'xorps', 'xorpd', 'movq', 'lea')
+                else ''
+            )
         if not dstore or not rstore:
-            raise ValueError('no store helpers found at 0x%X' % va)
+            raise ValueError(f'no store helpers found at 0x{va:X}')
         return dstore.most_common(1)[0][0], rstore.most_common(1)[0][0]
 
     def double_stores(self, va, count):
