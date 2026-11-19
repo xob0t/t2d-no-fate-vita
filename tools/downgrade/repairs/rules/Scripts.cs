@@ -38,22 +38,6 @@ static partial class Rules
         m.Site("__vtable()", "dcf66616").Replace(0, 4, il => { });
     }
 
-    // Script.getRank (0x18042AAB0), the rank at a level's end: the native code reads levelID ([rdi+0x10]) unchecked
-    // and checks the class against CyberdyneHQ only on the levelID == 7 path, before numCopsKilled ([rdi+0x2A8]).
-    // Rewind keeps that class check as a fact about `this` for the whole method and casts both reads of levelID too,
-    // so every other level's script threw InvalidCastException at its end (Desert Town, Cyberdyne Research and
-    // Factory, Future War 1 in the first playtest). The two levelID reads lose the cast; the numCopsKilled one keeps it.
-    static void ScriptGetRank(Engine e)
-    {
-        MethodRepair m = e.Method("com.bitmapbureau.terminator.scripts.Script::getRank()", "02680947");
-        string[] read = { "ldarg.0", "castclass com.bitmapbureau.terminator.scripts.CyberdyneHQ", "ldfld System.Int32 com.bitmapbureau.terminator.scripts.Script::levelID" };
-        Site first = m.Anchor(read, 0, "4c87596c"), second = m.Anchor(read, 1, "68e19a60");
-        first.With(il => il.This().Ldfld(LevelID));
-        second.With(il => il.This().Ldfld(LevelID));
-    }
-
-    const string LevelID = "com.bitmapbureau.terminator.scripts.Script::levelID";
-
     // Script.drawParallaxTiled (0x18042D320; Cyberdyne Factory, Future War 2 to 4, the attract demos): the inner loop's
     // j + 1 (ebx). MSVC increments it on both paths, before the draw (0x18042D4E1) and on the culled path
     // (0x18042D576, which falls into the loop test); Rewind keeps the first as V10 = V3 + 1 and loses the second, so

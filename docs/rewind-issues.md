@@ -496,6 +496,17 @@ What sets this one apart is that it is the loop's induction variable, tested at 
 
 Seen in a real game: `Script.drawParallaxTiled` (0x18042D320), which Cyberdyne Factory, Future War 2 to 4 and the attract demos call: on the console the first frame with a tile off the screen never ended.
 
+## 32. A class check on one path casts the object on every path (new, found on the console)
+
+Status: fixed by the fork's change 34 (`a45bb78`, `REWIND_NO_CAST_DOMINANCE` turns it off). No repro yet.
+
+An inlined `castclass` of `this` on one path of a method, before a field of the subclass, is taken out as a check and kept as a fact about `this` for the whole method.
+Every member access through `this` was then cast to the subclass, also the reads of the method's own class's fields on paths that never made the check, so the method threw `InvalidCastException` whenever `this` wasn't the subclass, with no gap to show for it.
+A check in a block a later simplification took out still held everywhere, and a check's place was lost when its block was merged with the next.
+The fork casts only where every path from the entry passes a check, or the use is past the check in its block (or just before it, with no store or call between: the compiler loads fields ahead of the class test); a field the static type lacks, read where nothing proves the class, stays unresolved.
+
+Seen in a real game: `Script.getRank` (0x18042AAB0) reads `levelID` (`[rdi+0x10]`) unchecked and checks `this` against `CyberdyneHQ` only on the `levelID == 7` path, before `numCopsKilled`; every other level's end threw. A repair rule (`ScriptGetRank`) dropped the two casts until the fork's fix.
+
 ## Not Rewind's
 
 ILVerify 10.0.15 crashes with an InvalidCastException on `callvirt Object::MemberwiseClone()` over arrays (an inlined `Array.Clone`).

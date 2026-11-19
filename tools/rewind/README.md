@@ -51,7 +51,9 @@ Changes made for t2d-no-fate-vita in 2026, one fork commit per change, in order:
 | 31 | Virtual calls on `this` merged from several paths, through a merged vtable-entry address or a merge of merges, are recovered. |
 | 32 | A switch through a byte table of case indexes and a table of targets is recovered; the register a jump table jumps through is dead after the jump. |
 | 33 | A direct call changes only the volatile registers the callee's code writes. |
+| 34 | A class check casts the object only where every path to the use passes the check; a check on a path the CFG no longer has proves nothing. |
 
+Change 34 comes after the fork's repros and docs commits.
 Most changes have a `REWIND_NO_*` environment switch that turns them off (2, 3, 17 and 23 have none).
 The fork holds no game code or data.
 
