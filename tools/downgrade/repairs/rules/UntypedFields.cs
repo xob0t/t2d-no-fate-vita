@@ -26,7 +26,7 @@ static partial class Rules
 
     // Button.drawLock: each padlock debris, (GameObject)this.padlockDebris.__a[V0] as the method casts it for its x;
     // +312 (0x138) GameObject.y, kept as its bits as Rewind's int64 local V13 has it; +428 (0x1AC) frame; +624 (0x270)
-    // ct, a ColorTransform, which V15 and V20 then hold for unityDraw.
+    // ct, a ColorTransform, which V15 holds for unityDraw.
     static void ButtonDrawLock(Engine e)
     {
         MethodRepair m = e.Method("com.bitmapbureau.terminator.ui.Button::drawLock()", "425e6592");
@@ -36,8 +36,12 @@ static partial class Rules
          .With(il => { Debris(il); il.Ldfld("com.bitmapbureau.terminator.sprites.GameObject::frame"); });
         m.Site("__load8(__address(__reference_arithmetic((this.padlockDebris.__a[m#] + 624L))))", "48bf9249")
          .With(il => { Debris(il); il.Ldfld("com.bitmapbureau.terminator.sprites.GameObject::ct"); });
+        // V20 is a long stack slot that later holds the bools of the next draw (`V20 & -256`, then conv.i4): it keeps
+        // its 0, and the first unityDraw takes the ct from V15 instead of through it.
+        m.Anchor(new[] { "ldloc.s V_15", "stloc.s V_20" }, 0, "602ee0eb").With(il => { });
+        m.Anchor(new[] { "ldloc.s V_20", "ldc.i4.0", "ldc.i4.0", "ldc.i4.m1" }, 0, "f6896bb6")
+         .With(il => il.Ldloc(15).I4(0).I4(0).I4(-1));
         m.RetypeLocal(15, "com.twissgreen.engine.geom.ColorTransform");
-        m.RetypeLocal(20, "com.twissgreen.engine.geom.ColorTransform");
     }
 
     static void Debris(IL il)

@@ -37,11 +37,14 @@ static partial class Rules
             AtXY(il);
             il.Callvirt(FontType + "::drawString(BitmapData,String,Double,Double,Int32,ColorTransform)");
         });
+        // The id is chosen before the call's arguments go on the stack: IL2CPP 2018 mistypes values held on the stack
+        // across a branch.
+        VariableDefinition chosen = m.NewLocal("System.Int32");
         m.Site("__native_0x180002F90(", 0, "a34e7895").With(il =>
         {
             Instruction on = il.NewLabel(), id = il.NewLabel();
-            il.This().Ldfld(ButtonType + "::bmpFont").Arg(0);
-            il.This().Ldfld(ButtonType + "::option").Brtrue(on).I4(534).Br(id).Place(on).I4(533).Place(id);
+            il.This().Ldfld(ButtonType + "::option").Brtrue(on).I4(534).Stloc(chosen).Br(id).Place(on).I4(533).Stloc(chosen).Place(id);
+            il.This().Ldfld(ButtonType + "::bmpFont").Arg(0).Ldloc(chosen);
             AtOption(il);
             il.Callvirt(FontType + "::draw(BitmapData,Int32,Double,Double,Int32,ColorTransform)");
         });
@@ -54,13 +57,13 @@ static partial class Rules
         m.Site("__native_0x180002E30(", 0, "a84a2180").With(il =>
         {
             Instruction setting = il.NewLabel(), done = il.NewLabel();
-            il.Ldloc(3).Arg(0).Ldloc(4);
             il.This().Ldfld(ButtonType + "::setting").Brtrue(setting);
+            il.Ldloc(3).Arg(0).Ldloc(4);
             AtXY(il);
-            il.Br(done).Place(setting);
+            il.Callvirt(FontType + "::drawString(BitmapData,String,Double,Double,Int32,ColorTransform)").Br(done).Place(setting);
+            il.Ldloc(3).Arg(0).Ldloc(4);
             AtOption(il);
-            il.Place(done);
-            il.Callvirt(FontType + "::drawString(BitmapData,String,Double,Double,Int32,ColorTransform)");
+            il.Callvirt(FontType + "::drawString(BitmapData,String,Double,Double,Int32,ColorTransform)").Place(done);
         });
         m.Site("__statics()", "f978d700").Delete();
     }
