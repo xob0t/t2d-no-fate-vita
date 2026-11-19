@@ -63,10 +63,7 @@ def main(argv):
     if not sel:
         print("no heartbeats in the window")
         return
-    # A beat covers the frames since the beat before. A screenshot's line comes after its stall, and the stalled
-    # frame's time is counted the frame after: a shot just before a beat's start counts for that beat too.
-    starts = {id(b): (beats[i - 1]["t"] if i else float("-inf")) for i, b in enumerate(beats)}
-    shot_beats = {id(b) for b in sel if any(starts[id(b)] - 0.1 < s <= b["t"] for s in shots)}
+    shot_beats = {id(b) for b in shot_windows(beats, shots)}
     clean = [b for b in sel if id(b) not in shot_beats]
     use = clean or sel
 
@@ -85,6 +82,23 @@ def main(argv):
     print(f"  sprites {rng('sprites', '{:.0f}')}  runs {rng('runs')}  pageSwitches {rng('pageSwitches')}  offscreen {rng('offscreen')}")
     print(f"  freeLPDDR {rng('freeLPDDRMB', '{:.0f}')}  freeCDRAM {rng('freeCDRAMMB')}  pages {rng('pages', '{:.0f}')}  pagesMB {rng('pagesMB', '{:.0f}')}  budget {rng('budgetMB')}  heap {rng('heapMB')}")
     print(f"  most in a frame: sprites {rng('spritesMax', '{:.0f}')}  runs {rng('runsMax', '{:.0f}')}")
+
+
+def shot_windows(beats, shots, near=0.1):
+    """The beats whose frames hold a screenshot's stall, one beat per screenshot. A beat covers the frames since the
+    beat before. A screenshot's line comes after its stall, and the stalled frame's time is counted the frame after,
+    so a shot within near seconds before a beat's end may be counted in that beat or the next: of the two, the one
+    with the longer worst frame (the stall). Before (Nov 2026) both counted as screenshot windows, and the other
+    one's own hitch went unseen."""
+    marked = []
+    for s in shots:
+        i = next((i for i, b in enumerate(beats) if s <= b["t"]), None)
+        if i is None:
+            continue  # after the last beat: in none
+        if beats[i]["t"] - s < near and i + 1 < len(beats):
+            i = max(i, i + 1, key=lambda j: float(beats[j].get("worst", 0)))
+        marked.append(beats[i])
+    return marked
 
 
 if __name__ == "__main__":
