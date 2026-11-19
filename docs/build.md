@@ -146,6 +146,16 @@ T2DCompat is compiled from `Compat2018.cs`, `Unity6Shims.cs` and every `.cs` fil
 `InspectorNameAttribute` is dropped, like every attribute 2018.2 doesn't have, and InControl's references to `Input` and `Touch` move from Unity 6's `InputLegacyModule` to 2018.2's `CoreModule`.
 Steamworks.NET is then stubbed: its methods do nothing and return defaults, so nothing calls `steam_api64.dll`.
 
+In `Recovered.T2D`, the rewriter (`Rewrite` in `DowngradeAssemblies.cs`) changes the code in this order:
+
+1. The repair engine, rules then the family patterns ([repairs](repairs.md)), on Rewind's IL as Rewind wrote it.
+2. The platform layer's pass ([platform](platform.md)).
+3. The fold-back passes ([foldback](../tools/downgrade/foldback/README.md)).
+4. The retargeting of type references to 2018.2 and T2DCompat.
+5. `Passes`, in list order: the member redirects; the sprite renderer's R8, R7, R9 ([drawing](drawing.md)); `TypeGapValues`, then `ListRewindGaps`, which counts the gaps left; the texture rules R1 to R6 ([textures](textures.md)), R5 skipping the methods R8 replaced; the sound rules A1 and A2 ([audio](audio.md)).
+
+R3 and A1 both change `AssetsEmbed.staticInit`, each only its own instructions; the code stage writes the same assembly with the atlas passes before or after the audio passes, and with `TypeGapValues` before or after the sprite renderer's.
+
 The stage doesn't repair the code.
 It reports, in its log and in `artifacts/downgrade/code-report.txt`:
 
@@ -165,6 +175,8 @@ The export is of a Unity 6 game serialized for 2018.2, and `asset_rules.py` fixe
 - The scene's `LightingDataAsset` is serializedVersion 4. The game has no lightmaps, so the asset is left out and the scene's reference to it cleared.
 - `Assets/Plugins`: the 10 Unity 6 engine modules 2018.2 doesn't have, `System.Runtime.CompilerServices.Unsafe.dll` and `__Generated.dll` are left out, and the game's three assemblies are replaced by the rewritten ones. A plugin no rule names stops the stage.
 - The three shaders are AssetRipper's dummies, since Unity 6 keeps only their compiled Direct3D 11 programs. A `.shader` file under `tools/downgrade/shaders` with the same `Shader "name"` replaces the dummy, keeping its `.meta`; the stage lists the dummies left.
+- The 930 sound clips get the PS Vita audio rule's import settings (`audio/audio_rules.py`, [audio](audio.md)): 619 forced to mono, 81 streamed.
+- The twelve texture packs give way to the atlas pages under `Assets/Resources/atlas` ([textures](textures.md#the-build-step)).
 
 ### Build switches
 
@@ -185,7 +197,7 @@ As of 2026-11-19 on the Steam release:
 | Setup, from nothing | 12 min | Every doctor check passes. 2.8 GB in `tools/external`. A rerun with everything in place takes seconds. |
 | `recover` | 47 s | 44 assemblies, 16 MB. Rewind, with the 22 patches, identifies 59 kinds of runtime function with the 6000.0.60f1 library and recovers 15,372 of 18,368 native bodies completely (by its own count). |
 | `rip` | 29 s | 1,005 assets; the Mono-layout copy is 0.6 GB, the export 0.6 GB. |
-| `code` | 4 s | Runs through: 0 problems from the rewriter, no repair errors, 253 gap methods with 1,640 marker sites in `Recovered.T2D`. |
+| `code` | 4 s | Runs through: 0 problems from the rewriter, no repair errors or warnings, 100 gap methods with 649 marker sites in `Recovered.T2D` (on the `recover` output of 2026-11-19 09:04; 188 and 1,241 without the family patterns and the sprite renderer). |
 | `project` | 7 s | `work/t2d-2018.2.19f1-vita`, 0.6 GB. |
 | `build` | 18 min, then stops | With `--anyway`, the builder writes every data file (`resources.assets` 54 MB in 12.5 min, most of it encoding the 930 sound clips to HEVAG; `resources.resource` 492 MB; `unity_builtin_extra` in 3 min), 0.6 GB in all. Then its code step stops in the C++ compile (below). Without `--anyway` the stage refuses at once while the code stage left unresolved references. |
 | `package` | 67 s | Works on a build folder (a 472 MB VPK, with the LiveArea art and the patched eboot), but refuses a build without its code module, so it makes no VPK today. |
@@ -211,7 +223,7 @@ With the Rewind patches, compiling each of the 20 `Bulk_Recovered.T2D_*.cpp` fil
 - The 4 methods without gaps among the 80 are `ElevatorDoors.awake`, `FutureWar3.setupScene` (the downcasts), `UnityMain.OnRenderImage` (the `Color`) and `Cutscene.draw` (a `ColorTransform` in an `int64` local).
 - The `RuntimeHelpers.InitializeArray` errors on arrays held in `int64` locals (at least 250 without the patches) are gone, as are most of the barrier errors (at least 395).
 
-Even once everything compiles, the game would not run: every one of the 253 gap methods in `Recovered.T2D` throws when it reaches a marker.
+Even once everything compiles, the game would not run: every one of the 100 gap methods in `Recovered.T2D` throws when it reaches a marker.
 
 Before the game can start, in order:
 

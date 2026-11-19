@@ -205,6 +205,9 @@ partial class DowngradeAssemblies
     // becomes, in place (branches to the first instruction stay right),
     //   ldloc <page>; call Atlas.Get(int); nop
     // Get returns the resident page, or loads it at once and logs the miss.
+    // A method the sprite batch's R8 has replaced (spritebatch/rewriter/SpriteBatchPatches.cs) is skipped: its new body
+    // reads no texpack, and SpriteBatch takes the page from Atlas.Get itself. With R8 in the pipeline this pass changes
+    // nothing, and DowngradeAssemblies lists it as optional.
     static int AtlasDraws(ModuleDefinition module)
     {
         TypeDefinition bitmapData = GameType(module, AtlasBitmapData);
@@ -214,6 +217,8 @@ partial class DowngradeAssemblies
         foreach (string name in new[] { "unityDraw", "unityDrawClippedWidth" })
         {
             MethodDefinition draw = bitmapData.Methods.Single(m => m.Name == name && m.HasBody);
+            if (draw.Body.Instructions.Any(i => i.Operand is MethodReference &&
+                                                ((MethodReference)i.Operand).DeclaringType.FullName == "T2DCompat.SpriteBatch")) continue;
             int here = 0;
             foreach (Instruction read in draw.Body.Instructions.Where(i => AtlasIsField(i, OpCodes.Ldsfld, AtlasBitmapData, "texpack")).ToArray())
             {

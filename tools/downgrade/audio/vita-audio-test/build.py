@@ -100,6 +100,10 @@ def make_project(with_game):
     write_if_changed(assets / 'AudioTest.cs', (HERE / 'unity' / 'AudioTest.cs').read_bytes())
     write_if_changed(assets / 'link.xml', (HERE / 'unity' / 'link.xml').read_bytes())
     write_if_changed(assets / 'Editor' / 'AudioTestBuild.cs', (HERE / 'unity' / 'AudioTestBuild.cs').read_bytes())
+    # The audio rule's run-time helper as the port builds it into T2DCompat, with the platform layer's Sounds it falls
+    # back on, for the test's "rule" step.
+    write_if_changed(assets / 'T2DCompat' / 'SoundLoads.cs', (HERE.parent / 'compat' / 'SoundLoads.cs').read_bytes())
+    write_if_changed(assets / 'T2DCompat' / 'Sounds.cs', (HERE.parents[1] / 'compat' / 'Sounds.cs').read_bytes())
     modules = ['audio', 'imgui', 'jsonserialize']
     manifest = ',\n'.join(f'    "com.unity.modules.{m}": "1.0.0"' for m in modules)
     write_if_changed(

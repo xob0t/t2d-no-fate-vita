@@ -10,6 +10,6 @@ CECIL=$1
 OUT=${2:-work/bin/Repairs}
 mkdir -p "$OUT"
 cp "$CECIL" "$OUT/"
-SRC=$(for f in $R/Engine.cs $R/Edit.cs $R/IL.cs $R/Support.cs $R/Expr.cs $R/Patterns.cs $R/RepairsMain.cs $R/rules/*.cs; do cygpath -wa "$f"; done)
+SRC=$(for f in $R/Engine.cs $R/Edit.cs $R/IL.cs $R/Support.cs $R/Expr.cs $R/KnownBits.cs $R/Patterns.cs $R/RepairsMain.cs $R/rules/*.cs; do cygpath -wa "$f"; done)
 /c/Windows/Microsoft.NET/Framework64/v4.0.30319/csc.exe -nologo -langversion:5 -debug:pdbonly \
   -out:"$(cygpath -wa "$OUT/Repairs.exe")" -r:"$(cygpath -wa "$CECIL")" $SRC

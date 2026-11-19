@@ -43,8 +43,10 @@ def bank(name, rate, channels, samples, data, codec=CODEC_HEVAG):
         more = i + 1 < len(chunks)
         sample += struct.pack('<I', more | len(body) << 1 | kind << 25) + body
     sample_headers = align(HEADER + len(sample)) - HEADER
-    # PCM data takes 16 bytes more before the alignment (Unity's banks: every PCM clip of the reference)
-    data_size = align(len(data) + (16 if codec == CODEC_PCM16 else 0))
+    # PCM data takes 8 samples per channel more before the alignment, 16 bytes mono and 32 stereo (Unity's
+    # banks: every PCM clip of the reference, and the 27 mono and stereo PCM clips of
+    # tools/downgrade/audio/importer-reference)
+    data_size = align(len(data) + (16 * channels if codec == CODEC_PCM16 else 0))
     head = struct.pack('<4s6I', b'FSB5', 1, 1, sample_headers, 0, data_size, codec)
     content = hashlib.md5(data).digest()
     head += bytes(8) + hashlib.md5(name.encode('utf-8')).digest()[:8] + content
