@@ -124,9 +124,13 @@ namespace T2DCompat
                     return;
                 }
                 pending.Enqueue(line);
-                Monitor.Pulse(gate);
+                Monitor.PulseAll(gate);  // the writer, and a Flush that waits for it, both wait on gate
             }
         }
+
+        // writing: the writer holds a batch it took from pending and hasn't written yet. flushing: a Flush is draining
+        // pending, and the writer takes nothing until it is done. Both under gate.
+        static bool writing, flushing;
 
         static void WriteLines()
         {
@@ -135,33 +139,69 @@ namespace T2DCompat
             {
                 lock (gate)
                 {
-                    while (pending.Count == 0) Monitor.Wait(gate);
+                    while (pending.Count == 0 || flushing) Monitor.Wait(gate);
                     lines.AddRange(pending);
                     pending.Clear();
+                    writing = true;
                 }
-                lock (output)
+                bool open = true;
+                try
                 {
-                    foreach (string line in lines)
-                        if (!Put(line)) return;
+                    lock (output)
+                    {
+                        foreach (string line in lines)
+                            if (!Put(line)) { open = false; break; }
+                    }
                 }
+                finally
+                {
+                    lock (gate)
+                    {
+                        writing = false;
+                        Monitor.PulseAll(gate);
+                    }
+                }
+                if (!open) return;
                 lines.Clear();
             }
         }
 
-        // Writes what is queued from the calling thread (before a deliberate stop).
+        // Writes what is queued from the calling thread (before a deliberate stop). The writer's batch first, which it
+        // took before these lines were queued: returning before it was written lost it at a quit just after, or wrote
+        // the lines out of order. At most FlushWaitMs for it.
+        const int FlushWaitMs = 2000;
+
         public static void Flush()
         {
             if (sync || output == null) return;
             var lines = new List<string>();
             lock (gate)
             {
+                flushing = true;
+                int end = Environment.TickCount + FlushWaitMs;
+                while (writing)
+                {
+                    int left = end - Environment.TickCount;
+                    if (left <= 0 || !Monitor.Wait(gate, left)) break;
+                }
                 lines.AddRange(pending);
                 pending.Clear();
             }
-            lock (output)
+            try
             {
-                foreach (string line in lines)
-                    if (!Put(line)) return;
+                lock (output)
+                {
+                    foreach (string line in lines)
+                        if (!Put(line)) return;
+                }
+            }
+            finally
+            {
+                lock (gate)
+                {
+                    flushing = false;
+                    Monitor.PulseAll(gate);
+                }
             }
         }
 

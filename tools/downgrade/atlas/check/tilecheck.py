@@ -1,6 +1,8 @@
 """tilecheck.py <atlas dir> <tiles dir> (work/atlas/atlas, work/atlas/tiles): SpriteBatch.SubmitTiled's arithmetic, in float32 where the C# is, against the
 whole page: every frame on a tiled page, in all four flips, drawn as an axis-aligned quad at 1:1 and at 1.37x,
-pixel centres sampled point-wise (whole page: Repeat; tiles: Clamp). Counts texels that differ."""
+pixel centres sampled point-wise (whole page: Repeat; tiles: Clamp). The tiled draw reads the tile files
+themselves (pNNN_K.png in the tiles dir), so a tile cut from the wrong place or of the wrong size shows. Counts
+texels that differ."""
 import struct, sys
 import numpy as np
 from PIL import Image
@@ -23,6 +25,25 @@ bad = total = quads = unhit = 0
 edge = 0
 bad1 = 0
 pages = {}
+tile_files = {}
+bad_tiles = []
+
+
+def tile(p, k, tw, th):
+    """Tile k of page p as the build ships it, row 0 at the bottom; None (and noted) if missing or not tw x th."""
+    if (p, k) not in tile_files:
+        try:
+            t = np.asarray(Image.open(f'{tiles}/p{p:03d}_{k}.png'))[::-1]
+        except OSError as error:
+            t = None
+            bad_tiles.append(f'p{p:03d}_{k}.png: {error}')
+        if t is not None and t.shape[:2] != (th, tw):
+            bad_tiles.append(f'p{p:03d}_{k}.png is {t.shape[1]}x{t.shape[0]}, not {tw}x{th}')
+            t = None
+        tile_files[p, k] = t
+    return tile_files[p, k]
+
+
 for p, x, y, w, h in sorted(set(frames)):
     PW, PH = size[p]
     if PW <= T and PH <= T:
@@ -69,9 +90,12 @@ for p, x, y, w, h in sorted(set(frames)):
                     if not mx.any() or not my.any(): continue
                     tu = tuL + (sx[mx] - sL) / (sR - sL) * (tuR - tuL)
                     tv = tvB + (sy[my] - qB) / (qT - qB) * (tvT - tvB)
-                    tx = np.clip(np.floor(tu * tw).astype(int), 0, tw - 1) + c * tw
-                    ty = np.clip(np.floor(tv * th).astype(int), 0, th - 1) + r * th
-                    out[np.ix_(my, mx)] = page[ty][:, tx]
+                    tx = np.clip(np.floor(tu * tw).astype(int), 0, tw - 1)
+                    ty = np.clip(np.floor(tv * th).astype(int), 0, th - 1)
+                    t = tile(p, r * cols + c, tw, th)
+                    if t is None:
+                        continue  # not covered: counted as differing
+                    out[np.ix_(my, mx)] = t[ty][:, tx]
                     hit[np.ix_(my, mx)] = True
             d = (~hit) | (out != ref).any(-1)
             unhit += int((~hit).sum())
@@ -81,4 +105,8 @@ for p, x, y, w, h in sorted(set(frames)):
             edge += int((d & near).sum())
             bad += int(d.sum()); total += d.size
             if scale == 1.0: bad1 += int(d.sum())
+for line in bad_tiles:
+    print('BAD TILE ' + line)
 print(f'{len(pages)} tiled pages, {quads} sub-quads, {total} pixels, {bad} differ, {unhit} not covered, {edge} at a tile edge texel, {bad1} at 1:1')
+# At 1.37x a few texels at tile edges differ by float rounding (docs/textures.md); at 1:1 none may.
+sys.exit(1 if bad1 or bad_tiles else 0)

@@ -108,6 +108,10 @@ namespace T2DCompat
         // Pages over this many bytes are warmed only in the CoverMs after an App or level Enter (0: like the others).
         public static int WarmBigBytes = 8 * 1024 * 1024;
         public static int CoverMs = 300;
+        // Under the cover, at most this many bytes of pages warmed (and waited for) in one flush, the first page
+        // whatever its size; the rest go on at the usual pace (0: no limit). A briefing skipped early left a level's
+        // whole scene to one flush.
+        public static int CoverWarmBytes = 16 * 1024 * 1024;
         // A frame longer than this logs what the atlas did in it (0: off).
         public static int SlowFrameMs = 100;
 
@@ -151,6 +155,7 @@ namespace T2DCompat
         static long asyncBytes;
         static bool[] viaAsync;     // loaded with LoadAsync, for the slow-frame log
         static bool[] wanted, eager;
+        static bool[] missing;      // not in the build: logged once, its draws skipped
         static string sceneLabel = "(start)";
 
         static int misses;
@@ -183,21 +188,26 @@ namespace T2DCompat
             Texture2D t = pages[page];
             if (t == null)
             {
+                // A page no current scene wants, drawn anyway, is wanted until the next Switch, as the scenes' own pages:
+                // an eviction made it load again on its next draw, every few frames with CDRAM full (the Factory's p007,
+                // p043, p065). Before WaitFor, so that a load still in flight for it is kept, not unloaded as it completes.
+                bool demanded = !wanted[page];
+                wanted[page] = true;
                 t = WaitFor(page);
                 if (t == null)
                 {
                     Miss(page);
-                    // Wanted until the next Switch, as the scenes' own pages: an eviction made it load again on its
-                    // next draw, every few frames with CDRAM full (the Factory's p007, p043, p065).
-                    wanted[page] = true;
                     t = LoadPage(page);
                 }
+                else if (demanded) Miss(page);
             }
+            // A page missing from the build: nothing was added to count off, and the draw is skipped (SpriteBatch).
+            if (t == null) return null;
             lastUse[page] = ++useClock;
             if (!drawn[page])
             {
                 Drawn(page);
-                if (t != null) Note("draw " + PageName(page) + " " + Mb(page) + (viaAsync[page] ? " async" : " sync"));
+                Note("draw " + PageName(page) + " " + Mb(page) + (viaAsync[page] ? " async" : " sync"));
             }
             return t;
         }
@@ -635,11 +645,13 @@ namespace T2DCompat
                 // Under the cover, the scenes' own pages: all of them, big ones too, waited for if still loading.
                 // A prefetch's or the next App's pages keep their pace.
                 bool covered = cover && (InScenes(p, appScenes) || InScenes(p, levelScenes));
+                if (covered && CoverWarmBytes > 0 && coverWarmed > 0 && coverWarmed + PageBytes(p) > CoverWarmBytes) covered = false;
                 if (!covered && (paced || (WarmBigBytes > 0 && PageBytes(p) > WarmBigBytes))) continue;
                 // A page Resources.Load gave is read at its first draw (about 80 ms a MB): only under the cover.
                 if (!covered && pages[p] != null && !viaAsync[p]) continue;
                 if (pages[p] == null && (!covered || WaitFor(p) == null)) continue;
                 warmList.RemoveAt(i);
+                if (covered) coverWarmed += PageBytes(p);
                 Drawn(p);
                 lastUse[p] = ++useClock;
                 if (!covered) warmNextAt = now + PageBytes(p) / WarmBytesPerSecond;
@@ -653,6 +665,7 @@ namespace T2DCompat
 
         static Texture2D LoadPage(int page)
         {
+            if (missing[page]) return null;
             Evict(PageBytes(page));
             HoldBallast();
             float start = Time.realtimeSinceStartup;
@@ -666,7 +679,9 @@ namespace T2DCompat
                 TextAsset raw = Resources.Load<TextAsset>(Folder + PageName(page));
                 if (raw == null)
                 {
-                    Debug.LogError("T2D atlas: page " + PageName(page) + " is not in Resources/" + Folder);
+                    // Once: a draw of it would try again every frame.
+                    Debug.LogError("T2D atlas: page " + PageName(page) + " is not in Resources/" + Folder + "; its draws are skipped");
+                    missing[page] = true;
                     return null;
                 }
                 t = new Texture2D(pageW[page], pageH[page], TextureFormat.RGBA4444, false);
@@ -689,6 +704,10 @@ namespace T2DCompat
             // tile (SubmitTiled).
             t.wrapMode = page >= realPages ? TextureWrapMode.Clamp : TextureWrapMode.Repeat;
             pages[page] = t;
+            // Resources.Load gives back a texture unloaded but not released yet: its pending release goes, so that an
+            // unload before the next flush waits its own two flushes rather than releasing it under this frame's draws.
+            Unrelease(unloaded, t);
+            Unrelease(unloadedBefore, t);
             residentBytes += PageBytes(page);
             drawn[page] = false;
             pendingBytes += PageBytes(page);
@@ -722,6 +741,16 @@ namespace T2DCompat
         static List<Unloaded> unloaded = new List<Unloaded>();
         static List<Unloaded> unloadedBefore = new List<Unloaded>();
 
+        static void Unrelease(List<Unloaded> list, Texture2D t)
+        {
+            for (int i = list.Count - 1; i >= 0; i--)
+                if ((object)list[i].Texture == (object)t)
+                {
+                    if (list[i].Drawn) releasingBytes -= PageBytes(list[i].Page);
+                    list.RemoveAt(i);
+                }
+        }
+
         // From SpriteBatch.Flush, before it draws: releases the textures of the pages unloaded before the last flush,
         // unless the page was loaded again since (Resources.Load gives back the same texture while it isn't unloaded).
         public static void ReleaseUnloaded()
@@ -729,6 +758,7 @@ namespace T2DCompat
             if (!loaded) return;
             SlowFrame();
             StepBallast();
+            coverWarmed = 0;
             foreach (Unloaded u in unloadedBefore)
             {
                 if (u.Drawn) releasingBytes -= PageBytes(u.Page);
@@ -794,6 +824,7 @@ namespace T2DCompat
         }
 
         static int spills;
+        static long coverWarmed;    // bytes warmed under the cover in this flush (NextWarm)
 
         // Unloads pages no current scene wants, least recently used first, until `need` more bytes fit. If they still
         // don't, the page goes to main memory.
@@ -927,6 +958,7 @@ namespace T2DCompat
             lastUse = new int[pageW.Length];
             wanted = new bool[pageW.Length];
             eager = new bool[pageW.Length];
+            missing = new bool[pageW.Length];
             Debug.Log("T2D atlas: " + realPages + " pages" + (pageW.Length > realPages ? " (" + (pageW.Length - realPages) + " tiles of the big ones)" : "") +
                 ", " + tex.Length + " images, " + sceneNames.Length + " scenes");
         }

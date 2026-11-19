@@ -515,18 +515,42 @@ def folder_meta(folder: Path):
     return {meta_of(folder): stable_meta('folder', folder, 'DefaultImporter').encode()}
 
 
-def walk(folder: Path):
+LINK = 'link'
+
+
+def build_incomplete(build: Path) -> Path:
+    """<build>.incomplete, beside a PS Vita build folder: the builder writes it before its first write into the
+    folder and make.py removes it when the build is whole (data, code module, the pipeline's touches). While it is
+    there, package and vita.py's install, sync and seed refuse the folder: a build that stopped at IL2CPP leaves
+    the new player data beside the last build's code module."""
+    return build.with_name(build.name + '.incomplete')
+
+
+def require_complete(build: Path):
+    marker = build_incomplete(build)
+    if marker.exists():
+        sys.exit(
+            f'{build} is incomplete: {marker.read_text(encoding="utf-8").strip()} and did not finish, so its data and '
+            f'code module may not match. Build it again (pipeline.py build), or delete {marker.name} if you know better.'
+        )
+
+
+def walk(folder: Path, links=False):
     """{path relative to folder: (size, modification time in ns) of a file, or None for a folder} of
     everything under folder. One directory listing per folder: on Windows a listing has every file's
     size and time, so no file is opened or stat'ed (a second for the export's 185,000 paths, where
-    rglob with a stat of each took 13)."""
+    rglob with a stat of each took 13). links: a symbolic link or junction is one entry, LINK, and
+    walk doesn't go into it (for a folder that will be deleted from: is_dir(follow_symlinks=False)
+    is true for a junction, and deleting what is under one deletes its target's files)."""
     found, folders = {}, [Path()]
     while folders:
         relative = folders.pop()
         with os.scandir(folder / relative) as entries:
             for entry in entries:
                 path = relative / entry.name
-                if entry.is_dir(follow_symlinks=False):
+                if links and (entry.is_symlink() or entry.is_junction()):
+                    found[path] = LINK
+                elif entry.is_dir(follow_symlinks=False):
                     found[path] = None
                     folders.append(path)
                 else:

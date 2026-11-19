@@ -334,7 +334,38 @@ partial class DowngradeAssemblies
         if (camera == null) throw SpriteRule(rule, "UnityMain has no static Camera m_RenderCamera");
         var code = new List<Instruction>();
         new SpriteCall(code).Static(module, camera).Call(module, rule, "Flush");
-        InsertAfter(render.Body.GetILProcessor(), draws[0], code.ToArray());
+        ILProcessor il = render.Body.GetILProcessor();
+        InsertAfter(il, draws[0], code.ToArray());
+
+        // try { Main.draw(); } catch (Exception) { SpriteBatch.Discard(); throw; }
+        // A draw that throws part way leaves its sprites queued, and the next frame's Flush would draw them under
+        // its own. The try starts with the load of the instance Main.draw() is called on, where the stack is empty.
+        Instruction start = draws[0];
+        if (((MethodReference)draws[0].Operand).HasThis)
+        {
+            start = draws[0].Previous;
+            Code load = start == null ? Code.Nop : start.OpCode.Code;
+            bool simple = load == Code.Ldloc || load == Code.Ldloc_S || load == Code.Ldloc_0 || load == Code.Ldloc_1 ||
+                          load == Code.Ldloc_2 || load == Code.Ldloc_3 || load == Code.Ldsfld;
+            Code before = start == null || start.Previous == null ? Code.Nop : start.Previous.OpCode.Code;
+            bool empty = before == Code.Stloc || before == Code.Stloc_S || before == Code.Stloc_0 || before == Code.Stloc_1 ||
+                         before == Code.Stloc_2 || before == Code.Stloc_3 || before == Code.Nop || before == Code.Stsfld;
+            if (!simple || !empty) throw SpriteRule(rule, "Main.draw()'s instance is not loaded by one ldloc or ldsfld on an empty stack");
+        }
+        foreach (Instruction i in render.Body.Instructions)
+            if (i.Operand == draws[0] || (i.Operand is Instruction[] && ((Instruction[])i.Operand).Contains(draws[0])))
+                throw SpriteRule(rule, "a branch goes to Main.draw()'s call itself");
+        Instruction after = code[0];
+        Instruction handler = Instruction.Create(OpCodes.Call, CompatMethod(module, "SpriteBatch", "Discard"));
+        InsertAfter(il, draws[0], Instruction.Create(OpCodes.Leave, after), handler, Instruction.Create(OpCodes.Rethrow));
+        render.Body.ExceptionHandlers.Add(new ExceptionHandler(ExceptionHandlerType.Catch)
+        {
+            TryStart = start,
+            TryEnd = handler,
+            HandlerStart = handler,
+            HandlerEnd = after,
+            CatchType = new TypeReference("System", "Exception", module, module.TypeSystem.CoreLibrary),
+        });
         return 1;
     }
 }

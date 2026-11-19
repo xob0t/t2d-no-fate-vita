@@ -19,7 +19,7 @@ game) hold vita-build too while they read the PS Vita build, so no build rewrite
 upload. They hold it as a reader (a "reader" line in the lock file): a reader and pc-build don't wait
 for each other, since a PC build never writes the PS Vita build; a vita-build taker (a build or
 quickcode) waits for the reader as for any holder, and wait vita-build too. So a job that writes the
-PS Vita build (pipeline.py build --platform vita, package, quickcode) runs under vita-build, never
+PS Vita build (pipeline.py build, package) runs under vita-build, never
 pc-build: pipeline.py stops otherwise. "Reader" is only about pc-build: two readers still exclude
 each other, as two holders of one lock do (a seed during a 30-minute install waits, then stops).
 
@@ -32,13 +32,12 @@ command and everything it starts run in a Windows job that ends with lock.py: if
 unsupervised, and the lock, which names lock.py's process, counts as free once that process is gone
 (take removes it). The command sees T2D_LOCKS, the names of all the runs it is in, which
 pipeline.py and vita.py check (held_here, ours: a sync inside `lock.py run vita-build`
-is the build's own), and T2D_LOCK=<name>, the innermost run's, which build.py checks. For example, a
-Windows Mono player (pipeline.py's default platform is the PS Vita, whose stages run the same way
-under vita-build):
+is the build's own), and T2D_LOCK=<name>, the innermost run's, which build.py checks. pipeline.py
+builds only the PS Vita player now (it has no --platform), so its stages run under vita-build. For
+example, a project and a build of it:
 
-    uv run tools/downgrade/lock.py run pc-build "user: mono build" --wait 3600 -- \\
-        bash -c "uv run tools/downgrade/pipeline.py project --platform windows && \\
-                 uv run tools/downgrade/pipeline.py build --platform windows"
+    uv run tools/downgrade/lock.py run vita-build "user: rebuild" --wait 3600 -- \\
+        bash -c "uv run tools/downgrade/pipeline.py project && uv run tools/downgrade/pipeline.py build"
 
 The time spent waiting counts against whatever limits the caller's own run time; docs/vita.md ("Code
 changes without a full build") says how to queue in short steps with wait.
@@ -152,12 +151,24 @@ INVALID_HANDLE = ctypes.c_void_p(-1).value
 
 
 def clear_stale(name):
-    """Remove the lock if it is stale. Only the file that was judged stale goes: it is opened, read and
-    judged through one handle, and deleted through a second one ReOpenFile makes from it (the same
-    file, whatever the name has become meanwhile). Before (21 Oct) it was read, then unlinked by name:
-    two waiters could both find the same stale lock, the first remove it and take the lock, and the
-    second then remove that new lock and take it too. The first handle shares everything, so a reader
-    (holder_of) never fails on it; the second exists only for a stale lock."""
+    """Remove the lock if it is stale. Only the file that was judged stale goes (delete_judged). Before
+    (21 Oct) it was read, then unlinked by name: two waiters could both find the same stale lock, the
+    first remove it and take the lock, and the second then remove that new lock and take it too."""
+    text, outcome = delete_judged(name, stale_text)
+    if outcome == DELETED:
+        print(f'{name}: removed the lock of {first_line(text)}, whose lock.py process has ended', flush=True)
+
+
+FREE, KEPT, DELETED, BUSY = 'free', 'kept', 'deleted', 'busy'  # delete_judged's outcomes
+
+
+def delete_judged(name, judge):
+    """(text, outcome): the lock file is opened, read and judged (judge(text)) through one handle, and if
+    the judge says so deleted through a second one ReOpenFile makes from it: the same file, whatever the
+    name has become meanwhile, so a lock taken by another job after the read is never the one deleted. The
+    first handle shares everything, so a reader (holder_of) never fails on it; the second exists only for
+    a file to delete, and is refused while another job reads the file without delete sharing (BUSY: try
+    again). FREE when there is no lock file (or it is being deleted), KEPT when the judge said no."""
     kernel32 = ctypes.windll.kernel32
     kernel32.CreateFileW.restype = ctypes.c_void_p
     uint, pointer = ctypes.c_uint32, ctypes.c_void_p
@@ -169,23 +180,22 @@ def clear_stale(name):
     kernel32.CloseHandle.argtypes = [pointer]
     handle = kernel32.CreateFileW(str(path(name)), GENERIC_READ, SHARE_ALL, None, OPEN_EXISTING, 0, None)
     if handle in (None, INVALID_HANDLE):
-        return  # free, or being deleted
+        return None, FREE  # free, or being deleted
     try:
         buffer, size = ctypes.create_string_buffer(4096), ctypes.c_ulong()
         if not kernel32.ReadFile(handle, buffer, len(buffer), ctypes.byref(size), None):
-            return
+            return None, BUSY
         text = buffer.raw[: size.value].decode('utf-8', errors='replace').replace('\r\n', '\n')  # as read_text
-        if not stale_text(text):
-            return
-        # Refused while another job reads the file (it opens it without delete sharing): the next poll
-        # tries again.
+        if not judge(text):
+            return text, KEPT
         deleting = kernel32.ReOpenFile(handle, GENERIC_READ | DELETE, SHARE_READ_DELETE, 0)
         if deleting in (None, INVALID_HANDLE):
-            return
+            return text, BUSY
         try:
             delete = ctypes.c_ubyte(1)  # FILE_DISPOSITION_INFO.DeleteFile: the file goes when the handles close
-            if kernel32.SetFileInformationByHandle(deleting, FILE_DISPOSITION_INFO, ctypes.byref(delete), 1):
-                print(f'{name}: removed the lock of {first_line(text)}, whose lock.py process has ended', flush=True)
+            if not kernel32.SetFileInformationByHandle(deleting, FILE_DISPOSITION_INFO, ctypes.byref(delete), 1):
+                return text, BUSY
+            return text, DELETED
         finally:
             kernel32.CloseHandle(deleting)
     finally:
@@ -297,15 +307,21 @@ def owner(text):
 
 
 def release(name, holder):
-    text = holder_of(name)
-    if text is None:
-        return 0
+    """Remove the lock if holder holds it. Checked and deleted through one handle (delete_judged): read,
+    then unlinked by name, a release could delete the lock another job took in between (after a second
+    release of the same holder, say)."""
     # The whole name must match: "a" must not release "ab: ..." (or "" anyone's lock).
-    if not owner(holder) or owner(text) != owner(holder):
-        print(f'{name} is held by someone else: {text}')
-        return 1
-    remove(path(name))
-    return 0
+    mine = owner(holder)
+    for attempt in range(40):
+        text, outcome = delete_judged(name, lambda text: bool(mine) and owner(first_line(text) or '') == mine)
+        if outcome in (FREE, DELETED):
+            return 0
+        if outcome == KEPT:
+            print(f'{name} is held by someone else: {first_line(text)}')
+            return 1
+        time.sleep(0.05)  # BUSY: another job reads it for a moment
+    print(f'{name}: could not remove the lock; another job kept it open')
+    return 1
 
 
 def held_here():

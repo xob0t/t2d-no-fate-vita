@@ -41,7 +41,8 @@ The safety rules, as on butcher-vita's:
 - Uploads go to `<name>.part` and are renamed; an interrupted file is sent again. Don't kill `vita.py` while it transfers: Ctrl+C lets the file finish.
 - Flags apply to one launch: the player renames `args.txt` to `args.used.txt` as it reads it (`compat/Flags.cs`), and `drive.py` clears flags a launch never read.
 - `drive.py` releases every button it presses, also when the session stops part way; it has no step that leaves one held.
-- `drive.py` warns when a launch wrote no log of its own.
+- `drive.py` stops when a sync, the flags or a press fails, and quits the game only if it launched it (`quit all` ends whatever app the console shows).
+- A launch that wrote no log of its own: `drive.py` keeps the log it read as `log.stale.txt`, not `log.txt`, and exits with 1.
 - Only TNOF00001 and `ux0:data/T2DNoFate` are touched; `crashes` lists only this title's dumps.
 - No mute flag exists, and none should be used on the console.
 
