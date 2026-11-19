@@ -487,7 +487,9 @@ test:
 ```
 
 Rewind gives the drawing path's `inc ebx` its own local (`V10 = V3 + 1`) and tests that local at `test:`, but leaves the culled block empty (a `nop`), so on the culled path the test reads the V10 of the last drawn tile, or its initial 0, and the loop never ends.
-The value at a join should be a phi of both paths' definitions of ebx; the one-instruction block that falls through into the join seems to be dropped as empty.
+The value at a join should be a phi of both paths' definitions of ebx; Rewind gives the culled block none.
+It isn't every block of this shape: `tools/downgrade/repairs/native/joins.py` lists the game's blocks of one update that a branch targets and that fall into the join right after a `jmp` to it (391, nearly all `mov` and `xor`), and of the register updates checked, `Script.getRank`'s `dec ebx` and `Player.update`'s `dec eax` (a store of `shotTimer - 1` on two paths) come out right.
+What sets this one apart is that it is the loop's induction variable, tested at the join and carried round the back edge.
 
 Seen in a real game: `Script.drawParallaxTiled` (0x18042D320), which Cyberdyne Factory, Future War 2 to 4 and the attract demos call: on the console the first frame with a tile off the screen never ended.
 
