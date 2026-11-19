@@ -852,4 +852,97 @@ namespace Repros
             }
         }
     }
+
+    // ---- 30: a value kept in a volatile register across the write barrier ----
+    // MSVC (LTCG) knows the barrier helper writes only rax, rcx, rdx and r8, and keeps a value in r9 or an xmm
+    // register across the call: "xor r9d, r9d; mov [obj+a], r9; call <barrier>; mov [obj+b], r9d". MSVC 14.50
+    // calls the barrier in the two loops that return on a hit (the value in xmm2, the object in r9, this in r11) and
+    // inlines it in the other three, which are controls.
+
+    public sealed class Issue30
+    {
+        public object StopPoint;
+        public int Name;
+        public int Type;
+        public bool Important;
+        public object Platform;
+        public bool Grounded;
+        public double Y;
+        public Issue30 Collider;
+        public Issue30 Cover;
+        public object A, B, C, D;
+
+        // Several reference stores, then the zero stored as null and, after the barrier, as an int.
+        public static void Issue30_ZeroAfterStores(Issue30 o, object a, object b, object c, object d)
+        {
+            o.A = a;
+            o.B = b;
+            o.C = c;
+            o.D = d;
+            o.StopPoint = null;
+            o.Name = 231;
+            o.Type = 0;
+            o.Important = true;
+        }
+
+        // The same in a loop over objects.
+        public static void Issue30_ZeroInLoop(Issue30[] all)
+        {
+            for (int i = 0; i < all.Length; i++)
+            {
+                Issue30 o = all[i];
+                o.StopPoint = null;
+                o.Type = 0;
+                o.Important = true;
+            }
+        }
+
+        // A double computed before the barrier and stored after it, after other reference stores.
+        public static void Issue30_DoubleAfterStores(Issue30 o, object platform, object a, double y, double offset)
+        {
+            o.A = a;
+            o.B = a;
+            double top = y + offset;
+            if (top <= o.Y)
+            {
+                o.Platform = platform;
+                o.Grounded = true;
+                o.Y = top - 1.0;
+            }
+        }
+
+        // The same in a loop: the first object below the top lands on it.
+        public static bool Issue30_DoubleInLoop(Issue30[] all, object platform, double y, double offset)
+        {
+            double top = y + offset;
+            for (int i = 0; i < all.Length; i++)
+            {
+                Issue30 o = all[i];
+                if (o != null && top <= o.Y)
+                {
+                    o.Platform = platform;
+                    o.Grounded = true;
+                    o.Y = top - 1.0;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // A reference read from an array in a loop, stored into a field (barrier) and then into another (barrier).
+        public bool Issue30_ReferenceInLoop(Issue30[] sprites)
+        {
+            for (int i = 0; i < sprites.Length; i++)
+            {
+                Issue30 s = sprites[i];
+                if (s != null && s.Collider == null)
+                {
+                    s.Collider = this;
+                    Cover = s;
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
 }

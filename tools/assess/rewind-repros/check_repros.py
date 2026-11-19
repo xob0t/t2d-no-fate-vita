@@ -251,6 +251,21 @@ REPROS = [
                  cases_reach({'Walk': [400, 401, 404, 405, 409, 412, 413, 420, 427], 'Climb': [402, 403, 410, 411, 418, 419, 426],
                               'Swim': [406, 407, 414, 415, 416, 422, 423, 429]})),
           native=r'movzx|cmp|add|sub|jmp|lea\s+r..?, \[rip'),
+    Repro('30', 'control: zero stored after a barrier, after other stores (barrier inlined)', 'Issue30', 'void Issue30_ZeroAfterStores(',
+          'Issue30_Issue30_ZeroAfterStores', 'o.A = a; ... o.D = d;\no.StopPoint = null;\no.Name = 231;\no.Type = 0;\no.Important = true;',
+          all_of(no('__Rewind.Opaque', '__Rewind.Effect'), has('Type = 0;')), native=r'.'),
+    Repro('30', 'control: zero stored after a barrier, in a loop (barrier inlined)', 'Issue30', 'void Issue30_ZeroInLoop(',
+          'Issue30_Issue30_ZeroInLoop', 'Issue30 o = all[i];\no.StopPoint = null;\no.Type = 0;\no.Important = true;',
+          all_of(no('__Rewind.Opaque', '__Rewind.Effect'), has('Type = 0;')), native=r'.'),
+    Repro('30', 'control: double stored after a barrier, after other stores (barrier inlined)', 'Issue30', 'void Issue30_DoubleAfterStores(',
+          'Issue30_Issue30_DoubleAfterStores', 'double top = y + offset;\nif (top <= o.Y) { o.Platform = platform; o.Grounded = true; o.Y = top - 1.0; }',
+          all_of(no('__Rewind.Opaque', '__Rewind.Effect'), matches(r'Y = \(?(y \+ offset|\w+) - 1\.0')), native=r'.'),
+    Repro('30', 'double kept in an xmm register across the write barrier, in a loop', 'Issue30', 'bool Issue30_DoubleInLoop(',
+          'Issue30_Issue30_DoubleInLoop', 'if (o != null && top <= o.Y) { o.Platform = platform; o.Grounded = true; o.Y = top - 1.0; return true; }',
+          all_of(no('__Rewind.Opaque', '__Rewind.Effect'), matches(r'Y = \(?(y \+ offset|\w+) - 1\.0')), native=r'.'),
+    Repro('30', 'reference kept in r9 across the write barrier, in a loop', 'Issue30', 'bool Issue30_ReferenceInLoop(',
+          'Issue30_Issue30_ReferenceInLoop', 'Issue30 s = sprites[i];\nif (s != null && s.Collider == null) { s.Collider = this; Cover = s; return true; }',
+          all_of(no('__Rewind.Opaque', '__Rewind.Effect'), matches(r'Cover = (?!null)\w+;')), native=r'.'),
 ]
 
 
