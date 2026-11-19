@@ -6,7 +6,11 @@
 //   A1  staticInit's loadSound(i) in that loop becomes Queue(Assets.soundfilename[i]): the clip is asked for with
 //       Resources.LoadAsync, a few at a time, and nothing waits for it
 //   A2  Sound.createSoundFromFile's T2DCompat.Sounds.Clip(name) (the platform layer's Resources.Load) becomes Clip(name)
-// loadSound is otherwise as it was: the first time the game asks for a sound it makes the Sound, from Clip(name).
+//   A3  createSoundFromFile first asks Defer(name): while the clip is still loading, the Sound is made without it, and
+//       the game's reads of Sound.snd and Sound.length (its plays, and a cue's length) go through Sound.t2dClip, which
+//       takes the clip from Clip(name) the first time
+// loadSound is otherwise as it was: the first time the game asks for a sound it makes the Sound. The game makes the
+// Sounds of most clips at start (Sounds.staticInit), so without A3 the start waited for each of those clips in turn.
 // Clip returns the loaded clip at once. A clip still loading is waited for, that one only; a clip whose load has not
 // started is loaded there and then. So a sound the game plays is never silent: at worst it starts late.
 //
@@ -46,7 +50,7 @@ namespace T2DCompat
 
         static readonly Dictionary<string, Entry> entries = new Dictionary<string, Entry>();
         static readonly Queue<Entry>[] pending = { new Queue<Entry>(), new Queue<Entry>(), new Queue<Entry>() };
-        static int queued, loading, done, waits;
+        static int queued, loading, done, waits, deferred;
         static float started = -1, waitedMs, longestWaitMs;
         static bool reported;
 
@@ -62,7 +66,18 @@ namespace T2DCompat
             Pump();
         }
 
-        // A2: the clip for Sound.createSoundFromFile, which loadSound calls the first time the game asks for a sound.
+        // A3: whether Sound.createSoundFromFile makes the Sound without its clip: the clip was queued and is not loaded
+        // yet. The Sound's first play takes it from Clip. A clip loaded, or a name not queued, goes to Clip at once.
+        public static bool Defer(string name)
+        {
+            Entry entry;
+            if (name == null || !entries.TryGetValue(name, out entry) || entry.State == State.Done || entry.Clip != null) return false;
+            deferred++;
+            return true;
+        }
+
+        // A2: the clip for Sound.createSoundFromFile, which loadSound calls the first time the game asks for a sound,
+        // and (A3) for Sound.t2dClip, the first time the game plays a Sound made without its clip.
         public static AudioClip Clip(string name)
         {
             Entry entry;
@@ -94,6 +109,7 @@ namespace T2DCompat
         // Loaded so far, of those queued, and whether a clip is; for tests (tools/downgrade/audio/vita-audio-test).
         public static int Loaded { get { return done; } }
         public static int Queued { get { return queued; } }
+        public static int Deferred { get { return deferred; } }
 
         public static bool Ready(string name)
         {
@@ -144,8 +160,8 @@ namespace T2DCompat
         {
             if (reported || done < queued) return;
             reported = true;
-            Debug.Log(string.Format("T2D sounds: {0} loaded in {1:0.00} s; {2} asked for before they were loaded, {3:0} ms waited in all, longest {4:0} ms",
-                done, Time.realtimeSinceStartup - started, waits, waitedMs, longestWaitMs));
+            Debug.Log(string.Format("T2D sounds: {0} loaded in {1:0.00} s; {5} Sounds made before their clip; {2} asked for before they were loaded, {3:0} ms waited in all, longest {4:0} ms",
+                done, Time.realtimeSinceStartup - started, waits, waitedMs, longestWaitMs, deferred));
         }
     }
 }
