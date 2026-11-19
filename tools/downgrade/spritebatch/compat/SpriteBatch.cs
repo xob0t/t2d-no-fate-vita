@@ -381,89 +381,114 @@ namespace T2DCompat
         // Sprites, runs (draws) and meshes of the last Flush; of its runs, those whose texture differs from the run
         // before (page switches); and the off-screen draws (into render textures) since the Flush before it.
         public static int LastSprites, LastRuns, LastMeshes, LastPageSwitches, LastOffscreen;
-        static int pageSwitches, offscreen;
+        static int pageSwitches, offscreen, lostRuns;
 
         // Draws the queued screen sprites with the camera they were drawn for, and empties the queue.
         public static void Flush(Camera camera)
         {
             if (Trace.On) Trace.Enter("SpriteBatch.Flush");
-            Probe.FromRender();
-            Atlas.ReleaseUnloaded();
             int sprites = 0;
-            if (runCount > 0)
+            // The queue is emptied however the flush ends: a throw part way through left its runs queued, and every
+            // frame after threw at the same run (the attract demo, at 30 fps from then on).
+            try
             {
-                Init();
-                parity ^= 1;
-                List<Mesh> pool = meshes[parity];
-                int r = 0;
-                for (int s = 0; s < segmentCount; s++)
+                Probe.FromRender();
+                Atlas.ReleaseUnloaded();
+                if (runCount > 0)
                 {
-                    Segment segment = segments[s];
-                    sprites += segment.Quads;
-                    if (s == pool.Count)
+                    Init();
+                    parity ^= 1;
+                    List<Mesh> pool = meshes[parity];
+                    int r = 0;
+                    for (int s = 0; s < segmentCount; s++)
                     {
-                        var made = new Mesh();
-                        made.name = "SpriteBatch";
-                        made.MarkDynamic();
-                        pool.Add(made);
-                    }
-                    Mesh mesh = pool[s];
-                    int first = r;
-                    while (r < runCount && runs[r].Segment == s) r++;
-                    if (SameLayout(parity, s, first, r, segment.Vertices.Length))
-                    {
-                        // The same runs as this mesh had two frames ago: the indices stand, only the corners move.
-                        mesh.vertices = segment.Vertices;
-                        mesh.uv = segment.Uvs;
-                    }
-                    else
-                    {
-                        mesh.Clear(true);
-                        mesh.vertices = segment.Vertices;
-                        mesh.uv = segment.Uvs;
-                        mesh.subMeshCount = r - first;
+                        Segment segment = segments[s];
+                        sprites += segment.Quads;
+                        if (s == pool.Count)
+                        {
+                            var made = new Mesh();
+                            made.name = "SpriteBatch";
+                            made.MarkDynamic();
+                            pool.Add(made);
+                        }
+                        Mesh mesh = pool[s];
+                        int first = r;
+                        while (r < runCount && runs[r].Segment == s) r++;
+                        if (SameLayout(parity, s, first, r, segment.Vertices.Length))
+                        {
+                            // The same runs as this mesh had two frames ago: the indices stand, only the corners move.
+                            mesh.vertices = segment.Vertices;
+                            mesh.uv = segment.Uvs;
+                        }
+                        else
+                        {
+                            mesh.Clear(true);
+                            mesh.vertices = segment.Vertices;
+                            mesh.uv = segment.Uvs;
+                            mesh.subMeshCount = r - first;
+                            for (int k = first; k < r; k++)
+                            {
+                                indices.Clear();
+                                int end = (runs[k].First + runs[k].Quads) * 4;
+                                for (int v = runs[k].First * 4; v < end; v += 4)
+                                {
+                                    indices.Add(v); indices.Add(v + 1); indices.Add(v + 2);
+                                    indices.Add(v + 2); indices.Add(v + 1); indices.Add(v + 3);
+                                }
+                                mesh.SetTriangles(indices, k - first, false);
+                            }
+                        }
+                        mesh.bounds = everywhere;
                         for (int k = first; k < r; k++)
                         {
-                            indices.Clear();
-                            int end = (runs[k].First + runs[k].Quads) * 4;
-                            for (int v = runs[k].First * 4; v < end; v += 4)
+                            Run run = runs[k];
+                            block.Clear();
+                            if ((object)run.Texture != null)
                             {
-                                indices.Add(v); indices.Add(v + 1); indices.Add(v + 2);
-                                indices.Add(v + 2); indices.Add(v + 1); indices.Add(v + 3);
+                                // A texture released since it was queued (Unity's null): the run goes, once logged.
+                                if (run.Texture == null)
+                                {
+                                    if (lostRuns++ < 20)
+                                        Debug.Log("T2D spritebatch: a run of " + run.Quads + " sprites lost its texture before the flush (" + lostRuns + " in all)");
+                                    runs[k].Material = null;
+                                    runs[k].Texture = null;
+                                    continue;
+                                }
+                                block.SetTexture(idMainTex, run.Texture);
                             }
-                            mesh.SetTriangles(indices, k - first, false);
+                            if (run.Colored)
+                            {
+                                block.SetColor(idColor, run.Mul);
+                                block.SetVector(idColoff, run.Off);
+                            }
+                            Matrix4x4 at = Matrix4x4.identity;
+                            at.m23 = run.Z;
+                            Graphics.DrawMesh(mesh, at, run.Material, 0, camera, k - first, block,
+                                              ShadowCastingMode.Off, false, null, LightProbeUsage.Off);
+                            runs[k].Material = null;
+                            runs[k].Texture = null;
                         }
-                    }
-                    mesh.bounds = everywhere;
-                    for (int k = first; k < r; k++)
-                    {
-                        Run run = runs[k];
-                        block.Clear();
-                        if ((object)run.Texture != null) block.SetTexture(idMainTex, run.Texture);
-                        if (run.Colored)
-                        {
-                            block.SetColor(idColor, run.Mul);
-                            block.SetVector(idColoff, run.Off);
-                        }
-                        Matrix4x4 at = Matrix4x4.identity;
-                        at.m23 = run.Z;
-                        Graphics.DrawMesh(mesh, at, run.Material, 0, camera, k - first, block,
-                                          ShadowCastingMode.Off, false, null, LightProbeUsage.Off);
-                        runs[k].Material = null;
-                        runs[k].Texture = null;
                     }
                 }
+                Warm(camera);
             }
-            Warm(camera);
-            LastSprites = sprites;
-            LastRuns = runCount;
-            LastMeshes = segmentCount;
-            LastPageSwitches = pageSwitches;
-            LastOffscreen = offscreen;
-            pageSwitches = 0;
-            offscreen = 0;
-            runCount = 0;
-            segmentCount = 0;
+            finally
+            {
+                for (int k = 0; k < runCount; k++)
+                {
+                    runs[k].Material = null;
+                    runs[k].Texture = null;
+                }
+                LastSprites = sprites;
+                LastRuns = runCount;
+                LastMeshes = segmentCount;
+                LastPageSwitches = pageSwitches;
+                LastOffscreen = offscreen;
+                pageSwitches = 0;
+                offscreen = 0;
+                runCount = 0;
+                segmentCount = 0;
+            }
         }
 
         // ---- prefetch ---------------------------------------------------------------------------------------------
