@@ -4,7 +4,7 @@
 
 A work in progress: [Terminator 2D: NO FATE](https://store.steampowered.com/app/1718460/) on a PS Vita. A pipeline takes the Steam release (Unity 6000.0.60f1, IL2CPP) and rebuilds it as a Unity 2018.2 project, since 2018.2 is the last Unity with a Vita build module, then builds that for the Vita. It follows [Huntdown's port](https://github.com/xob0t/huntdown-vita) and Butcher's, and reuses their tools where they fit.
 
-The game ships only as native code (IL2CPP), so its code is first recovered with [Rewind](https://github.com/ratman-bit/Rewind-IL2CPP-Decompiler). Rewind gets about three quarters of the game's methods back whole; the rest have gaps that need repair by hand or in Rewind.
+The game ships only as native code (IL2CPP), so its code is first recovered with [Rewind](https://github.com/ratman-bit/Rewind-IL2CPP-Decompiler). With this repository's patches to Rewind (`tools/rewind/patches`), it gets 78% of all the game's methods back whole, and 91% of the game's own; the rest have gaps that need repair by hand or in Rewind.
 
 **It isn't playable yet.** The pipeline runs from your copy of the game to a VPK, but the recovered code still has gaps and references Unity 2018.2 doesn't have, so the game can't run. [docs/build.md](docs/build.md#where-it-stands) says how far the build gets, and [docs/assessment.md](docs/assessment.md) how much work is left.
 

@@ -15,6 +15,7 @@ Any drift between a rule and Rewind's output fails the build.
 Everything here was measured on two Rewind outputs of the Steam build (24040403):
 `work/rewind-steam-60f1`, made with the 6000.0.60f1 signature library, and `work/rewind-fix/runtime/fixed60`, the same with Rewind's runtime-helper fixes.
 The prototypes now target fixed60, which is what the pipeline will use.
+The pipeline now runs Rewind with this repository's 22 patches (`tools/rewind/patches`), and the rules were checked against that output; see [After the patch series](#after-the-patch-series).
 
 ## The four candidates
 
@@ -184,6 +185,22 @@ On fixed60, Rewind's runtime fixes leave two initializers with markers: `AssetsS
 So the generator is gone from the tree (commit 5222d7c); those two methods are per-method rules.
 If a future Rewind regresses, cf99d96 has the reader and the recipe.
 The parts that stay are general: `SkipBarrier` for a flag kept in a local, and `Expr.cs` reading string literals, static fields and a static array's `get_Length()`.
+
+## After the patch series
+
+Run on the patched Rewind's output (`pipeline.py recover`), five of the six rules failed with "Rewind recovers it now", or, for `ExplosiveBarrel.hit`, with its anchors gone.
+Each method's new IL was compared with what its rule produced on fixed60:
+
+- `Player.changeState`: the same `visible` and `canBeHit` stores (7 and 14), the same 23 `changeAnim` calls, and `setupImpact(facing * 8 + x, y - 16, 32, 32, false, image == 230 ? 0 : 25, facing, facing * 2.0, vy, impact.hitTypes, impact.hitSounds, false, true)`, now on a local holding `impact`.
+- `Player.moveUpdate`: `changeAnim(row, 0, 4)` through slot 15, as the rule had it.
+- `Gfx.draw`: the same `unityDraw` call; `Math.Floor(y)` is computed once instead of twice.
+- `ContinueScreen.update`: the same `setAlphaMultiplier` argument, reinterpreted with `ldloca`/`ldobj` instead of `__Repairs.Bits.ToDouble`.
+- `ExplosiveBarrel.hit`: Debris's vy is `-5.0` when `Game.mode == 8` and `-(rand * 6 + 2)` otherwise, the value the rule wrote; Rewind now computes `5.0` or `rand * 6 + 2` and negates it.
+
+So those rules are retired: `rules/Player.cs`, `rules/VirtualCalls.cs`, `rules/Doubles.cs` and `rules/Silent.cs` are deleted.
+`Sound.createSoundFromFile` (`rules/Barriers.cs`) still applies with its hashes unchanged, so nothing needed re-pinning.
+With that rule and the write-barrier pattern (5 methods), Assembly-CSharp goes from 271 gap methods to 265, and the code stage passes with no `REPAIR ERROR`.
+The fixed60 tables below are kept as the record of how the rules were written.
 
 ## Prototype results
 

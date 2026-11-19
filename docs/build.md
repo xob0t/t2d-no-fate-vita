@@ -34,7 +34,8 @@ In this order, it:
 - Downloads the Unity 2018.2.19f1 editor's and PS Vita module's installers and extracts what the pipeline and the builder read (CGIncludes, the engine and class libraries, IL2CPP, the built-in resources, the PS Vita player), about 1.1 GB, into `tools/external/unity-2018.2.19f1`, with 7-Zip: an installed one, or 7-Zip's own package from GitHub. Nothing of Unity is installed or run, and no Unity license is needed.
 - Installs the current Visual C++ runtime when Windows has an older one: the builder's texture encoder crashes in the 2015 runtime.
 - Downloads the .NET 10 SDK 10.0.404 into `tools/external/dotnet10`.
-- Clones Rewind at commit `ea8e305` into `tools/external/rewind`, applies this repository's patches (`tools/rewind/patches/*.patch`, in name order; none yet), and builds its command line with the .NET 10 SDK. The build restores from nuget.org whatever the machine's NuGet configuration says. A change of the pinned commit or of the patches builds it again.
+- Clones Rewind at commit `ea8e305` into `tools/external/rewind`, applies this repository's patches (`tools/rewind/patches/*.patch`, in name order, with `git apply`), and builds its command line with the .NET 10 SDK.
+  The 22 patches fix most of the issues in [rewind-issues.md](rewind-issues.md); `tools/rewind/patches/NOTICE.md` lists them, as Apache-2.0 asks for modified files. The build restores from nuget.org whatever the machine's NuGet configuration says. A change of the pinned commit or of the patches builds it again.
 - Downloads AssetRipper 2.0.0 into `tools/external/assetripper-2.0.0`, the .NET 8 SDK 8.0.425 into `tools/external/dotnet` (for the builder's TypeModelGen), and Mono.Cecil 0.10.0-beta6 from NuGet (for the rewriter).
 - Finds [the game](#the-game).
 - Finds or installs [the PS Vita SDK](#the-ps-vita-sdk).
@@ -94,7 +95,9 @@ uv run build.py --dry-run             # print the setup command and the stages, 
 
 `build.py` runs `tools/setup.py`, then these stages of `tools/downgrade/pipeline.py`:
 
-1. `recover`: Rewind rebuilds the game's 44 assemblies from `GameAssembly.dll` and `global-metadata.dat` into `work/recover/assemblies`, assemblies only, no C# source. It names IL2CPP's runtime functions with the signature library for the game's Unity, `tools/rewind/signatures/unity-6000.0.60f1-windows-x64.sig`; without that file it falls back on the nearest library Rewind ships, which recovers less. `build.py` skips the stage while the output comes from the same game files, Rewind build and library.
+1. `recover`: Rewind rebuilds the game's 44 assemblies from `GameAssembly.dll` and `global-metadata.dat` into `work/recover/assemblies`, assemblies only, no C# source. It names IL2CPP's runtime functions with the signature library for the game's Unity, `tools/rewind/signatures/unity-6000.0.60f1-windows-x64.sig`; without that file it falls back on the nearest library Rewind ships, which recovers less.
+   The library was built from four test builds of 6000.0.60f1 (Master, Release, Master for size, Master without incremental GC; MSVC 14.50) with patch 0002's helper rules, so it also names `Array::NewSpecific`, `Object::New` and `Object::NewAllocSpecific`.
+   Checked against the test builds' PDB symbols it makes no wrong identification, on each build and on each build left out of the library. `build.py` skips the stage while the output comes from the same game files, Rewind build and library.
 2. `rip`: AssetRipper exports the game as a 2018.2 project into `work/rip-2018.2.19f1`. AssetRipper has no way to take recovered assemblies for an IL2CPP game, so it reads a Mono-layout copy of the game in `work/rip-input`: the game's data files, Rewind's assemblies in `Managed/` and an empty executable. The export then keeps the method bodies. That folder's path stays the same from run to run, since the export's `.meta` GUIDs depend on what AssetRipper loads. `build.py` skips the stage while the export comes from the same game files, recovered assemblies, AssetRipper and settings.
 3. `project`: assembles the Unity project in `work/t2d-2018.2.19f1-vita`. It runs the code stage (below), puts the rewritten assemblies and T2DCompat into `Assets/Plugins` with the exported assemblies' `.meta` files, and applies the asset rules (`asset_rules.py`).
 4. `build`: the editor-free builder (`tools/builder`, from Butcher's port) writes the PS Vita player into `builds/t2d-2018.2.19f1-vita`: the player's data, the code module from UnityLinker and IL2CPP, and the files Unity's build copies.
@@ -180,28 +183,35 @@ As of 2026-11-19 on the Steam release:
 | Stage | Time | Result |
 | --- | --- | --- |
 | Setup, from nothing | 12 min | Every doctor check passes. 2.8 GB in `tools/external`. A rerun with everything in place takes seconds. |
-| `recover` | 81 s | 44 assemblies, 16 MB. Rewind identifies 59 kinds of runtime function with the 6000.0.60f1 library and recovers 13,785 of 18,368 native bodies completely (by its own count). |
+| `recover` | 47 s | 44 assemblies, 16 MB. Rewind, with the 22 patches, identifies 59 kinds of runtime function with the 6000.0.60f1 library and recovers 15,372 of 18,368 native bodies completely (by its own count). |
 | `rip` | 29 s | 1,005 assets; the Mono-layout copy is 0.6 GB, the export 0.6 GB. |
-| `code` | 10 s | Runs through. 245 unresolved references (below), 811 gap methods with 8,587 marker sites in `Recovered.T2D`, 604 with 11,751 in InControl. |
+| `code` | 4 s | Runs through: 0 problems from the rewriter, no repair errors, 253 gap methods with 1,640 marker sites in `Recovered.T2D`. |
 | `project` | 7 s | `work/t2d-2018.2.19f1-vita`, 0.6 GB. |
-| `build` | 18 min, then stops | With `--anyway`, the builder writes every data file (`resources.assets` 54 MB in 12.5 min, most of it encoding the 930 sound clips to HEVAG; `resources.resource` 492 MB; `unity_builtin_extra` in 3 min), 0.6 GB in all. Then its code step stops in UnityLinker (below). Without `--anyway` the stage refuses at once while the code stage left unresolved references. |
+| `build` | 18 min, then stops | With `--anyway`, the builder writes every data file (`resources.assets` 54 MB in 12.5 min, most of it encoding the 930 sound clips to HEVAG; `resources.resource` 492 MB; `unity_builtin_extra` in 3 min), 0.6 GB in all. Then its code step stops in the C++ compile (below). Without `--anyway` the stage refuses at once while the code stage left unresolved references. |
 | `package` | 67 s | Works on a build folder (a 472 MB VPK, with the LiveArea art and the patched eboot), but refuses a build without its code module, so it makes no VPK today. |
 
-The unresolved references are the ones [the assessment](assessment.md#api-gaps-against-unity-2018.2) predicted: the engine's binding calls IL2CPP inlined into the game (`*_Injected`, `UnityEngine.Bindings.ThrowHelper` and `Unmarshal`), private fields of the class libraries' collections and strings, `RenderTextureDescriptor`'s graphics formats in `UnityMain.OnPreRender`, and `UnityWebRequest.Result`.
-Most of them are in methods that have Rewind gaps anyway.
-Steamworks' 57 are in code the stub replaces.
+Complete method bodies by RewindStats' count, upstream Rewind against the patched one, with the shipped 6000.0.60f1 library (the old library before it was rebuilt in brackets):
 
-UnityLinker stops at the first reference that doesn't resolve, and that is where the build ends today:
+| Bodies | Upstream `ea8e305` | With the 22 patches |
+| --- | --- | --- |
+| Whole game, 19,693 | 14,615 (13,857) | 15,404 |
+| Assembly-CSharp, 2,968 | 2,233 (2,157) | 2,697 |
+| InControl, 1,874 | 1,637 (1,270) | 1,664 |
 
-```
-Mono.Linker.MarkException: Error processing method: 'System.Void InControl.PlayerActionSet::Load(System.String)'
-in assembly: 'InControl.dll' ---> Mono.Cecil.ResolutionException: Failed to resolve System.Char System.String::_firstChar
-```
+The code stage resolves every reference since the fold-back passes ([tools/downgrade/foldback/README.md](../tools/downgrade/foldback/README.md)), and UnityLinker and IL2CPP's C++ conversion pass.
+`uv run tools/builder/il2cpp.py` runs the builder's code step alone, without the 18-minute data step; it needs the project, so run `pipeline.py project` first.
+The build now stops in the C++ compile (psp2snc), in `Recovered.T2D`'s C++, on Rewind's typing.
+With the Rewind patches, compiling each of the 20 `Bulk_Recovered.T2D_*.cpp` files with IL2CPP's own psp2snc arguments gives:
 
-That is an inlined string index (`s[i]` read through the string's first character), one of the class library internals.
-Before it, the builder's code step had stopped on InControl's reference to Unity 6's `UnityEngine.InputLegacyModule` (`InputUnsafeUtility`, inlined from `Input.GetKey(string)`), which `Unity6Shims.cs` now sends back to `Input`.
-`uv run tools/builder/il2cpp.py` runs the builder's code step alone, in seconds up to UnityLinker, without the 18-minute data step.
-Even once everything resolves, the game would not run: every one of the 1,415 gap methods throws when it reaches a marker, and the three shaders are dummies.
+- 1 file compiles, and 1 compiles at `-O0` but makes psp2snc exit 1 with no message at the build's `-O3`.
+- 18 files fail, with 205 errors in all, in 80 methods; 76 of those methods have Rewind gaps.
+- 126 errors are the GC write barrier's card index (`address >> 12 & 0x1FFFFF`), in 53 methods: 107 on an address held in a local, 18 on a static field, 1 on an array element. All 53 methods have other gaps, and the repair engine's barrier pattern did not remove these barriers.
+- 67 are object references in `int64` locals (a `ColorTransform` passed to `Gfx.draw` or an invoker 35 times, `Action<T>` 12, `StringExt.indexOf`'s argument 9, and others), and 6 are `int32` values where an object is expected.
+- 6 are other typing errors: three missing downcasts (a `GameObject` stored into an `Elevator` or `Platform` field), a `Color` passed to `Matrix4x4.TRS` as a `Vector3` twice, and a return of the wrong type.
+- The 4 methods without gaps among the 80 are `ElevatorDoors.awake`, `FutureWar3.setupScene` (the downcasts), `UnityMain.OnRenderImage` (the `Color`) and `Cutscene.draw` (a `ColorTransform` in an `int64` local).
+- The `RuntimeHelpers.InitializeArray` errors on arrays held in `int64` locals (at least 250 without the patches) are gone, as are most of the barrier errors (at least 395).
+
+Even once everything compiles, the game would not run: every one of the 253 gap methods in `Recovered.T2D` throws when it reaches a marker.
 
 Before the game can start, in order:
 
@@ -228,7 +238,7 @@ Fix it and run `build.py` again: it picks up where it stopped.
 | Step | Time |
 | --- | --- |
 | Setup from nothing (downloads about 2 GB) | 12 minutes |
-| `recover` | 81 s |
+| `recover` | 47 s |
 | `rip` | 29 s |
 | `code` and `project` | 10 s |
 | The builder's data step | 18 minutes, most of it the sound |
