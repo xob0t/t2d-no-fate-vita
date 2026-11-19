@@ -16,6 +16,10 @@ using UnityEngine.Profiling;
 //   load                 Resources.Load every clip of the "game" group in the game's order, as AssetsEmbed.staticInit
 //                        does, imported with audio_rules.py's settings: time and main memory per kind
 //   loadasync <n>        the same with Resources.LoadAsync, n requests in flight at a time, frames going on
+//   rule <n> <every>     the audio rule's start-up (audio/compat/SoundLoads.cs, built in): every game clip queued as
+//                        AssetsEmbed.staticInit does after rule A1, n loads in flight; every <every> frames the
+//                        game asks for a sound not loaded yet (SoundLoads.Clip, as Sound.createSoundFromFile
+//                        after A2) and plays it: frame times, the waits, the time until every clip is loaded
 //   streamcost <group>   load the group's 20 streamed copies (pre: preloadAudioData on, np: off), then play each alone:
 //                        memory per loaded clip, Play()'s time on the main thread, time to the first samples
 //   play <s> <v> <secs>  s streamed music clips looping at once plus v voices of in-memory sound effects, each
@@ -155,6 +159,7 @@ public class AudioTest : MonoBehaviour
             if (w[0] == "vol") AudioListener.volume = float.Parse(w[1], Inv);
             else if (w[0] == "load") yield return LoadGame();
             else if (w[0] == "loadasync") yield return LoadAsync(int.Parse(w[1]));
+            else if (w[0] == "rule") yield return Rule(int.Parse(w[1]), int.Parse(w[2]));
             else if (w[0] == "streamcost") yield return StreamCost(w[1]);
             else if (w[0] == "play") yield return Play(int.Parse(w[1]), int.Parse(w[2]), float.Parse(w[3], Inv));
             else if (w[0] == "probe") yield return Probe();
@@ -259,6 +264,56 @@ public class AudioTest : MonoBehaviour
             frames[frames.Count - 1], frames.Count(f => f > 34f), Mb(start.LP - end.LP), Mb(end.UnityAlloc - start.UnityAlloc), end));
         var states = list.Where(x => x.Clip != null).GroupBy(x => x.Clip.loadType + "/" + x.Clip.loadState).Select(g => g.Key + "=" + g.Count());
         Log("LOADASYNC_STATES " + string.Join(" ", states.ToArray()));
+    }
+
+    // The audio rule's start-up: T2DCompat.SoundLoads (copied in by build.py) queues every game clip, as the rewritten
+    // AssetsEmbed.staticInit does, and the frames go on; every `every` frames a sound effect not loaded yet is asked for
+    // and played, as the game's first play of a sound does through loadSound and Sound.createSoundFromFile.
+    IEnumerator Rule(int inFlight, int every)
+    {
+        yield return Settle();
+        Mem start = Read();
+        List<Entry> list = entries.Where(x => x.Group == "game").ToList();
+        T2DCompat.SoundLoads.InFlight = inFlight;
+        var source = gameObject.AddComponent<AudioSource>();
+        var queue = System.Diagnostics.Stopwatch.StartNew();
+        foreach (Entry e in list) T2DCompat.SoundLoads.Queue(e.Path);
+        double queueMs = queue.Elapsed.TotalMilliseconds;
+        var frames = new List<float>();
+        var waits = new List<double>();
+        int asked = 0, ready = 0, silent = 0, frame = 0;
+        var all = System.Diagnostics.Stopwatch.StartNew();
+        while (T2DCompat.SoundLoads.Loaded < T2DCompat.SoundLoads.Queued && all.Elapsed.TotalSeconds < 60)
+        {
+            yield return null;
+            frames.Add(Time.unscaledDeltaTime * 1000f);
+            if (++frame % every != 0) continue;
+            List<Entry> waiting = list.Where(x => x.Kind != "music" && x.Kind != "ambience" && !T2DCompat.SoundLoads.Ready(x.Path)).ToList();
+            Entry pick = waiting.Count > 0 ? waiting[random.Next(waiting.Count)] : list[random.Next(list.Count)];
+            bool wasReady = T2DCompat.SoundLoads.Ready(pick.Path);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            AudioClip clip = T2DCompat.SoundLoads.Clip(pick.Path);
+            double ms = sw.Elapsed.TotalMilliseconds;
+            asked++;
+            if (wasReady) ready++;
+            if (clip == null || clip.loadState != AudioDataLoadState.Loaded && clip.loadType != AudioClipLoadType.Streaming) silent++;
+            else source.PlayOneShot(clip, 0.5f);
+            waits.Add(ms);
+            Log(string.Format(Inv, "RULE_ASK {0} ready={1} waitMs={2:F1} loaded={3}/{4} state={5}", pick.Path, wasReady, ms,
+                T2DCompat.SoundLoads.Loaded, T2DCompat.SoundLoads.Queued, clip == null ? "null" : clip.loadState.ToString()));
+        }
+        double total = all.Elapsed.TotalMilliseconds;
+        yield return null;
+        Mem end = Read();
+        frames.Sort();
+        waits.Sort();
+        Log(string.Format(Inv, "RULE inFlight={0} clips={1} loaded={2} queueMs={3:F1} totalMs={4:F0} frames={5} frameMs p50={6:F2} p99={7:F2} max={8:F2} over20={9} over34={10} " +
+            "asked={11} ready={12} silent={13} waitMs p50={14:F1} max={15:F1} usedLP={16} MB | {17}",
+            inFlight, list.Count, T2DCompat.SoundLoads.Loaded, queueMs, total, frames.Count, frames[frames.Count / 2], frames[Math.Min(frames.Count - 1, frames.Count * 99 / 100)],
+            frames[frames.Count - 1], frames.Count(f => f > 20f), frames.Count(f => f > 34f), asked, ready, silent,
+            waits.Count > 0 ? waits[waits.Count / 2] : 0, waits.Count > 0 ? waits[waits.Count - 1] : 0, Mb(start.LP - end.LP), end));
+        yield return new WaitForSecondsRealtime(1f);
+        Destroy(source);
     }
 
     // The memory of loaded streamed clips, with and without preloadAudioData, and what playing one costs.

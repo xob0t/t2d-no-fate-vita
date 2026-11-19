@@ -387,12 +387,13 @@ COMPAT_FOLDER = HERE / 'compat'
 
 
 def compat_sources():
-    # atlas/compat: the texture pages' runtime (docs/textures.md).
+    # atlas/compat: the texture pages' runtime (docs/textures.md); audio/compat: the sound loads (docs/audio.md).
     return [
         HERE / 'Compat2018.cs',
         HERE / 'Unity6Shims.cs',
         *sorted(COMPAT_FOLDER.glob('*.cs')),
         *sorted((HERE / 'atlas' / 'compat').glob('*.cs')),
+        *sorted((HERE / 'audio' / 'compat').glob('*.cs')),
     ]
 
 
@@ -412,6 +413,7 @@ REWRITER_SOURCES = [
     # The platform layer's pass and its rules (docs/platform.md); compat_sources() takes only compat/*.cs.
     *(COMPAT_FOLDER / 'rewriter' / f'{name}.cs' for name in ('PlatformRules', 'PlatformPasses')),
     HERE / 'atlas' / 'rewriter' / 'AtlasPatches.cs',  # the texture rules R1-R6 (docs/textures.md)
+    HERE / 'audio' / 'rewriter' / 'AudioPatches.cs',  # the sound loading rules A1, A2 (docs/audio.md)
     # The repair engine and its rules (docs/repairs.md), which Rewrite() runs first. RepairsMain.cs is the
     # standalone authoring driver, with a Main of its own.
     *(HERE / 'repairs' / f'{name}.cs' for name in ('Engine', 'Edit', 'IL', 'Support', 'Expr', 'Patterns', 'RewriterHook')),

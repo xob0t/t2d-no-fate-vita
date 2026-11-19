@@ -5,8 +5,9 @@ It measures load time and main memory of all 930 clips loaded as the game loads 
 It also measures frame times and CPU with several streams and in-memory voices playing at once, and what the importer made of each format.
 No game content is here; `build.py` copies the clips from the export into the project under `work/vita-audio-test`.
 
-- `unity/AudioTest.cs`: the app. It reads its steps from `ux0:data/t2daudio/args.txt` (`vol`, `load`, `streamcost`, `play`, `probe`, `idle`; see the header comment), writes `ux0:data/t2daudio/log.txt`, and sets the clocks to 444/222 MHz with a copy of butcher-vita's ButcherClock plugin.
+- `unity/AudioTest.cs`: the app. It reads its steps from `ux0:data/t2daudio/args.txt` (`vol`, `load`, `loadasync`, `rule`, `streamcost`, `play`, `probe`, `idle`; see the header comment), writes `ux0:data/t2daudio/log.txt`, and sets the clocks to 444/222 MHz with a copy of butcher-vita's ButcherClock plugin.
 - `unity/AudioTestBuild.cs`: the editor's batch build. The clips' settings come from their `.meta` files; it logs the probe clips' import, makes the scene and builds a PC Hosted player.
+- `rule` runs the start-up rule's helper itself: `build.py` copies `../compat/SoundLoads.cs` and the platform layer's `compat/Sounds.cs` into the project.
 - `build.py`: makes the project (the game's clips with `audio_rules.py`'s `.meta`, 20 streamed copies of one effect with and without preload, the probe clips), builds it and packages `work/vita-audio-test/t2d-audio-test.vpk`. `--no-game` leaves the game's clips out.
 - `check_build.py`: reads the built player's AudioClips and their FSB5 banks with UnityPy: load type, format, codec, rate and channels as built.
 - `va.py`: installs the VPK, runs a test and fetches the log into `work/vita-audio-test/runs/<tag>`. Run it only inside the shared `vita-device` lock, held as `t2d: audio`:
