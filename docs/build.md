@@ -187,6 +187,7 @@ The list is `BUILD_SWITCHES` in `tools/downgrade/common.py`:
 | --- | --- | --- | --- | --- |
 | `T2D_GFX_JOBS` | `on`, `off` | `on` | `build` | Writes `gfx-enable-gfx-jobs=1` into the PS Vita build's `Media/boot.config`, so Unity's job workers record the camera's draws beside the render thread. |
 | `T2D_ATLAS_PAGES` | `png`, `raw` | `png` | `project` | The texture pages as PNGs that import as RGBA 4444 Texture2D assets, or `raw`, the fallback, as RGBA 4444 texels in TextAssets that Atlas.cs makes into textures at load time ([textures](textures.md#the-build-step)). |
+| `T2D_TRACE` | `0`, `1` | `0` | `code` | A diagnostic build: every method of `Recovered.T2D` starts by recording its name (`rewriter/Trace.cs`), T2DCompat's sprite batch and atlas join in, and the player's log lists the last 24 under each error (`compat/Trace.cs`). The PS Vita player's exceptions have no stack frames on a retail console (`sceKernelBacktraceSelf` doesn't answer), so this is how to find where one comes from. Slower; not for measuring. |
 
 ## Where it stands
 

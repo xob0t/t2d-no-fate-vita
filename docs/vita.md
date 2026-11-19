@@ -62,3 +62,7 @@ Its frame step runs from its own Update and, as a fallback, from `SpriteBatch.Fl
 | `-t2d-quit-after <s>` | Quit s seconds after the start. |
 | `-t2d-log-sync` | Write the log on the logging thread. |
 | `-t2d-input-log`, `-t2d-store-log` | The platform layer's (`compat/Pad.cs`, `Store.cs`). |
+
+An exception in the log has no stack on a retail console. Build with `T2D_TRACE=1` ([build.md](build.md#build-switches)) and each error gets the game methods entered last instead.
+
+Driving the game: `press start` skips the intro cutscenes and the mission briefing; Cross chooses in menus; in a level the d-pad moves, Cross jumps, Square shoots. A `drive.py` `until` takes a regular expression without spaces.

@@ -138,6 +138,7 @@ It unloads what the new set doesn't hold before it loads the rest, so the peak i
 Pages a miss loaded go at the next Enter.
 Sticky pages, the other languages' fonts, stay once loaded, so a player in Japanese pays one hitch, not one per scene.
 Past `BudgetBytes`, 150 MB, a miss first unloads the least recently used pages no current scene wants.
+An unloaded page leaves the table at once, but its texture is released two sprite-batch flushes later (`ReleaseUnloaded`, from `SpriteBatch.Flush`): screen sprites queued earlier in the frame still draw with it when the camera renders. Released at once, it made `MaterialPropertyBlock.SetTexture` throw `ArgumentNullException` in the flush, and the frame lost all its sprites: on the console, the first level stayed black.
 
 ## The rules
 

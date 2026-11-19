@@ -702,6 +702,9 @@ BUILD_SWITCHES = {
     'T2D_GFX_JOBS': Switch('player', 'on off', 'on', 'on', ('vita',)),
     # The texture pages as PNGs imported as RGBA 4444, or as raw texels Atlas.cs loads (atlas/step.py).
     'T2D_ATLAS_PAGES': Switch('project', 'png raw', 'png', 'png'),
+    # A diagnostic build: every game method records itself, and the log lists the last ones under each error
+    # (rewriter/Trace.cs, compat/Trace.cs). For finding where an exception comes from; not for measuring.
+    'T2D_TRACE': Switch('code', '0 1', '0', '0'),
 }
 
 

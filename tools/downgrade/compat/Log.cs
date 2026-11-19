@@ -105,8 +105,11 @@ namespace T2DCompat
                     return;
                 }
                 lastAt = Seconds;
+                // In a T2D_TRACE=1 build, the game methods entered before an error (Trace.cs).
+                string trail = type == LogType.Log || type == LogType.Warning ? "" : Trace.Trail(24);
                 string line = (repeats > 0 ? "  (the line above " + repeats + " more times)\n" : "") +
-                              Seconds.ToString("F2", System.Globalization.CultureInfo.InvariantCulture) + " " + (entry ?? "").TrimEnd();
+                              Seconds.ToString("F2", System.Globalization.CultureInfo.InvariantCulture) + " " + (entry ?? "").TrimEnd() +
+                              (trail.Length > 0 ? "\n  methods entered last, the last first:\n" + trail.TrimEnd() : "");
                 last = entry;
                 repeats = 0;
                 written += line.Length + 1;

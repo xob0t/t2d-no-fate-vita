@@ -461,7 +461,9 @@ mov   dword ptr [rbx + 0x..], r9d
 comes out as `obj.field = __undefined();`.
 The register save sets of a callee in the same image are known from its code (or, for IL2CPP's helpers, from the signature library), so Rewind could keep r9 (and whatever else the callee doesn't write) live across such calls.
 
-Seen in a real game: `Sprites.addFromJSON`, the stores of `fW3BossLift.type` and `fWElevator.type` after a barrier at 0x1800a0270; native stores 0.
+The same holds for xmm1, a volatile register the helper doesn't touch either.
+
+Seen in a real game: `Sprites.addFromJSON`, the stores of `fW3BossLift.type` and `fWElevator.type` after a barrier at 0x1800a0270 (r9d, 0); `Platform.doPlatformCheck`, `other.y = top - 1.0` with top in xmm1 across the barrier.
 
 ## Not Rewind's
 

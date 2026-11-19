@@ -79,6 +79,7 @@ def compile_compat(t, out):
             '-out:' + out,
             os.path.join(ATLAS, 'compat', 'Atlas.cs'),
             os.path.join(SPRITEBATCH, 'compat', 'SpriteBatch.cs'),
+            os.path.join(DOWNGRADE, 'compat', 'Trace.cs'),  # T2D_TRACE builds' trail, which these files join
         ]
     )
 

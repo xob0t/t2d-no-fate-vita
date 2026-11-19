@@ -259,6 +259,7 @@ namespace T2DCompat
                                   bool hflip, bool vflip, int width, int height, double rotation, double hscale, double vscale,
                                   Material normal, Material colorT, double zorder)
         {
+            if (Trace.On) Trace.Enter("SpriteBatch.Draw");
             int page = Layout(x, y, frame, hframes, vframes, align, hflip, vflip, width, height, rotation, hscale, vscale,
                               tScreen ? (float)zorder : 0f, quadV, quadT);
             return Submit(page, colored ? colorT : normal, colored, zorder);
@@ -268,12 +269,14 @@ namespace T2DCompat
         public static double DrawClipped(double x, double y, int frame, int hframes, int vframes, int align, bool colored,
                                          double frameWidth, Material normal, Material colorT, double zorder)
         {
+            if (Trace.On) Trace.Enter("SpriteBatch.DrawClipped");
             int page = LayoutClipped(x, y, frame, hframes, vframes, align, frameWidth, tScreen ? (float)zorder : 0f, quadV, quadT);
             return Submit(page, colored ? colorT : normal, colored, zorder);
         }
 
         static double Submit(int page, Material material, bool colored, double zorder)
         {
+            if (Trace.On) Trace.Enter("SpriteBatch.Submit");
             if (page == -2) return zorder;
             Texture tex = page == -1 ? (Texture)sTex : Atlas.Get(page);
             if (!tScreen)
@@ -315,6 +318,7 @@ namespace T2DCompat
 
         static void Queue(Material material, Texture tex, bool colored, double zorder)
         {
+            if (Trace.On) Trace.Enter("SpriteBatch.Queue");
             Segment segment = segmentCount > 0 ? segments[segmentCount - 1] : null;
             if (segment == null || segment.Quads == MaxQuads)
             {
@@ -381,7 +385,9 @@ namespace T2DCompat
         // Draws the queued screen sprites with the camera they were drawn for, and empties the queue.
         public static void Flush(Camera camera)
         {
+            if (Trace.On) Trace.Enter("SpriteBatch.Flush");
             Probe.FromRender();
+            Atlas.ReleaseUnloaded();
             int sprites = 0;
             if (runCount > 0)
             {
@@ -494,6 +500,7 @@ namespace T2DCompat
         // texture and colours.
         static void DrawNow(Material material, Texture tex, bool colored)
         {
+            if (Trace.On) Trace.Enter("SpriteBatch.DrawNow");
             offscreen++;
             Init();
             Material pass = colored ? Copy(material, ref colorFrom, ref colorCopy) : Copy(material, ref normalFrom, ref normalCopy);
@@ -527,6 +534,7 @@ namespace T2DCompat
 
         static Material Copy(Material from, ref Material source, ref Material copy)
         {
+            if (Trace.On) Trace.Enter("SpriteBatch.Copy");
             if ((object)from == null) return null;
             if ((object)source != (object)from || (object)copy == null)
             {

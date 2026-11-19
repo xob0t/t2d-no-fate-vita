@@ -87,6 +87,7 @@ namespace T2DCompat
         // The page, loading it now if it isn't resident.
         public static Texture2D Get(int page)
         {
+            if (Trace.On) Trace.Enter("Atlas.Get");
             Load();
             if (page < 0 || page >= pages.Length) return null;
             Texture2D t = pages[page];
@@ -256,14 +257,43 @@ namespace T2DCompat
             return t;
         }
 
+        // A page leaves the table at once, but its texture is released only two SpriteBatch flushes later
+        // (ReleaseUnloaded): screen sprites queued earlier in the frame still draw with it when the camera renders,
+        // and a destroyed texture there makes MaterialPropertyBlock.SetTexture throw, which lost the whole frame's
+        // sprites on a scene switch, or when an eviction made room mid-frame.
         static void UnloadPage(int page)
         {
             Texture2D t = pages[page];
             pages[page] = null;
             residentBytes -= PageBytes(page);
             if (t == null) return;
-            if (made[page]) UnityEngine.Object.Destroy(t);
-            else Resources.UnloadAsset(t);
+            unloaded.Add(new Unloaded { Page = page, Texture = t, Made = made[page] });
+        }
+
+        struct Unloaded
+        {
+            public int Page;
+            public Texture2D Texture;
+            public bool Made;  // made from raw texels (Destroy), else a Resources asset (UnloadAsset)
+        }
+
+        static List<Unloaded> unloaded = new List<Unloaded>();
+        static List<Unloaded> unloadedBefore = new List<Unloaded>();
+
+        // From SpriteBatch.Flush, before it draws: releases the textures of the pages unloaded before the last flush,
+        // unless the page was loaded again since (Resources.Load gives back the same texture while it isn't unloaded).
+        public static void ReleaseUnloaded()
+        {
+            foreach (Unloaded u in unloadedBefore)
+            {
+                if ((object)pages[u.Page] == (object)u.Texture) continue;
+                if (u.Made) UnityEngine.Object.Destroy(u.Texture);
+                else Resources.UnloadAsset(u.Texture);
+            }
+            unloadedBefore.Clear();
+            List<Unloaded> swap = unloadedBefore;
+            unloadedBefore = unloaded;
+            unloaded = swap;
         }
 
         // Unloads pages no current scene wants, least recently used first, until `need` more bytes fit.

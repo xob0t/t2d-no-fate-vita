@@ -114,6 +114,7 @@ def main():
             '-r:' + os.path.join(engine, 'UnityEngine.CoreModule.dll'),
             '-out:' + atlas_dll,
             os.path.join(ATLAS, 'compat', 'Atlas.cs'),
+            os.path.join(DOWNGRADE, 'compat', 'Trace.cs'),  # T2D_TRACE builds' trail, which Atlas.Get joins
         ]
     )
     exe = os.path.join(a.work, 'RuleCheck.exe')
