@@ -1,12 +1,14 @@
-"""PS Vita LiveArea artwork, composed from Terminator 2D: NO FATE's Steam store art. From butcher-vita's
-(MIT, same author).
+"""PS Vita LiveArea artwork, composed from Terminator 2D: NO FATE's Steam store art and, for the bubble, the
+game's own high score sprite. From butcher-vita's (MIT, same author).
 
     uv run tools/downgrade/livearea.py [--force]
 
 The images come from Steam's public CDN (no Steam client, no game launch), downloaded once into
 work/livearea/store/ and read from there afterwards. Writes to work/livearea/:
 
-  icon0.png     128x128   bubble: Sarah Connor in sunglasses with her rifle (vertical key art)
+  icon0.png     128x128   bubble: the endoskeleton of the high score screen, read from your copy of the game
+                          (the recovered Assembly-CSharp's frame table, the ripped texture packs); before the
+                          recover and rip stages have run, Sarah Connor from the vertical key art
   bg0.png       840x500   LiveArea background: the library hero art's middle
   gate.png      280x158   LiveArea start gate: the store header with its logo
   pic0.png      960x544   shown while the app starts: the store header with its logo
@@ -22,7 +24,10 @@ import hashlib
 import urllib.request
 from pathlib import Path
 
-from common import STEAM_APP_ID, WORK, log
+import io
+import sys
+
+from common import STEAM_APP_ID, TARGET, WORK, log
 from PIL import Image
 
 OUT = WORK / 'livearea'
@@ -85,21 +90,67 @@ def indexed(image: Image.Image):
     return image.convert('RGB').quantize(PALETTE_COLORS, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
 
 
-def compose(sources):
+# The bubble from the game: the high score screen's endoskeleton, the last of the four images of its rise out of the
+# fog (HighscoreTable.draw, Assets.IMAGE_ARRAY_HIGH_T800), its head and shoulders scaled to the bubble. Read at
+# build time from the user's game, like every other image of the port; nothing of it is in the repository.
+BUBBLE_IMAGE = 'IMAGE_HIGH_T800_ARRAY_3'
+BUBBLE_SQUARE = 96  # the square around the head and shoulders, from the image's top, centred on the figure
+BUBBLE_BACKGROUND = (18, 14, 22)
+ASSEMBLY = WORK / 'recover' / 'assemblies' / 'Assembly-CSharp.dll'
+PACKS = WORK / f'rip-{TARGET}' / 'ExportedProject' / 'Assets' / 'Resources' / 'texturepack'
+
+
+def game_bubble():
+    """(icon0 image, the input files it came from), or None (with a warning) when the recover and rip stages
+    haven't run or the image isn't where it was."""
+    if not (ASSEMBLY.exists() and PACKS.is_dir()):
+        return None
+    atlas = Path(__file__).resolve().parent / 'atlas'
+    sys.path.insert(0, str(atlas))
+    try:
+        import frametable
+        import numpy
+        import repack
+
+        table = frametable.read(str(ASSEMBLY), log=lambda *a: None)
+        row = next(r for r in table['images'] if r['name'] == BUBBLE_IMAGE)
+        frame = row['frames'][0]
+        pack = next(p for p in sorted(PACKS.glob('TexturePack*.bytes')) if int(''.join(filter(str.isdigit, p.stem))) == frame['pack'])
+        pixels = numpy.asarray(Image.open(io.BytesIO(pack.read_bytes())).convert('RGBA'))
+        sprite = Image.new('RGBA', (row['sfw'], row['sfh']), (0, 0, 0, 0))
+        top = row['sfh'] - frame['oy'] - frame['h']
+        sprite.paste(Image.fromarray(numpy.ascontiguousarray(repack.png_rect(pixels, frame))), (frame['ox'], top))
+    except Exception as error:  # noqa: BLE001 - a missing image falls back to the store art, never fails the package
+        log(f'warning: the bubble falls back to the store art: {BUBBLE_IMAGE} not read ({error!r})')
+        return None
+    finally:
+        sys.path.remove(str(atlas))
+    columns = numpy.nonzero(numpy.asarray(sprite)[:, :, 3].any(axis=0))[0]
+    centre = (columns.min() + columns.max()) // 2
+    half = BUBBLE_SQUARE // 2
+    square = sprite.crop((centre - half, 0, centre + half, BUBBLE_SQUARE))
+    # Twice the size with nearest neighbour, then down to 128: the pixel art stays sharper than a direct resample.
+    square = square.resize((BUBBLE_SQUARE * 2,) * 2, Image.NEAREST).resize((128, 128), Image.LANCZOS)
+    bubble = Image.new('RGBA', (128, 128), BUBBLE_BACKGROUND + (255,))
+    bubble.alpha_composite(square)
+    return bubble.convert('RGB'), [ASSEMBLY, pack]
+
+
+def compose(sources, bubble=None):
     capsule = Image.open(sources['capsule.jpg']).convert('RGB')
     library = Image.open(sources['library.jpg']).convert('RGB')
     hero = Image.open(sources['hero.jpg']).convert('RGB')
     return {
-        'icon0.png': indexed(cover(library, (128, 128), ICON_CROP)),
+        'icon0.png': indexed(bubble if bubble is not None else cover(library, (128, 128), ICON_CROP)),
         'bg0.png': indexed(cover(hero, (840, 500), HERO_CROP)),
         'gate.png': indexed(cover(capsule, (280, 158), CAPSULE_CROP)),
         'pic0.png': indexed(cover(capsule, (960, 544), CAPSULE_CROP)),
     }
 
 
-def stamp(sources):
+def stamp(sources, inputs=()):
     digest = hashlib.sha256(Path(__file__).read_bytes())
-    for path in sources.values():
+    for path in [*sources.values(), *inputs]:
         digest.update(path.read_bytes())
     return digest.hexdigest()
 
@@ -107,11 +158,13 @@ def stamp(sources):
 def generate(force=False):
     """The artwork folder, made if missing or out of date."""
     sources = fetch()
+    game = game_bubble()
+    bubble, inputs = game if game else (None, [])
     marker = OUT / 'stamp.txt'
-    current = stamp(sources)
+    current = stamp(sources, inputs)
     if not force and marker.exists() and marker.read_text() == current and all((OUT / f).exists() for f in FILES):
         return OUT
-    for name, image in compose(sources).items():
+    for name, image in compose(sources, bubble).items():
         image.save(OUT / name, optimize=True)
     marker.write_text(current)
     log(f'LiveArea art in {OUT}')
