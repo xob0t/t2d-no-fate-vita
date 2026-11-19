@@ -1,0 +1,62 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xob0t <32616886+xob0t@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 08:49:18 +0300
+Subject: [PATCH 27/27] An inlined compare-exchange on a reference field is
+ Interlocked.CompareExchange<T>
+
+A field-like event's add and remove, pasted in, end in "lock cmpxchg" on the field; Rewind kept it as an
+opaque long, and the delegate it compares and stores became a number. On a reference field it is now the call
+the runtime helper already becomes, and the event loops fold to add_/remove_ calls. On a commercial Unity
+6000.0.60f1 game 56 more bodies are complete (all event accessors of InControl, UnityMain.OnEnable and
+OnDisable), none lost or changed.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../Recover/HirBuilder.Calls.cs               | 23 ++++++++++++++++++-
+ 1 file changed, 22 insertions(+), 1 deletion(-)
+
+diff --git a/src/Rewind.Analysis/Recover/HirBuilder.Calls.cs b/src/Rewind.Analysis/Recover/HirBuilder.Calls.cs
+index fb09776..94136cc 100644
+--- a/src/Rewind.Analysis/Recover/HirBuilder.Calls.cs
++++ b/src/Rewind.Analysis/Recover/HirBuilder.Calls.cs
+@@ -1,4 +1,4 @@
+-// Modified for t2d-no-fate-vita (2026): float arguments of native calls, slot-specialized invokers, offset-0 field addresses, gaps always marked, small structs as numbers, floating-point negation. See NOTICE.md in that project's tools/rewind/patches.
++// Modified for t2d-no-fate-vita (2026): float arguments of native calls, slot-specialized invokers, offset-0 field addresses, gaps always marked, small structs as numbers, floating-point negation, inlined compare-exchange on references. See NOTICE.md in that project's tools/rewind/patches.
+ using Rewind.Analysis.Abi;
+ using Rewind.Analysis.Hir;
+ using Rewind.Analysis.Ir;
+@@ -841,6 +841,8 @@ public sealed partial class HirBuilder
+         return constants;
+     }
+ 
++    private static readonly bool NoInlineCompareExchange = Environment.GetEnvironmentVariable("REWIND_NO_INLINE_COMPARE_EXCHANGE") != null;
++
+     private void EmitIntrinsic(Node call, CallInfo info)
+     {
+         if (TryEmitBlockOp(call)) return;
+@@ -860,6 +862,25 @@ public sealed partial class HirBuilder
+             else _sem[call] = new SVal(rounded);
+             return;
+         }
++        // "lock cmpxchg" on a reference field (an inlined field-like event's add or remove, a lazy initializer):
++        // what Interlocked.CompareExchange<T> does with it, as for the runtime's own helper.
++        if (!NoInlineCompareExchange && info.Intrinsic == "atomic_compare_exchange" && call.In.Length == 3 && call.Type == VT.I64 &&
++            LocationOf(call.In[0], null) is { Type: { } held } location && IsReference(held) &&
++            _m.FindType("System.Threading.Interlocked")?.Methods.FirstOrDefault(m =>
++                m.Name == "CompareExchange" && m.GenericParameters.Length == 1 && m.Parameters.Length == 3) is { } compareExchange)
++        {
++            HExpr[] arguments = [new HAddressOf(location) { Type = _m.Sigs.ByRef(held) }, ValueFor(call.In[1], held), ValueFor(call.In[2], held)];
++            var exchange = new HCall { Method = compareExchange, MethodArguments = [held], Arguments = arguments, Type = held };
++            if (!IsUsed(call)) Emit(new HEval(exchange), call.Addr);
++            else
++            {
++                // (Once, into a variable: the exchange is done where the code does it, and its result read after.)
++                HVar t = Temp(held, call.Type);
++                Emit(new HAssign(new HLocal(t) { Type = held }, exchange), call.Addr);
++                _sem[call] = new SVal(new HLocal(t) { Type = held });
++            }
++            return;
++        }
+         HExpr[] args = call.In.Select(Value).ToArray();
+         var expr = new HOpaque(info.Intrinsic!, args) { Type = TypeForBits(call.Type) };
+         if (info.Intrinsic == "memory_barrier") return; // volatile access marker

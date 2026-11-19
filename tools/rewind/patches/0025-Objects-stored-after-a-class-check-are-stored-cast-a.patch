@@ -1,0 +1,89 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: xob0t <32616886+xob0t@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 08:24:15 +0300
+Subject: [PATCH 25/27] Objects stored after a class check are stored cast; a
+ struct's address handed to a call is typed as its target
+
+An inlined castclass is taken out as a check, and the object it checked was stored into a field of the class
+as the less derived type: now the store is of the cast object, as an argument already was.
+An address of a stack struct handed by reference was typed as what the call takes, so a Color slot handed
+where a Vector3 is taken went unnoticed; the check now sees the local's own type, and such slots are split.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/Rewind.Analysis/Recover/HirBuilder.Values.cs | 11 +++++++++--
+ src/Rewind.Analysis/Recover/HirBuilder.cs        | 12 ++++++++++--
+ 2 files changed, 19 insertions(+), 4 deletions(-)
+
+diff --git a/src/Rewind.Analysis/Recover/HirBuilder.Values.cs b/src/Rewind.Analysis/Recover/HirBuilder.Values.cs
+index e92d224..8b4928b 100644
+--- a/src/Rewind.Analysis/Recover/HirBuilder.Values.cs
++++ b/src/Rewind.Analysis/Recover/HirBuilder.Values.cs
+@@ -1,4 +1,4 @@
+-// Modified for t2d-no-fate-vita (2026): virtual calls through merged class pointers, string indexer, gaps always marked, inlined object hash, small structs as numbers, floating-point negation, merged struct returns, low halves of 64-bit fields. See NOTICE.md in that project's tools/rewind/patches.
++// Modified for t2d-no-fate-vita (2026): virtual calls through merged class pointers, string indexer, gaps always marked, inlined object hash, small structs as numbers, floating-point negation, merged struct returns, low halves of 64-bit fields, casts of stored objects. See NOTICE.md in that project's tools/rewind/patches.
+ using Rewind.Analysis.Hir;
+ using Rewind.Analysis.Ir;
+ using Rewind.Analysis.X64;
+@@ -1924,6 +1924,7 @@ public sealed partial class HirBuilder
+ 
+     private static readonly bool NoBoxedTests = Environment.GetEnvironmentVariable("REWIND_NO_BOXED_TESTS") != null;
+     private static readonly bool NoFlaggedCasts = Environment.GetEnvironmentVariable("REWIND_NO_FLAGGED_CASTS") != null;
++    private static readonly bool NoStoredCasts = Environment.GetEnvironmentVariable("REWIND_NO_STORED_CASTS") != null;
+     private static readonly bool NoStructPieces = Environment.GetEnvironmentVariable("REWIND_NO_STRUCT_PIECES") != null;
+     private static readonly bool NoStructTops = Environment.GetEnvironmentVariable("REWIND_NO_STRUCT_TOPS") != null;
+     private static readonly bool FlaggedTrace = Environment.GetEnvironmentVariable("REWIND_FLAGGED_TRACE") != null;
+@@ -2241,7 +2242,13 @@ public sealed partial class HirBuilder
+                     Emit(new HAssign(new HDeref(through.Pointer) { Type = written }, ValueFor(valueNode, written)), n.Addr);
+                     return;
+                 }
+-                Emit(new HAssign(loc.Location, ValueFor(valueNode, loc.Type)), n.Addr);
++                HExpr stored = ValueFor(valueNode, loc.Type);
++                // An object checked as a class before it is stored where only that class goes (the check pasted
++                // in and taken out): the store is of the cast object, as for an argument.
++                if (!NoStoredCasts && IsReference(loc.Type) && _castTypes.TryGetValue(valueNode, out List<TypeSig>? storedCasts) && storedCasts.Count == 1 &&
++                    stored.Type != null && !IsAssignable(stored.Type, loc.Type) && IsAssignable(storedCasts[0], loc.Type))
++                    stored = new HTypeExpr(HTypeOp.CastClass, storedCasts[0], stored) { Type = storedCasts[0] };
++                Emit(new HAssign(loc.Location, stored), n.Addr);
+                 return;
+             case PPair pair:
+             {
+diff --git a/src/Rewind.Analysis/Recover/HirBuilder.cs b/src/Rewind.Analysis/Recover/HirBuilder.cs
+index e6df6d7..22eb11c 100644
+--- a/src/Rewind.Analysis/Recover/HirBuilder.cs
++++ b/src/Rewind.Analysis/Recover/HirBuilder.cs
+@@ -1,4 +1,4 @@
+-// Modified for t2d-no-fate-vita (2026): virtual calls through merged class pointers, gaps always marked, small structs as numbers, floating-point negation, bits read as float/double, merged struct returns, long stack slots that held a reference and a number. See NOTICE.md in that project's tools/rewind/patches.
++// Modified for t2d-no-fate-vita (2026): virtual calls through merged class pointers, gaps always marked, small structs as numbers, floating-point negation, bits read as float/double, merged struct returns, long stack slots that held a reference and a number, struct addresses typed as their target. See NOTICE.md in that project's tools/rewind/patches.
+ using Rewind.Analysis.Abi;
+ using Rewind.Analysis.Hir;
+ using Rewind.Analysis.Ir;
+@@ -232,12 +232,19 @@ public sealed partial class HirBuilder
+                             TypeSig wanted = _m.Sigs.Substitute(declared is ByRefSig r ? r.ElementType : declared, classArgs, call.MethodArguments);
+                             HExpr given = call.Arguments[i];
+                             TypeSig? passed = given.Type is ByRefSig byRef ? byRef.ElementType : given.Type;
++                            // (An address is typed as what the call takes; what it points to is the local's own type.)
++                            if (!NoAddressTargetTypes && given is HAddressOf { Target: HLocal { Type: { } targetType } }) passed = targetType;
+                             if (Open(wanted) || !IsStruct(wanted) || !IsStruct(passed) || wanted.Key == passed!.Key) continue;
+                             // (One C# converts on its own, with the same bytes: a Span where a ReadOnlySpan is taken.)
+                             if (SameBytesConversion(passed, wanted)) continue;
+                             Problem($"a {passed.ShortName} handed where a {wanted.ShortName} is taken");
+                             HExpr place = given is HAddressOf { Target: var t } ? t : given;
+-                            if (place is HLocal { Variable: var v } && offsetOf.TryGetValue(v, out int at)) FrameConflicts.Add(at);
++                            if (place is HLocal { Variable: var v } && offsetOf.TryGetValue(v, out int at))
++                            {
++                                FrameConflicts.Add(at);
++                                // (What a call captures of the slot without taking it is no read of either struct.)
++                                if (!NoAddressTargetTypes) ScalarSlotConflicts.Add(at);
++                            }
+                         }
+                     });
+         if (NoScalarConflicts) return;
+@@ -361,6 +368,7 @@ public sealed partial class HirBuilder
+         IsBoolType(e.Type) || e is HConst { Value: false or true or 0 or 1 or 0L or 1L or (byte)0 or (byte)1 };
+ 
+     private static readonly bool NoScalarConflicts = Environment.GetEnvironmentVariable("REWIND_NO_SCALAR_CONFLICTS") != null;
++    private static readonly bool NoAddressTargetTypes = Environment.GetEnvironmentVariable("REWIND_NO_ADDRESS_TARGET_TYPES") != null;
+     private static readonly bool NoLongSlotConflicts = Environment.GetEnvironmentVariable("REWIND_NO_LONG_SLOT_CONFLICTS") != null;
+     private const string LostRegisterUsed = "a value kept in a callee-saved register is used after a caught exception";
+     private static readonly bool NoLazyLostRegisters = Environment.GetEnvironmentVariable("REWIND_NO_LAZY_LOST_REGISTERS") != null;

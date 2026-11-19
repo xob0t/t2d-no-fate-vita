@@ -408,7 +408,7 @@ COMPAT_MODULES = [
 ]
 REWRITER_SOURCES = [
     HERE / 'DowngradeAssemblies.cs',
-    *(HERE / 'rewriter' / f'{name}.cs' for name in ('Redirect', 'Runtime', 'RewindGaps', 'Stack')),
+    *(HERE / 'rewriter' / f'{name}.cs' for name in ('Redirect', 'Runtime', 'RewindGaps', 'Stack', 'GapTyping')),
     # The platform layer's pass and its rules (docs/platform.md); compat_sources() takes only compat/*.cs.
     *(COMPAT_FOLDER / 'rewriter' / f'{name}.cs' for name in ('PlatformRules', 'PlatformPasses')),
     HERE / 'atlas' / 'rewriter' / 'AtlasPatches.cs',  # the texture rules R1-R6 (docs/textures.md)

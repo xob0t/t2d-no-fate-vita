@@ -25,9 +25,9 @@ This repository's patches (`tools/rewind/patches`, applied by `tools/setup.py`) 
 The repro checks were run on upstream main and on the patched build, both with the rebuilt 6000.0.60f1 library.
 
 - On upstream main only the controls and issue 1 pass (issue 1 through the library).
-- With the patches: 1, 7, 8, 9, 11, 16 and 17 pass in full, and 6 and 10 in part.
+- With the patches: 1, 3, 7, 8, 9, 11, 16 and 17 pass in full, and 6 and 10 in part (3 since patch 0026).
 - 2, 13 and 19 fail their checks only on form: the values are right and nothing is marked, but a merged double or struct is still built from its bits.
-- 3 and 18 fail on a marked gap that remains; 4, 21, half of 6 and the local variant of the inlined constructors are open.
+- 18 fails on a marked gap that remains; 4, 21, half of 6 and the local variant of the inlined constructors are open.
 - Fixed on the game by the library alone, with or without the patches: 14, the metadata-init part of 1, and three items of 20.
 - Not about native code, so not in the repro project: 5 (open) and 12 (fixed by patch 0017).
 
@@ -75,7 +75,7 @@ Seen in a real game: 256 Assembly-CSharp methods, for example `ContinueScreen.up
 ## 3. The incremental GC's write barrier after a static field store is left in (Master builds)
 
 Status: patch 0003 removes the barrier after static field stores; on the game `EpicManager.getInstance` is complete.
-The repro still fails: with the barrier gone, the statics pointer reused across it comes out as a marked `__statics()`, so the return is a gap, but not a silent one.
+With patch 0026 the statics pointer reused across the barrier is read as the class's statics again, and the repro passes; 10 `__statics()` sites in 3 methods are left on the game (issue 26).
 
 In Master builds with incremental GC, the card-marking write barrier is inlined after reference stores.
 After instance field stores Rewind removes it.
@@ -351,6 +351,76 @@ Repro: `Shooter.Issue18_InvokerCallA`, `Issue18_InvokerCallB` and `Issue18_Invok
 Expected: `SetupImpact(X + 4.0, Y, 32, 32, KnockDown, damage, Facing, Facing * 2.0, Vy, Types, Sounds, true, KnockDown);`.
 Observed: `SetupImpact(x, y, 32, 32, knockDown, damage2, Facing, __Rewind.Opaque<double>("__missing_argument()"), …)` with six such arguments.
 Reproduces on upstream main.
+
+## 22. Card markings of the write barrier left in where the address is in a local, an element or a static (new)
+
+Status: fixed by patch 0023; on the game the `barrier` gaps go from 393 sites in 54 methods to 8 sites in 3, and 46 Assembly-CSharp methods become complete.
+
+Issue 3 and the instance-field pass remove the card marking when it has their shape.
+Three shapes on the game didn't have it:
+
+- The card table indexed from the image base (`[__ImageBase + index*8 + 0x1118580]`): neither constant alone is in the image's data, so the marking's memory wasn't recognized as the runtime's.
+- A marking after the first in a run of stores: the compiler reads the GC flag again after each marking and the next test takes it merged from both ways (a phi of reads of the same address), which isn't a plain read.
+- The last marking of a path that ends in a copy of the method's epilogue: the marking returns by itself instead of rejoining.
+
+The card table's address left in a register after the loop (a `lea r9, [table]` handed on as an unused argument of the next call) also kept a marking from being removed.
+The C++ then had `address >> 12 & 0x1FFFFF` on a field's address: 126 psp2snc errors in 53 methods.
+No repro yet; the game's `GameObject..ctor`, `FWElevator.awake` and `SarahVan.changeImage` have the three shapes.
+Left: `Sound.createSoundFromFile`, `AssetsEmbed.loadBytes`, `SaveSettings.loadSettings` and `SarahVan.update`, where the marking sits in a larger region.
+
+## 23. An object handed on from a long stack slot (new)
+
+Status: fixed in part by patch 0024.
+
+An outgoing stack-argument slot holds the bools of one call (merged in as bytes: `slot & -256`) and then the object argument of the next.
+Rewind's stack splitting only splits slots it finds contradictory, and a long slot holding a reference wasn't, since an untyped slot is taken to be a long.
+The object went to the call as an `int64`, which C++ rejects (`Cutscene.draw`, the `ColorTransform` of `unityDraw`).
+With the patch a long slot given both a reference (or handed where a reference is taken) and a computed number is split.
+Not fixed where the slot's address is also kept in a value (`HUD.draw`, 10 sites), or where the long is an inlined box (`new object[] { 0 }` in 38 enemy constructors: the `box` gaps).
+
+## 24. A class check pasted in, the object stored uncast (new)
+
+Status: fixed by patch 0025.
+
+An inlined `castclass` (the type-hierarchy compare and the throw) is taken out as a check, and Rewind already casts the checked object when it is a call's argument or receiver.
+Stored into a field it went in uncast, so a `GameObject` was stored into an `Elevator` field (`ElevatorDoors.awake`, `FutureWar3.setupScene`, in methods with no gap).
+
+## 25. A struct slot reused for another struct, handed by reference (new)
+
+Status: fixed by patch 0025.
+
+`UnityMain.OnRenderImage` builds a `Color` for `GL.Clear` and later a `Vector3` for `Matrix4x4.TRS` in the same stack memory.
+Rewind's check for a struct handed where another is taken read the type of the address it makes, which is already the parameter's, so the slot stayed one `Color` local passed as a `Vector3`.
+The check now reads the local's own type; such slots are split, and loads that only go to inputs a call doesn't take don't join their lifetimes.
+
+## 26. A class's statics pointer merged from several paths (new)
+
+Status: fixed by patch 0026; `__statics()` sites on the game go from 85 to 10, and 22 more Assembly-CSharp methods are complete.
+
+This is the main remainder of issue 3.
+When several paths each read a class's static data pointer and the compiler merges them (tail merging), the field reads after the merge went through a variable holding the pointer, marked `__statics()`.
+`Audio.setDuckingVolume`: three paths load `[Audio_klass + 0xB8]` and share `mulsd xmm0, [rax+0x58]` (`audioDuckingLevel`).
+
+## 27. An inlined compare-exchange on a reference field is left opaque (new)
+
+Status: fixed by patch 0027; 56 more bodies of the game are complete, among them every event accessor of InControl and `UnityMain.OnEnable` and `OnDisable`.
+
+A field-like event's `add` and `remove` are a loop of `Delegate.Combine` (or `Remove`) and `Interlocked.CompareExchange` on the field.
+Pasted in, the exchange is a `lock cmpxchg`, which Rewind kept as the intrinsic `__atomic_compare_exchange(&field, value, comparand)`, typed long.
+The delegate compared with its result became a number, which psp2snc rejects (12 errors in `UnityMain.OnEnable` and `OnDisable`).
+Rewind already turns the runtime's own compare-exchange helper into `Interlocked.CompareExchange<T>`; the patch does the same for the intrinsic on a reference field, and Rewind's delegate folding then turns the loops back into `add_`/`remove_` calls.
+
+## 28. Found by the Windows bring-up probe
+
+The probe (`tools/assess/bringup`) ran Rewind's C# as a Unity 2018.2 Windows player and listed what stopped it.
+Checked again with all the patches:
+
+- Open: internal calls through a cached function pointer. Unity 6 caches the resolved internal call in a static: `__load8(0x1810CFE90)`, resolved and stored when null (`__nativecode()`), then `__call_indirect`. Seen in `UnityMain.ScreenStuff` (`Camera.set_rect`) and `UnityMain.FixedUpdate`.
+- Fixed by patch 0027: inlined field-like event accessors. `InputManager.OnDeviceAttached += …` came out as `Delegate.Combine` and an `__atomic_compare_exchange(&InputManager.OnDeviceAttached, m1, m0)` loop, in `UnityMain.OnEnable` and `OnDisable` (issue 27).
+- Open: an unboxing read as `__load4(obj + 16)` in `haxe.lang.Runtime.toInt` (the same as the last item of issue 20).
+- Fixed: the element stores of `Vector3.zero`'s parts in `BitmapData..cctor` are whole `Vector3.zero` elements now.
+- Fixed by patch 0025: the `Vector3` local typed as `Color` in `UnityMain.OnRenderImage` (issue 25).
+- Fixed: `Main.main`'s inlined constructor, which came out as `__Rewind.Ref(new Sprite())`, is `new Main()` now.
 
 ## Not Rewind's
 

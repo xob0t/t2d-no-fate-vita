@@ -799,6 +799,11 @@ namespace T2DCompat
         // Fields, not events: the game adds its handlers with Delegate.Combine and an interlocked exchange on them.
         public static Action<InControl_InputDevice> OnDeviceAttached;
         public static Action<InControl_InputDevice> OnDeviceDetached;
+        // With Rewind's patch 0027 the inlined accessors are folded back, and the game calls these instead.
+        public static void add_OnDeviceAttached(Action<InControl_InputDevice> value) { OnDeviceAttached += value; }
+        public static void remove_OnDeviceAttached(Action<InControl_InputDevice> value) { OnDeviceAttached -= value; }
+        public static void add_OnDeviceDetached(Action<InControl_InputDevice> value) { OnDeviceDetached += value; }
+        public static void remove_OnDeviceDetached(Action<InControl_InputDevice> value) { OnDeviceDetached -= value; }
         public static Action<InControl_InputDevice> OnActiveDeviceChanged;
 
         static readonly List<InControl_PlayerActionSet> sets = new List<InControl_PlayerActionSet>();

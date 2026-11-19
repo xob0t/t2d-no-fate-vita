@@ -4,7 +4,7 @@ The patches in this folder modify the Rewind IL2CPP Decompiler (https://github.c
 They apply to its commit ea8e305 in name order; tools/setup.py applies them with `git apply` and builds the result.
 Rewind's own LICENSE and NOTICE are left as they are and stay in every copy setup.py makes.
 
-Changes made for t2d-no-fate-vita in 2026, one patch per change:
+Changes made for t2d-no-fate-vita in 2026, one patch per change (0023 to 0027 also update the line 0022 adds to the files they change):
 
 | Patch | Change |
 | --- | --- |
@@ -30,6 +30,11 @@ Changes made for t2d-no-fate-vita in 2026, one patch per change:
 | 0020 | 8-byte structs returned in a register and merged are rebuilt from their bits. |
 | 0021 | A 32-bit read of a 64-bit field is narrowed. |
 | 0022 | Each changed or added source file carries a line saying so (Apache-2.0 §4(b)). |
+| 0023 | The write barrier's card marking is removed in more shapes: a card table indexed from the image base, a flag read again after each marking, a marking that ends in a copy of the method's ending. |
+| 0024 | A long stack slot that held a reference and a number is split into two variables. |
+| 0025 | An object checked as a class is stored cast; a struct's address handed to a call is typed as its target. |
+| 0026 | A class's static data pointer merged from several paths is that class's statics. |
+| 0027 | An inlined compare-exchange on a reference field becomes `Interlocked.CompareExchange<T>`. |
 
 Every change has a `REWIND_NO_*` environment switch that turns it off.
 The patches hold no game code or data.
