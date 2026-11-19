@@ -422,6 +422,25 @@ Checked again with all the patches:
 - Fixed by patch 0025: the `Vector3` local typed as `Color` in `UnityMain.OnRenderImage` (issue 25).
 - Fixed: `Main.main`'s inlined constructor, which came out as `__Rewind.Ref(new Sprite())`, is `new Main()` now.
 
+## 29. A switch through a byte-indexed jump table loses its case bodies (new, found on the console)
+
+Status: open; no repro yet.
+
+MSVC compiles a sparse `switch` (many cases sharing few bodies) as two tables: a byte per case value giving a body's index, then a table of 32-bit offsets from the image base:
+
+```
+movzx eax, byte ptr [rdx + rax + <index table>]
+mov   ecx, dword ptr [rdx + rax*4 + <offset table>]
+add   rcx, rdx          ; rdx = image base (lea rdx, [rip - ...])
+jmp   rcx
+```
+
+Rewind keeps the two loads as `__Rewind.Opaque<int>("__load4(((conv.u8(__load1((t + <index>))) * 4L) + <offsets>))")` and the jump as `__call_indirect(t, t, __klass(), 6442450944L, ...)`, and the bodies reached only through the table are missing from the IL: the method ends at the marker.
+A one-level table (`mov ecx, [rdx + rax*4 + table]`) is recovered as a `switch`.
+No repair rule can stand in for it, since the bodies are game code.
+
+Seen in a real game, 8 sites in 6 methods, all in play: `Button.staticCallbacks` (129 cases, every menu button's action), `Sprites.addFromJSON` (3 tables, the map objects' factory; the first gap the console run reached, as the attract demo loaded its map), `GameMap.solid`, `GameObject.move`, `Player.setGroundTile` and `Game.start`.
+
 ## Not Rewind's
 
 ILVerify 10.0.15 crashes with an InvalidCastException on `callvirt Object::MemberwiseClone()` over arrays (an inlined `Array.Clone`).
