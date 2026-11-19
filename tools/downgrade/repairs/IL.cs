@@ -59,6 +59,8 @@ namespace Repairs
 
         // int64 bits on the stack to the double they encode (Rewind's __bits_to_double).
         public IL BitsToDouble() { return Emit(Instruction.Create(OpCodes.Call, Support.BitsToDouble(Module))); }
+        // The double on the stack as its int64 bits (__Repairs.Bits.FromDouble).
+        public IL DoubleToBits() { return Emit(Instruction.Create(OpCodes.Call, Support.DoubleToBits(Module))); }
 
         // The double whose low and high 32-bit halves two int32 locals hold (Rewind splits a double
         // moved through integer registers that way): (ulong)(uint)lo | (ulong)(uint)hi << 32.
