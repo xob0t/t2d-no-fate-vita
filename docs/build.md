@@ -1,0 +1,212 @@
+# Building
+
+The pipeline turns your copy of Terminator 2D: NO FATE into a Unity 2018.2 project, and builds a PS Vita app from it without the Unity editor.
+The game ships only as IL2CPP native code, so its code is first recovered with [Rewind](https://github.com/ratman-bit/Rewind-IL2CPP-Decompiler).
+The pipeline only reads the game: it never runs its executables and never writes into its folder.
+It writes the recovered code, the export and the Unity project to `work/`, the player and the VPK to `builds/`, and the logs to `artifacts/`.
+Prose here is one sentence per line, so a diff shows only the sentences that changed.
+
+**The port doesn't play yet.**
+The pipeline runs end to end, but the code it builds still has Rewind's gaps and references Unity 2018.2 doesn't have; [Where it stands](#where-it-stands) has the details.
+
+You need Windows 10 or 11 on x64, Git, and the game from Steam.
+With [uv](https://docs.astral.sh/uv/) installed, the short version is:
+
+```powershell
+uv run build.py                 # the PS Vita app: builds/t2d-2018.2.19f1-vita.vpk
+```
+
+`build.py` runs the setup (step 1), then the pipeline's stages in order (step 2).
+After a failure or a change, run it again.
+It skips what is installed and what is up to date.
+
+## 1. Set up
+
+```powershell
+uv run tools/setup.py
+```
+
+`build.py` runs setup itself.
+Setup can run again at any time: it installs what is missing and skips the rest.
+In this order, it:
+
+- Runs `uv sync` for the Python packages.
+- Downloads the Unity 2018.2.19f1 editor's and PS Vita module's installers and extracts what the pipeline and the builder read (CGIncludes, the engine and class libraries, IL2CPP, the built-in resources, the PS Vita player), about 1.1 GB, into `tools/external/unity-2018.2.19f1`, with 7-Zip: an installed one, or 7-Zip's own package from GitHub. Nothing of Unity is installed or run, and no Unity license is needed.
+- Installs the current Visual C++ runtime when Windows has an older one: the builder's texture encoder crashes in the 2015 runtime.
+- Downloads the .NET 10 SDK 10.0.404 into `tools/external/dotnet10`.
+- Clones Rewind at commit `ea8e305` into `tools/external/rewind`, applies this repository's patches (`tools/rewind/patches/*.patch`, in name order; none yet), and builds its command line with the .NET 10 SDK. The build restores from nuget.org whatever the machine's NuGet configuration says. A change of the pinned commit or of the patches builds it again.
+- Downloads AssetRipper 2.0.0 into `tools/external/assetripper-2.0.0`, the .NET 8 SDK 8.0.425 into `tools/external/dotnet` (for the builder's TypeModelGen), and Mono.Cecil 0.10.0-beta6 from NuGet (for the rewriter).
+- Finds [the game](#the-game).
+- Finds or installs [the PS Vita SDK](#the-ps-vita-sdk).
+- Prints [the doctor's checklist](#checking-the-setup).
+
+Setup checks every download against a pinned hash (SHA-512 for the .NET SDKs, from Microsoft's release metadata; SHA-1 for archive.org's files, the only one it lists; SHA-256 for the rest), and extracts files from a Unity installer only if it carries Unity Technologies' Authenticode signature; the Visual C++ Redistributable must carry Microsoft's.
+Rewind is pinned by its Git commit.
+
+| Option | Effect |
+| --- | --- |
+| `--game <folder>` | Set `T2D_GAME` to this copy of the game. |
+| `--vita-sdk <path>` | Use your own PS Vita SDK, an archive or a folder, instead of the download. |
+| `--vita-sdk-dir <dir>` | Extract the archive or copy the folder here. The default for an archive is `C:\vitasdk`; a folder is used where it is. |
+| `--vita-host <address>` | Set `T2D_VITA_HOST`, the console's address. |
+| `--yes`, `-y` | Accept every offer (setting a variable for a game or SDK it found). |
+| `--dry-run` | Report what setup would do, and change nothing. |
+| `--keep-downloads` | Keep the installers and archives in `work/installers`. |
+
+To download and check installers without installing them, for another machine say:
+
+```powershell
+uv run tools/setup.py download editor vita assetripper dotnet dotnet10 cecil --to <folder>
+```
+
+### The game
+
+The pipeline reads the game from `T2D_GAME` if it is set, else from `C:\Program Files (x86)\Steam\steamapps\common\Terminator 2D NO FATE`.
+Setup also searches your other Steam libraries, and offers to set `T2D_GAME` if it finds the game in one.
+
+The rules are written for the Steam release, build 24040403, made with Unity 6000.0.60f1.
+The doctor tells it from other releases by the SHA-256 of `GameAssembly.dll` and of `Terminator 2D NO FATE_Data/il2cpp_data/Metadata/global-metadata.dat`, since an IL2CPP build has no `Assembly-CSharp.dll`.
+Another release is reported as optional: Rewind may well recover it, but nothing was checked on it.
+
+### The PS Vita SDK
+
+Setup looks for an SDK in `SCE_PSP2_SDK_DIR`, in `C:\vitasdk` and in the SCE folder.
+If it finds none, it downloads `PSVITA.zip` (350 MB) from archive.org's [copy of the SDK 3.570 DevNet release](https://archive.org/details/psvita-sdk-3.570-devnet-full), extracts it to `C:\vitasdk\PSVITA\sdk`, and applies Sony's `psp2cgc` and `libc` patches from the same item, which bring it to 3.570.071.
+The builder uses the SDK alone; Target Manager Server and Publishing Tools aren't needed.
+Setup sets `SCE_PSP2_SDK_DIR` for your user.
+
+### Checking the setup
+
+```powershell
+uv run tools/setup.py doctor
+```
+
+The doctor prints a checklist of what the build needs, with the command that fixes each missing item, and the free space on the repository's drive.
+It changes nothing, and exits with code 1 if a required item is missing.
+Items marked `optional` don't stop a build: Mono.Cecil (fetched on first use), the signature library, the console's address, and a release of the game other than Steam build 24040403.
+
+## 2. Build
+
+```powershell
+uv run build.py                       # the PS Vita app
+uv run build.py --dry-run             # print the setup command and the stages, run nothing
+```
+
+`build.py` runs `tools/setup.py`, then these stages of `tools/downgrade/pipeline.py`:
+
+1. `recover`: Rewind rebuilds the game's 44 assemblies from `GameAssembly.dll` and `global-metadata.dat` into `work/recover/assemblies`, assemblies only, no C# source. It names IL2CPP's runtime functions with the signature library for the game's Unity, `tools/rewind/signatures/unity-6000.0.60f1-windows-x64.sig`; without that file it falls back on the nearest library Rewind ships, which recovers less. `build.py` skips the stage while the output comes from the same game files, Rewind build and library.
+2. `rip`: AssetRipper exports the game as a 2018.2 project into `work/rip-2018.2.19f1`. AssetRipper has no way to take recovered assemblies for an IL2CPP game, so it reads a Mono-layout copy of the game in `work/rip-input`: the game's data files, Rewind's assemblies in `Managed/` and an empty executable. The export then keeps the method bodies. That folder's path stays the same from run to run, since the export's `.meta` GUIDs depend on what AssetRipper loads. `build.py` skips the stage while the export comes from the same game files, recovered assemblies, AssetRipper and settings.
+3. `project`: assembles the Unity project in `work/t2d-2018.2.19f1-vita`. It runs the code stage (below), puts the rewritten assemblies and T2DCompat into `Assets/Plugins` with the exported assemblies' `.meta` files, and applies the asset rules (`asset_rules.py`).
+4. `build`: the editor-free builder (`tools/builder`, from Butcher's port) writes the PS Vita player into `builds/t2d-2018.2.19f1-vita`: the player's data, the code module from UnityLinker and IL2CPP, and the files Unity's build copies.
+5. `package`: makes `builds/t2d-2018.2.19f1-vita.vpk` with the title ID `TNOF00001`, with LiveArea art from the game's Steam store images (`livearea.py`).
+
+`build.py` holds the `vita-build` lock from `tools/downgrade/lock.py` for the whole run.
+If another job runs the pipeline, it waits.
+
+| Option | Effect |
+| --- | --- |
+| `--game <folder>` | The game's folder, if it isn't in Steam's default folder. Setup saves it in `T2D_GAME`. |
+| `--vita-sdk <path>` | Passed to setup. |
+| `--skip-setup` | Go straight to the pipeline. |
+| `--from <stage>` | Start at `recover`, `rip`, `project`, `build` or `package`, when the earlier stages are done. |
+| `--wait <seconds>` | How long to wait for the build lock. The default is 6 hours. |
+| `--dry-run` | Print the setup command and the stages, and run nothing. |
+
+### Running the stages one at a time
+
+```powershell
+uv run tools/downgrade/pipeline.py recover    # always runs Rewind again when run alone
+uv run tools/downgrade/pipeline.py rip        # always exports again when run alone
+uv run tools/downgrade/pipeline.py code       # rewrite the assemblies, report what doesn't resolve
+uv run tools/downgrade/pipeline.py project
+uv run tools/downgrade/pipeline.py build
+uv run tools/downgrade/pipeline.py package
+```
+
+Other jobs on the machine share `work/`, `builds/` and `artifacts/`, so run each stage under the build lock:
+
+```powershell
+uv run tools/downgrade/lock.py run vita-build "me: what for" --wait 1800 -- uv run tools/downgrade/pipeline.py project
+```
+
+The `vita-device` lock is the console's, and it is one file for every port on the machine (`~/.t3/vita-device.lock`), so a job of another port's and one of this port's never use the console at once.
+The build locks are this project's own, in `work/`.
+
+### The code stage
+
+`code` (which `project` runs too) rewrites Rewind's `Assembly-CSharp`, `InControl` and `Steamworks` for Unity 2018.2 with the rewriter from Butcher's port (`DowngradeAssemblies.cs` and `rewriter/`, built with the .NET Framework's C# compiler against Mono.Cecil 0.10.0-beta6), into `work/assemblies-2018.2.19f1-vita`.
+`Assembly-CSharp` becomes `Recovered.T2D`, since Unity reserves the name for project scripts.
+References to the engine and class libraries go to Unity 2018.2's; what 2018.2 lacks goes to T2DCompat by name (`Compat2018.cs` describes the convention).
+T2DCompat is compiled from `Compat2018.cs`, `Unity6Shims.cs` and every `.cs` file in `tools/downgrade/compat/`, the platform layer, which is written apart.
+`Unity6Shims.cs` holds the easy items of the assessment's API gaps: `Mesh.RecalculateNormals(MeshUpdateFlags)`, `Object.FindObjectsByType`, `Resolution.refreshRateRatio`, the `Texture2D` constructor with a `MipmapLimitDescriptor`, and `BitConverter.SingleToInt32Bits`.
+`InspectorNameAttribute` is dropped, like every attribute 2018.2 doesn't have, and InControl's references to `Input` and `Touch` move from Unity 6's `InputLegacyModule` to 2018.2's `CoreModule`.
+Steamworks.NET is then stubbed: its methods do nothing and return defaults, so nothing calls `steam_api64.dll`.
+
+The stage doesn't repair the code.
+It reports, in its log and in `artifacts/downgrade/code-report.txt`:
+
+- what doesn't resolve against 2018.2 (`UNRESOLVED` lines, counted by assembly and kind),
+- rules that matched nothing (`NO MATCH`),
+- every method that still has a Rewind marker (`__Rewind.Opaque` or `__Rewind.Effect`), with its number of marker sites: such a method throws `NotSupportedException` when it reaches one,
+- the methods Rewind notes as incomplete without a marker ([rewind-issues.md](rewind-issues.md), issue 6).
+
+The rewriter exits with 3 while anything is unresolved; `code` passes that on, and `project` goes on with a warning, so the later stages can be tried.
+
+### The asset rules
+
+The export is of a Unity 6 game serialized for 2018.2, and `asset_rules.py` fixes what it still carries of Unity 6:
+
+- `ProjectSettings.asset` is PlayerSettings serializedVersion 28; it gets 2018.2's, 15. The editor and the builder read the fields 2018.2 has by name and leave the others. The product GUID is written in 2018's form, and the PS Vita settings the export can't have (power mode, save data quota) are added.
+- `MultiplayerManager.asset`, new in Unity 6, is left out.
+- The scene's `LightingDataAsset` is serializedVersion 4. The game has no lightmaps, so the asset is left out and the scene's reference to it cleared.
+- `Assets/Plugins`: the 10 Unity 6 engine modules 2018.2 doesn't have, `System.Runtime.CompilerServices.Unsafe.dll` and `__Generated.dll` are left out, and the game's three assemblies are replaced by the rewritten ones. A plugin no rule names stops the stage.
+- The three shaders are AssetRipper's dummies, since Unity 6 keeps only their compiled Direct3D 11 programs. A `.shader` file under `tools/downgrade/shaders` with the same `Shader "name"` replaces the dummy, keeping its `.meta`; the stage lists the dummies left.
+
+### Build switches
+
+These environment variables change what a stage writes.
+The list is `BUILD_SWITCHES` in `tools/downgrade/common.py`:
+
+| Variable | Values | Default | Read by | What it does |
+| --- | --- | --- | --- | --- |
+| `T2D_GFX_JOBS` | `on`, `off` | `on` | `build` | Writes `gfx-enable-gfx-jobs=1` into the PS Vita build's `Media/boot.config`, so Unity's job workers record the camera's draws beside the render thread. |
+
+## Where it stands
+
+As of 2026-11-19 on the Steam release:
+
+| Stage | Time | Result |
+| --- | --- | --- |
+| Setup, from nothing | 12 min | Every doctor check passes. 2.8 GB in `tools/external`. |
+| `recover` | 81 s | 44 assemblies, 16 MB. Rewind identifies 59 kinds of runtime function with the 6000.0.60f1 library and recovers 13,785 of 18,368 native bodies completely (by its own count). |
+| `rip` | 29 s | 1,005 assets; the Mono-layout copy is 0.6 GB, the export 0.6 GB. |
+| `code` | 10 s | Runs through. 249 unresolved references (below), 811 gap methods with 8,587 marker sites in `Recovered.T2D`, 604 with 11,751 in InControl. |
+| `project` | 7 s | `work/t2d-2018.2.19f1-vita`, 0.6 GB. |
+| `build` | BUILD_TIME | BUILD_RESULT |
+| `package` | PACKAGE_TIME | PACKAGE_RESULT |
+
+The unresolved references are the ones [the assessment](assessment.md#api-gaps-against-unity-2018.2) predicted: the engine's binding calls IL2CPP inlined into the game (`*_Injected`, `UnityEngine.Bindings.ThrowHelper` and `Unmarshal`), private fields of the class libraries' collections and strings, `RenderTextureDescriptor`'s graphics formats in `UnityMain.OnPreRender`, and `UnityWebRequest.Result`.
+Most of them are in methods that have Rewind gaps anyway.
+Steamworks' 57 are in code the stub replaces.
+
+BUILD_NOTES
+
+Before the game can start, in order:
+
+1. Fold the inlined binding calls back into the public API they came from (a rewriter pass), and repair or replace the methods that reference class library internals.
+2. Repair the gap methods the game runs at start: `UnityMain` and what it calls first. Rewind fixes for the issues in [rewind-issues.md](rewind-issues.md) go in `tools/rewind/patches` and cut the number before any hand repair.
+3. The platform layer in `tools/downgrade/compat` (input in place of InControl, saves, store stubs) and the shaders in `tools/downgrade/shaders`.
+4. The texture memory problem: twelve 4096×4096 atlases decoded at run time ([assessment](assessment.md#risks-outside-the-code)).
+
+## When something fails
+
+`build.py` stops at the first failure and says what failed.
+Fix it and run `build.py` again: it picks up where it stopped.
+
+- Setup: a download whose hash doesn't match is deleted, and setup stops; run it again. "To do" lines at the end are steps setup couldn't take, such as an offer you declined.
+- The game: "another release than the rules were written for" means your `GameAssembly.dll` or `global-metadata.dat` differs from Steam build 24040403's; have Steam verify the game's files.
+- `recover`: Rewind's log is `artifacts/downgrade/rewind.log`.
+- `rip`: "AssetRipper did not start" or "AssetRipper export produced no project": check `tools/external/assetripper-2.0.0` and `artifacts/downgrade/assetripper.log`.
+- `code` and `project`: the rewriter's log is `artifacts/downgrade/rewrite-2018.2.19f1-vita.log`, its summary `artifacts/downgrade/code-report.txt`. "expected at least ... The export changed or the rule no longer matches it" means a rule matched less than on the export it was written for, usually another release of the game.
+- `build`: each step names what it is on, and a failure prints the step and the file.
+- Locks: "Held by another run" means another pipeline holds a build lock; `uv run tools/downgrade/lock.py status` shows who.
