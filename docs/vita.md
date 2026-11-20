@@ -20,12 +20,18 @@ The console's address is `T2D_VITA_HOST` (or the variable an earlier port set: `
 
 ```powershell
 uv run tools/downgrade/vita.py install                # package the build and install it (first time, or a param.sfo change)
-uv run tools/downgrade/vita.py sync                   # upload what changed since the last sync
+uv run tools/downgrade/vita.py sync                   # upload what the console's record says it lacks
 uv run tools/downgrade/vita.py args -- -t2d-heartbeat 5   # flags for the next launch only
 uv run tools/downgrade/vita.py run                    # quit, sync, launch
 uv run tools/downgrade/vita.py log --tail 40
 uv run tools/downgrade/vita.py crashes --pull         # this title's newest crash dump, symbolized
 ```
+
+What the console holds is recorded on the console, in `ux0:app/TNOF00001/t2d-sync.json`: one record for the console and title, whichever checkout synced or installed last.
+It lists each file's SHA-1 with the size and time the console's FTP server lists for it, and a file counts as recorded only while the console still lists it so; a file written by anything else (VitaShell, a checkout on older tools) is sent again.
+`sync` takes a file out of the record before it replaces it (the record's state is then `syncing`) and writes the record whole at its end (`clean`), so a sync stopped part way, from any checkout, leaves the files it was replacing to be sent again.
+With no record (an app installed by another tool, which replaces the folder and the record with it, or one installed before the record moved there) `sync` sends every file; `install` sends the whole build faster, and writes the record after it (`seed` writes it for a build installed by hand).
+Before (Nov 2026) each checkout kept its own record in `artifacts/downgrade`, so a sync from one worktree left the console running files every other worktree's record didn't know of; that file is still written, for checkouts on older tools, but not read.
 
 `drive.py` is one session: flags, launch, a script of waits and presses, then the log and screenshots into `work/runs/<tag>`, and quit.
 
