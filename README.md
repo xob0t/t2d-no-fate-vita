@@ -1,10 +1,16 @@
 # Terminator 2D: NO FATE Vita
 
-[Terminator 2D: NO FATE](https://store.steampowered.com/app/1718460/) on a PS Vita, as a port you build from your own copy. A pipeline takes the Steam release (Unity 6000.0.60f1, IL2CPP) and rebuilds it as a Unity 2018.2 project, since 2018.2 is the last Unity with a Vita build module, then builds that for the Vita. It follows [Huntdown's port](https://github.com/xob0t/huntdown-vita) and Butcher's, and reuses their tools where they fit.
+[Terminator 2D: NO FATE](https://store.steampowered.com/app/1718460/) on a PS Vita, as a port you build from your own copy. A pipeline takes the Steam release (Unity 6000.0.60f1, IL2CPP) and rebuilds it as a Unity 2018.2 project, since 2018.2 is the last Unity with a Vita build module, then builds that for the Vita.
 
 The game ships only as native code (IL2CPP), so its code is first recovered with [Rewind](https://github.com/ratman-bit/Rewind-IL2CPP-Decompiler). With this project's fixes to Rewind, which are commits on its fork ([the fork](https://github.com/xob0t/Rewind-IL2CPP-Decompiler), see `tools/rewind/README.md`), it gets 79% of all the game's methods back whole, and 93% of the game's own; the rest have gaps that need repair by hand or in Rewind.
 
-**Where it stands.** The pipeline runs from your copy of the game to a VPK, and on a PS Vita the game has been playtested by hand and plays well, at about 60 fps. All 19 levels load and play, and a level's end saves the story's progress. Story mode, arcade mode, the menus and the achievements work. The loads no longer freeze the game: the briefings, the controls tutorials, the restarts after a continue and the attract demos load ahead or behind a fade. What's known to remain: an occasional single frame of about 200 ms when a level draws an image its scene doesn't hold, and a briefing skipped early waits a few seconds behind the fade while the level loads. 3 recovered methods still have gaps, all on paths the port never takes (the Xbox and UWP save writers, a Decimal compare, the Steam leaderboard rows). [docs/build.md](docs/build.md#where-it-stands) says how far the build gets, and [docs/assessment.md](docs/assessment.md) how the work was scoped.
+**Where it stands.** Playtested by hand on a PS Vita:
+
+- The game works from start to finish: all 19 levels, story and arcade modes, saves, menus and achievements.
+- 60 fps everywhere, with no freezes on loads.
+- Left: a rare single slow frame, and a briefing skipped early waits a few seconds behind its fade.
+
+More in [docs/build.md](docs/build.md#where-it-stands).
 
 There are no game files in this repository: no game assets, and none of the recovered code. You bring your own copy, and the pipeline only reads it.
 
