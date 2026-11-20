@@ -14,7 +14,7 @@
 // Clip returns the loaded clip at once. A clip still loading is waited for, that one only; a clip whose load has not
 // started is loaded there and then. So a sound the game plays is never silent: at worst it starts late.
 //
-// Order: the UI sounds first, then the music (streamed clips load in a fraction of a millisecond), then Skynet's
+// Order: the UI sounds and the attract's first cues (AttractCues) first, then the music (streamed clips load in a fraction of a millisecond), then Skynet's
 // voice lines, then the rest. Skynet's are the longest clips loaded into memory (up to 15 s, 0.5 MB, stereo), and a
 // frame that finishes one takes 100 to 210 ms on the console; queued among the rest, by name, they came last, in the
 // attract cutscene's last seconds. Ahead of the rest they load under the splash and the publisher's logo. Then the rest;
@@ -121,9 +121,13 @@ namespace T2DCompat
             return name != null && entries.TryGetValue(name, out entry) && entry.State == State.Done;
         }
 
+        // Effects the attract cutscene plays before the queue reached them (runs aboot1 and aboot2, docs/audio.md): metal_hit
+        // at about 11.5 s, its load not started, so Clip's Resources.Load waited about 330 ms; introduction 48 ms.
+        static readonly HashSet<string> AttractCues = new HashSet<string> { "audio/sfx/misc/metal_hit", "audio/sfx/misc/introduction" };
+
         static int Priority(string name)
         {
-            if (name.StartsWith("audio/ui/")) return 0;
+            if (name.StartsWith("audio/ui/") || AttractCues.Contains(name)) return 0;
             if (name.StartsWith("audio/music/")) return 1;
             if (name.StartsWith("audio/sfx/voices/Skynet/", StringComparison.OrdinalIgnoreCase)) return 2;
             return 3;
