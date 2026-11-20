@@ -9,7 +9,7 @@ classes (stopping at hub classes and at other scenes), plus the map objects'
 classes and sprite ids, plus a global set (HUD, fonts, Script/Game/Sprites
 generic drawing, transitions).
 """
-import argparse, collections, csv, json, os
+import argparse, collections, csv, json, os, re
 
 MB = 1024 * 1024
 LEVELS = [
@@ -52,7 +52,28 @@ HUBS = {'Game', 'Sprites', 'Transition', 'Main', 'MainMenu', 'Database', 'GameMa
 GAMEPLAY_GLOBAL = ['HUD', 'HospitalHUD', 'Script', 'GameObject', 'Fonts', 'Message', 'OpaqueLayer', 'DialogBox', 'Prompt']
 ALL_GLOBAL = ['Fonts', 'App', 'Menu', 'TextButton', 'Text', 'TitleText', 'BmpFont', 'EngageLayer']
 HUB_METHODS_EXCLUDED = {('Sprites', 'addFromJSON'), ('Sprites', 'loadFromID')}
+# Methods of a hub that the analysis doesn't follow, called from every level: the pause menu's audio options
+# (Game.pause -> MainMenu.addAudioOptions, its sliders).
+GAMEPLAY_HUB_METHODS = [('MainMenu', 'addAudioOptions')]
+# Images a map object brings that no code path names: a weapon pickup's bullets and hit sparks, which the player's
+# code picks by arithmetic on the bullet type (Player.bulletType, HOMING_BULLET + k). Object name -> images; a scene
+# whose maps place the object gets them.
+OBJECT_IMAGES = {
+    'homing_pickup': ['IMAGE_HOMING_FIRE', 'IMAGE_HOMING_HIT_SPARK'],
+    'spread_pickup': ['IMAGE_SPREAD_FIRE', 'IMAGE_SPREAD_HIT_SPARK'],
+    'laser_pickup': ['IMAGE_LASER_FIRE', 'IMAGE_LASER_HIT_SPARK'],
+}
 LANGS = ('CNS', 'CNT', 'JP', 'KR')
+
+
+def family(name):
+    """An image's family, or None: numbered images (IMAGE_X_0, IMAGE_X_1, ...) and debris (IMAGE_X_DEBRIS_*), which the
+    game draws by arithmetic on the first one's id (base + k, base + rand), so the analysis finds one or two of them.
+    A scene that has one gets them all (about 0.1 MB a scene). Fonts and the IMAGE_*_ARRAY_k tables are not families."""
+    if 'FONT' in name or '_ARRAY_' in name:
+        return None
+    m = re.match(r'(.*_DEBRIS)_', name) or re.match(r'(.*)_\d+$', name)
+    return m.group(1) if m else None
 
 
 def main():
@@ -69,6 +90,12 @@ def main():
     sprite_img = {int(k): v for k, v in cr['sprite_img'].items()}
     objs = {int(k): v for k, v in cr['objects'].items()}
     scene_dirs = {'scripts', 'cutscenes', 'apps'}
+    by_name = {im['name']: im['id'] for im in images}
+    name_of_id = {v: k for k, v in json.load(open(os.path.join(W, 'maps.json')))['name_ids'].items()}
+    families = collections.defaultdict(set)
+    for im in images:
+        if family(im['name']):
+            families[family(im['name'])].add(im['id'])
 
     def is_scene_class(c):
         return C[c]['file'].split('/')[-2] in scene_dirs and c not in BASES
@@ -122,6 +149,11 @@ def main():
     def scene_images(roots, map_names, gameplay, stop=(), drop=()):
         cl = closure(list(roots) + (GAMEPLAY_GLOBAL if gameplay else []) + ALL_GLOBAL, stop)
         ims = set()
+        for c, meth in GAMEPLAY_HUB_METHODS if gameplay else ():
+            mv = C[c]['by_method'].get(meth, {})
+            ims.update(mv.get('assets_images', ()))
+            for sid in mv.get('sprite_ids', ()):
+                ims.update(sprite_img.get(sid, []))
         for c in cl:
             ims |= class_images(c, roots)
         objclasses = set()
@@ -135,6 +167,12 @@ def main():
                     ims.update(sprite_img.get(s, []))
         for c in closure(sorted(objclasses)) - cl:
             ims |= class_images(c)
+        for mp in map_names:
+            for o in maps[mp]['objects']:
+                for n in OBJECT_IMAGES.get(name_of_id.get(o['name_id']), ()):
+                    ims.add(by_name[n])
+        for i in list(ims):
+            ims |= families.get(family(images[i]['name']), set())
         ims = {i for i in ims if font_ok(images[i]) and images[i]['name'] not in drop}
         return ims, cl
 

@@ -94,8 +94,35 @@ def load_classes(src_root):
                     methods[key] = Method(cname, key, pnames, body, base_args)
                     i = k
             i += 1
-        classes[cname] = dict(file=os.path.relpath(fn, src_root).replace('\\', '/'), base=base, methods=methods, text=text)
+        rel = os.path.relpath(fn, src_root).replace('\\', '/')
+        new = dict(file=rel, base=base, methods=methods, text=text)
+        old = classes.get(cname)
+        if old is None:
+            classes[cname] = new
+            continue
+        # Classes are keyed by their simple name, as the code names them. Three names are used twice: the platform
+        # layer's com.twissgreen.unity.Platform beside the game's sprites.objects.Platform, the base of every
+        # platform and lift, two Utils, and two game EnemyCorpse. The last file read used to win, so Platform's
+        # changeImage(_image) was lost, with every sprite id a map object passes to a Platform subclass (Future War
+        # 3's tunnel platforms, its lifts, ...). The game's class wins over another namespace's; two of the game's
+        # merge, a method of both getting both bodies.
+        game_old, game_new = (GAME_NS in f for f in (old['file'], rel))
+        if game_new and not game_old:
+            classes[cname] = new
+        elif game_new == game_old:
+            for key, m in methods.items():
+                o = old['methods'].get(key)
+                if o is None:
+                    old['methods'][key] = m
+                else:
+                    o.body += '\n' + m.body
+                    o.params = o.params if len(o.params) >= len(m.params) else m.params
+            old['text'] += '\n' + text
+            old['base'] = old['base'] or base
     return classes
+
+
+GAME_NS = 'com/bitmapbureau/terminator/'
 
 
 def resolve(expr, m, depth=0):
@@ -322,6 +349,15 @@ def main():
     used_ids = sorted({o['name_id'] for mp in maps['maps'].values() for o in mp['objects']})
     lname = {v: k for k, v in maps['name_ids'].items()}
 
+    def derives(c, base):
+        seen = set()
+        while c in classes and c not in seen:
+            seen.add(c)
+            c = classes[c]['base']
+            if c == base:
+                return True
+        return False
+
     class _M:   # pseudo method for resolve()
         params, body = [], ''
     objmap = {}
@@ -364,12 +400,15 @@ def main():
                         k = tm.params.index(p)
                         if str(k) in call['args']:
                             sids.add(call['args'][str(k)])
-            if not cl:      # inlined constructor: guess the class from the object name
-                guess = lname.get(nid, '').replace('_', '').lower()
-                for c in classes:
-                    if c.lower() == guess:
-                        cl.add(c)
-                        how = 'native+name'
+            # An inlined constructor: guess the class from the object name. The case's calls name only what wasn't
+            # inlined, often the base class's constructor (fw3_cargo_elevator calls Platform's, and its own class,
+            # FW3CargoElevator, brings the HK tank it lifts), so the guess also applies when it derives from a
+            # class found.
+            guess = lname.get(nid, '').replace('_', '').lower()
+            for c in classes:
+                if c.lower() == guess and c not in cl and (not cl or any(derives(c, b) for b in cl)):
+                    cl.add(c)
+                    how = 'native+name'
         objmap[nid] = dict(name=lname.get(nid), classes=sorted(cl), sprite_ids=sorted(s for s in sids if 0 < s < 726), how=how)
 
     json.dump(dict(classes=out, sprite_img={str(k): v for k, v in sprite_img.items()},
