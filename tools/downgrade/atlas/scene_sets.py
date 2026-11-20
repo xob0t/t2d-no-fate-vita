@@ -45,6 +45,13 @@ EXTRA_IMAGES.update({'IMAGE_DESERT_CRATE_DEBRIS_%d' % i: ['L11 Desert Town'] for
 EXTRA_IMAGES.update({n: 'all' for n in ('IMAGE_NO_FATE_LOGO', 'IMAGE_TERMINATOR_T2D_LOGO')})
 EXTRA_IMAGES.update({n: 'all' for n in ('IMAGE_DOT', 'IMAGE_DOT_LARGE', 'IMAGE_HITBOX', 'IMAGE_MAP_INDICATORS',
                                          'IMAGE_SMALL_BLACK_RECT', 'IMAGE_SOLID_TILES')})
+# Each level script's preview (Script.preview, IMAGE_PREVIEW_*, 104x104), which the level select, the end screen and the
+# main menu's continue entry draw for the level they show (Game.loadScriptByLevelID, a hub the analysis stops at):
+# scrolling the level select missed 13 pages, a 200 ms frame each (the user's playtest, Nov 2026). Only those three
+# draw them (the briefing draws Script.briefingPortrait), so these scenes replace the level's the analysis gives: with
+# one set, the 19 previews share one page, where beside their levels' frames they took 13 pages (26 MB) per menu.
+PREVIEW_SCENES = ['menu LevelSelect', 'menu EndScreen', 'menu MainMenu']
+PREVIEW_PREFIX = 'IMAGE_PREVIEW_'
 
 
 def level_ids(name):
@@ -89,6 +96,9 @@ def main():
             continue  # a release without that image
         ks = levels if where == 'levels' else list(range(len(out_scenes))) if where == 'all' else [index[w] for w in where]
         use[n] = sorted(set(use.get(n, [])) | set(ks))
+    for n in consts:
+        if n.startswith(PREVIEW_PREFIX):
+            use[n] = sorted(index[w] for w in PREVIEW_SCENES)
     every = [n for n, v in use.items() if len(v) == len(scenes)]
     data = {
         'comment': 'Which images each scene draws (by Assets.IMAGE_* name) and the runtime keys that enter it. '
