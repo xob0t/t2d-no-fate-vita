@@ -97,7 +97,7 @@ partial class DowngradeAssemblies
     static readonly Dictionary<string, int> ExpectedSites = new Dictionary<string, int>
     {
         { "SpriteBatchDraws", 2 }, { "SpriteBatchMeshes", 1 }, { "SpriteBatchFlush", 1 }, { "SpriteBatchFilters", 1 },
-        { "AtlasTables", 6 }, { "AtlasSplash", 3 }, { "AtlasPackLoads", 1 }, { "AtlasDraws", 0 }, { "AtlasSceneHooks", 4 },
+        { "AtlasTables", 6 }, { "AtlasSplash", 3 }, { "AtlasPackLoads", 1 }, { "AtlasDraws", 0 }, { "AtlasSceneHooks", 5 },
     };
 
     const string BD = "com.twissgreen.engine.display.BitmapData";
