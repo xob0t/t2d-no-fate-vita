@@ -16,9 +16,13 @@ clears them when it ends before a launch reads them); every press is released, a
 the game is quit at the end (only when it is the running app: another app is never quit), also after a launch whose
 reply was lost. Each step of the end runs whatever the others did, and the session exits non-zero when one failed,
 when the launch wasn't confirmed or when the launch wrote no log of its own.
+
+The session holds the console once for all its steps: inside lock.py run (any port's), or, run alone, it takes the
+vita-device lock itself (and stops if someone holds it) and hands it to its vita.py commands (T2D_HOLDER).
 """
 
 import ftplib
+import os
 import re
 import subprocess
 import sys
@@ -26,6 +30,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import lock  # noqa: E402
 from common import ROOT, vita_host  # noqa: E402
 
 VITA = ['uv', 'run', str(ROOT / 'tools' / 'downgrade' / 'vita.py')]
@@ -140,6 +145,23 @@ def main():
         shot_names(flags)
     except ValueError as error:
         sys.exit(f'drive: {error}; nothing was launched')
+    # One session, one holder: every vita.py this session runs acts under the same hold of the console. Run alone
+    # (not in lock.py run), each vita.py took the lock for its own command, so another job could take the console
+    # between the flags' upload and the launch, or between a press and its release.
+    holder = None
+    if not lock.ours('vita-device'):
+        holder = f'drive.py {os.getpid()}: {tag}'
+        if lock.take('vita-device', holder, 0, process=True) != 0:
+            sys.exit(f'drive: the console is held by "{lock.holder_of("vita-device")}"; nothing was launched')
+        os.environ['T2D_HOLDER'] = holder  # the vita.py children's lock.ours
+    try:
+        session(tag, flags, steps)
+    finally:
+        if holder is not None:
+            lock.release('vita-device', holder)
+
+
+def session(tag, flags, steps):
     out = ROOT / 'work' / 'runs' / tag
     out.mkdir(parents=True, exist_ok=True)
     for old in ('log.txt', 'log.stale.txt'):  # a tag run again: no log of the last session's left to read as this one's

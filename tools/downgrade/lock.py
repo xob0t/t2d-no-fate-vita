@@ -383,12 +383,87 @@ def held_here():
 
 
 def ours(name):
-    """Whether this process may act as the lock's holder: a run it is in holds it (held_here), or
-    T2D_HOLDER names the holder of a lock taken with take."""
+    """Whether this process may act as the lock's holder: a run it is in holds it (held_here), T2D_HOLDER
+    names the holder of a lock taken with take, or the lock names a `run` whose lock.py process is an
+    ancestor of this one (held_by_ancestor: another port's lock.py run, whose variables aren't ours)."""
     if name in held_here():
         return True
     text, mine = holder_of(name), os.environ.get('T2D_HOLDER', '')
-    return bool(text and mine and owner(mine) == owner(text))
+    if text and mine and owner(mine) == owner(text):
+        return True
+    return held_by_ancestor(name)
+
+
+def held_by_ancestor(name):
+    """Whether the lock names a run (its pid line) whose lock.py process is this process or one of its
+    ancestors, started when the lock says: the session this process is part of holds the lock. Any port's
+    lock.py run writes that line, so this is how a console tool checks ownership whichever port's lock.py
+    took it (its holder's name, "t2d: ...", says nothing about who runs now)."""
+    holder = process_of(name)
+    if holder is None:
+        return False
+    pid, start = holder
+    return any(p == pid and process_start(p) == start for p in ancestors())
+
+
+class PROCESSENTRY32W(ctypes.Structure):
+    _fields_ = [
+        ('dwSize', ctypes.c_uint32),
+        ('cntUsage', ctypes.c_uint32),
+        ('th32ProcessID', ctypes.c_uint32),
+        ('th32DefaultHeapID', ctypes.c_size_t),
+        ('th32ModuleID', ctypes.c_uint32),
+        ('cntThreads', ctypes.c_uint32),
+        ('th32ParentProcessID', ctypes.c_uint32),
+        ('pcPriClassBase', ctypes.c_long),
+        ('dwFlags', ctypes.c_uint32),
+        ('szExeFile', ctypes.c_wchar * 260),
+    ]
+
+
+def ancestors():
+    """This process's pid and its ancestors' (parent first), as far as the chain holds: a parent that
+    started after its child is a reused pid, not the parent, and ends it."""
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
+    kernel32.CreateToolhelp32Snapshot.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+    kernel32.Process32FirstW.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    kernel32.Process32NextW.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    snapshot = kernel32.CreateToolhelp32Snapshot(0x2, 0)  # TH32CS_SNAPPROCESS
+    if snapshot in (None, INVALID_HANDLE):
+        return [os.getpid()]
+    parents = {}
+    try:
+        entry = PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(entry)
+        more = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+        while more:
+            parents[entry.th32ProcessID] = entry.th32ParentProcessID
+            more = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(snapshot)
+    chain, pid = [os.getpid()], os.getpid()
+    while len(chain) < 64:
+        parent = parents.get(pid)
+        if not parent or parent in chain:
+            break
+        child_start, parent_start = process_start(pid), process_start(parent)
+        if not isinstance(child_start, int) or not isinstance(parent_start, int) or parent_start > child_start:
+            break
+        chain.append(parent)
+        pid = parent
+    return chain
+
+
+def require_ours(name, tool):
+    """Stop with a message unless this process's session holds the lock (ours): for the console tools that
+    must run inside `lock.py run vita-device` and act only while their own session holds it."""
+    if not ours(name):
+        sys.exit(
+            f'{tool}: the {name} lock is not this session\'s (it holds: {holding(name)}). Run inside '
+            f'`lock.py run {name} "<you>: <purpose>" --wait <s> -- ...`.'
+        )
 
 
 def run(name, holder, wait, command):
