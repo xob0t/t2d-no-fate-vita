@@ -40,6 +40,11 @@ static class RepairsMain
                         Console.WriteLine(Engine.Name(m) + "\t" + k.Index + "\t" + k.Kind + "\t" + k.Ldstr.Offset.ToString("x4") + "\t" + k.Text + "\t" + Fingerprint.Of(k, m.Body));
                 }
                 return 0;
+            case "methods":
+                // Every method whose name contains the filter, bodies or not (verify.py: whether a method exists).
+                foreach (MethodDefinition m in module.GetTypes().SelectMany(t => t.Methods).Where(m => Engine.Name(m).Contains(args[2])))
+                    Console.WriteLine(Engine.Name(m));
+                return 0;
             case "gaps":
                 foreach (MethodDefinition m in module.GetTypes().SelectMany(t => t.Methods).Where(m => m.HasBody))
                 {
@@ -88,7 +93,7 @@ static class RepairsMain
 
     static int Usage()
     {
-        Console.WriteLine("usage: Repairs apply <in.dll> <out.dll> [--only r1,r2] [--pin] [--patterns] | patterns <dll> | markers <dll> <filter> | gaps <dll>");
+        Console.WriteLine("usage: Repairs apply <in.dll> <out.dll> [--only r1,r2] [--pin] [--patterns] | patterns <dll> | markers <dll> <filter> | methods <dll> <filter> | gaps <dll>");
         return 2;
     }
 }
