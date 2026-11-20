@@ -484,9 +484,11 @@ def run(command, log, name, cwd=None, status=None):
             result = subprocess.run(
                 [str(c) for c in command], cwd=cwd, env=tool_env(), stdout=f, stderr=subprocess.STDOUT, check=False
             )
-    if result.returncode:
-        tail = log.read_text(encoding='utf-8', errors='replace').splitlines()[-30:]
-        raise RuntimeError(f'{Path(command[0]).name} failed ({result.returncode}), see {log}:\n' + '\n'.join(tail))
+            if result.returncode:  # inside the step, so it ends as failed rather than with a completion line
+                tail = log.read_text(encoding='utf-8', errors='replace').splitlines()[-30:]
+                raise RuntimeError(
+                    f'{Path(command[0]).name} failed ({result.returncode}), see {log}:\n' + '\n'.join(tail)
+                )
     return time.time() - start
 
 
