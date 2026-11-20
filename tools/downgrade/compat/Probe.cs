@@ -93,6 +93,7 @@ namespace T2DCompat
             }
             string invoke = Flags.Value("-t2d-invoke");
             if (invoke != null) invokes = invoke.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+            invokeAt = Flags.Number("-t2d-invoke-at", 1, 10f);
             Atlas.PrefetchAsync = !Flags.Has("-t2d-atlas-sync");
             // Clip loads wait while pages load: a page's integration waited for the clip read in flight (Atlas.Busy).
             SoundLoads.Hold = () => Atlas.Busy;
