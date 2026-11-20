@@ -113,11 +113,11 @@ namespace T2DCompat
         // page drawn before its LoadAsync finishes has its texels read at the draw (about 100 ms a MB), so waiting
         // for the scene's pages there made the controls tutorial's first frames 1.3 s.
         public static bool CoverWaits = false;
-        // A page missed in this many scenes stays loaded like a sticky page (0: never), at most StickyMissMax of them.
-        // The scene data lacks two pages that nearly every level, menu and cutscene draws (p076, p083 in Steam's
+        // A page a miss loaded this many times stays loaded like a sticky page (0: never), at most StickyMissMax of
+        // them. The scene data lacks two pages that nearly every level, menu and cutscene draws (p076, p083 in Steam's
         // build 24040403): each scene loaded them again at its first draw, a 200 ms frame, the continue screen's
         // restart of the level included.
-        public static int StickyMissScenes = 2;
+        public static int StickyMisses = 2;
         public static int StickyMissMax = 6;
         public static int AheadDelayMs = 1000;
         // A Switch loads the scenes' pages with Resources.LoadAsync too (Get waits for one still loading), not Resources.Load.
@@ -1056,21 +1056,14 @@ namespace T2DCompat
             missesByPage.TryGetValue(page, out n);
             missesByPage[page] = n + 1;
             long id = ((long)sceneLabel.GetHashCode() << 32) | (uint)page;
-            bool newScene = missLogged.Add(id);
-            if (LogAllMisses || newScene)
+            if (missLogged.Add(id) || LogAllMisses)
                 Debug.Log(string.Format("T2D atlas: miss, page {0} in {1} ({2} misses in all)", PageName(page), sceneLabel, misses));
-            if (!newScene || sticky[page] || StickyMissScenes <= 0) return;
-            missScenes.TryGetValue(page, out n);
-            missScenes[page] = ++n;
-            if (n >= StickyMissScenes && stickyByMiss < StickyMissMax)
-            {
-                sticky[page] = true;
-                stickyByMiss++;
-                Debug.Log("T2D atlas: " + PageName(page) + " missed in " + n + " scenes, stays loaded from now on");
-            }
+            if (sticky[page] || StickyMisses <= 0 || missesByPage[page] < StickyMisses || stickyByMiss >= StickyMissMax) return;
+            sticky[page] = true;
+            stickyByMiss++;
+            Debug.Log("T2D atlas: " + PageName(page) + " missed " + missesByPage[page] + " times, stays loaded from now on");
         }
 
-        static readonly Dictionary<int, int> missScenes = new Dictionary<int, int>();
         static int stickyByMiss;
 
         // A summary of the misses so far, by page: for the scene data (scene_sets.py) when it is redone.
