@@ -492,14 +492,17 @@ def run(command, log, name, cwd=None, status=None):
 
 def il2cpp_status(generated, cache, since):
     """progress.following's note for IL2CPP, which logs nothing while it converts the assemblies to C++ and
-    while psp2snc compiles: the C++ files written so far, then the objects compiled into the cache."""
+    while psp2snc compiles and psp2ld links: the C++ files written so far, the objects compiled into the cache."""
 
     def status(line):
         if not line:
             return f'converting to C++: {sum(1 for _ in generated.rglob("*.cpp"))} files'
         if line.startswith(('Building ', 'Output directory:', 'Cache directory:')):
-            compiled = sum(1 for p in cache.glob('*.obj') if p.stat().st_mtime >= since)
+            # libil2cpp/ and globalcache/ hold most of them
+            compiled = sum(1 for p in cache.rglob('*.obj') if p.stat().st_mtime >= since)
             return f'psp2snc: {compiled} objects compiled'
+        if line.startswith('Total compilation time:'):  # the last line before psp2ld's, about 10 s later
+            return 'psp2ld: linking'
         return line
 
     return status

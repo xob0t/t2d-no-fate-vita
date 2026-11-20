@@ -74,7 +74,8 @@ def run(failed, command, env=None, times=None, stage=None):
 def summary(times):
     """The stages' times, the skipped ones with why."""
     progress.console.print('\nStages:')
-    for stage, value in times.items():
+    for stage in sorted(times, key=('setup', *STAGES).index):
+        value = times[stage]
         shown = progress.duration(value) if isinstance(value, float) else value
         progress.console.print(f'  {stage:8} {shown}')
     total = sum(v for v in times.values() if isinstance(v, float))
