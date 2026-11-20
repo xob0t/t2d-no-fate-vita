@@ -199,6 +199,9 @@ The list is `BUILD_SWITCHES` in `tools/downgrade/common.py`:
 ## Where it stands
 
 As of 2026-11-20 on the Steam release, `uv run build.py` makes a VPK that boots and plays on the console ([On the console](#on-the-console)), with Rewind from the fork at `86258fc`.
+The game has been playtested by hand on the console: it plays at about 60 fps, all 19 levels load and play, a level's end saves the story's progress, and story mode, arcade mode, the menus and the achievements work.
+The briefings, the controls tutorials, the restarts and the attract demos no longer freeze ([textures.md](textures.md#story-mode-and-restarts), [Fades that wait](textures.md#fades-that-wait)).
+Left: an occasional single frame of about 200 ms when a level draws an image its scene doesn't hold, and a briefing skipped early that waits a few seconds behind the fade while the level loads.
 The 3 gap methods left still throw when they reach a marker, all on paths the port doesn't take.
 
 | Stage | Time | Result |
