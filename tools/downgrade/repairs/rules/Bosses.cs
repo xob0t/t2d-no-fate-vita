@@ -110,13 +110,15 @@ static partial class Rules
     }
 
     // PoliceHelicopter.start: the targets chained, ((HeliTarget)targets[i] (V4)).nextTarget (+968, 0x3C8) =
-    // targets[i + 1] (V6, which Rewind typed HeliTarget).
+    // (HeliTarget)targets[i + 1] (V6, or null past the end). Rewind's 86258fc types V6 object: the store comes before
+    // the native code's class test of it, so the element isn't cast at the merge (before, V6 was HeliTarget); the cast
+    // here is that test.
     static void PoliceHelicopterStart(Engine e)
     {
-        MethodRepair m = e.Method("com.bitmapbureau.terminator.sprites.enemies.PoliceHelicopter::start()", "8c289455");
-        m.Site("__store8(__address(__reference_arithmetic((m# + 968L))), m#)", "b2215064").With(il =>
-            il.Ldloc(4).Castclass("com.bitmapbureau.terminator.sprites.enemies.HeliTarget").Ldloc(6)
-              .Stfld("com.bitmapbureau.terminator.sprites.enemies.HeliTarget::nextTarget"));
+        const string heliTarget = "com.bitmapbureau.terminator.sprites.enemies.HeliTarget";
+        MethodRepair m = e.Method("com.bitmapbureau.terminator.sprites.enemies.PoliceHelicopter::start()", "a0bb2df6");
+        m.Site("__store8(__address(__reference_arithmetic((m# + 968L))), m#)", "85e33ebb").With(il =>
+            il.Ldloc(4).Castclass(heliTarget).Ldloc(6).Castclass(heliTarget).Stfld(heliTarget + "::nextTarget"));
     }
 
     // T1000SteelMill.update: two virtual calls on this through the generic virtual invoker 0x180002B50 (slot in cx,

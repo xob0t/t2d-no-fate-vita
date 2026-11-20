@@ -28,7 +28,7 @@ The fork's commits (until 2026-11-20 patches in `tools/rewind/patches`, applied 
 The repro checks were run on upstream main and on the patched build, both with the rebuilt 6000.0.60f1 library.
 
 - On upstream main only the controls and issue 1 pass (issue 1 through the library): 14 of 46 checks.
-- With the fork (checked 2026-11-20 at the fork's head, the same as with patches 0001 to 0033): 36 of 46 checks pass; 1, 3, 7, 8, 9, 11, 16, 17, 18, 21, 29 and 30 in full, and 6 and 10 in part.
+- With the fork (checked 2026-11-20 at the fork's head, `86258fc`, the same as with patches 0001 to 0033): 36 of 46 checks pass; 1, 3, 7, 8, 9, 11, 16, 17, 18, 21, 29 and 30 in full, and 6 and 10 in part.
 - 2, 13 and 19 fail their checks only on form: the values are right and nothing is marked, but a merged double or struct is still built from its bits.
 - 4, half of 6 and the local variant of the inlined constructors are open.
 - Fixed on the game by the library alone, with or without the patches: 14, the metadata-init part of 1, and three items of 20.
@@ -506,6 +506,16 @@ A check in a block a later simplification took out still held everywhere, and a 
 The fork casts only where every path from the entry passes a check, or the use is past the check in its block (or just before it, with no store or call between: the compiler loads fields ahead of the class test); a field the static type lacks, read where nothing proves the class, stays unresolved.
 
 Seen in a real game: `Script.getRank` (0x18042AAB0) reads `levelID` (`[rdi+0x10]`) unchecked and checks `this` against `CyberdyneHQ` only on the `levelID == 7` path, before `numCopsKilled`; every other level's end threw. A repair rule (`ScriptGetRank`) dropped the two casts until the fork's fix.
+
+## 33. A class check taken to hold at uses it doesn't reach (new)
+
+Status: fixed by the fork's change 35 (`3130179`, `REWIND_NO_CAST_DOMINANCE` turns it off with change 34). No repro yet.
+
+Change 34 asked whether a check holds only for member reads. A call's receiver and arguments, a store and a merge's incoming value still read the method-wide fact, so an object was cast to a class checked on another path, or later on the same one.
+Three smaller faults went with it: a use just before its check counted as safe to reorder when no store or call was strictly between, though the use could be the store itself, or a load or division between could fault first; a check under a null test was kept from either arm, though only the arm taken when the object isn't null passes it; and a merged block's check lost its place when a later pass took out the node it was recorded before.
+With the fix, on the game: the same counts of complete and gap bodies; in Assembly-CSharp one method changes, `PoliceHelicopter.start`; in mscorlib 20 bodies change, and UnityEngine.CoreModule and InControl are unchanged.
+
+Seen in a real game: `PoliceHelicopter.start` chains the helicopter's targets, `targets[i].nextTarget = targets[i + 1]`. Rewind merged `targets[i + 1]` (or null past the end) and typed the merge `HeliTarget`, from the native class test that comes after the store. The fork now types it `object`, and the repair rule `PoliceHelicopterStart` (`rules/Bosses.cs`) casts it to `HeliTarget` at the store, where the native code tests it.
 
 ## Not Rewind's
 

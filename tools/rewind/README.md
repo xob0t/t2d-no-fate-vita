@@ -52,8 +52,9 @@ Changes made for t2d-no-fate-vita in 2026, one fork commit per change, in order:
 | 32 | A switch through a byte table of case indexes and a table of targets is recovered; the register a jump table jumps through is dead after the jump. |
 | 33 | A direct call changes only the volatile registers the callee's code writes. |
 | 34 | A class check casts the object only where every path to the use passes the check; a check on a path the CFG no longer has proves nothing. |
+| 35 | A class check casts a call's receiver and arguments, a store and a merge's incoming value only where it holds there; a use before its check is cast only when nothing between can fault or write; a null test's check is kept from the arm taken when the object isn't null; a merged block's check stays before the first node it covers. |
 
-Change 34 comes after the fork's repros and docs commits.
+Changes 34 and 35 come after the fork's repros and docs commits.
 Most changes have a `REWIND_NO_*` environment switch that turns them off (2, 3, 17 and 23 have none).
 The fork holds no game code or data.
 
