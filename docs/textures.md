@@ -49,7 +49,8 @@ The budget is about 240 MB, 160 MB of main memory and 80 MB of CDRAM.
 | L15 Future War 4 | 23 | 2 | 82 |
 | L48 Infinite mode | 25 | 1 | 50 |
 | Controls tutorial | 14 | 1 | 28 |
-| Demo, all four demos | 37 | 6 | 190 |
+| Demo, all four demos (merged, before Nov 2026) | 37 | 6 | 190 |
+| Demo map 9 (John), 10 (Sarah), 11 (T-1000), 12 (T-800) | 20 to 24 | 1 to 3 | 46, 114, 62, 70 |
 | Cutscene ArcadeEnding | 49 | 1 | 100 |
 | Other cutscenes and menus | 5 to 21 | 0 or 1 | 10 to 42 |
 
@@ -59,8 +60,8 @@ The report estimated 106 MB for this scheme, with a 1-pixel border instead of 2.
 All 106 pages together are 512 MB, which is the size of the data on the memory card.
 The page fill is 68%.
 
-The Demo row is an upper bound, since the analysis merges the four attract demos into one scene.
-At 190 MB it fits, but with little room for anything else.
+The merged Demo row was an upper bound: the analysis merged the four attract demos into one scene, and at 190 MB it fit with little room for anything else.
+Now each demo's map is a scene of its own; Sarah's demo shares the Factory's big layers.
 
 After a build, `artifacts/downgrade/atlas/memory.md` and `report.json` list every scene.
 
@@ -165,9 +166,9 @@ Two things hold some back:
 The ballast doesn't hold CDRAM above the reserve in every case: the Factory's prefetch still reaches 0.5 MB before it lets go, and the level then plays with 6.5 to 12.5 MB free.
 The Factory's hang at its first frame, first taken for the player running out of CDRAM, was a game loop ([rewind-issues.md](rewind-issues.md), issue 31).
 
-The attract demos (`LazyScenes`) are one scene of 33 pages, 190 MB, since the usage analysis merges the four demos.
-Loading them at the demo's Enter froze its first frames for 17 to 19 s and took CDRAM to 0.5 MB and main memory to 55 MB (run `idle1`); now its pages load at their first draw, which the miss log lists.
-The first demo, map 10, then draws about 100 MB of them, its worst frame 7.4 s (`idle2t`): splitting the scene by map is the fix still to make.
+The attract demos were one scene of 33 pages, 190 MB, when the usage analysis merged the four demos.
+Loading them at the demo's Enter froze its first frames for 17 to 19 s and took CDRAM to 0.5 MB and main memory to 55 MB (run `idle1`); loaded at their first draws instead (`LazyScenes`), the first demo, map 10, froze for 7 to 7.4 s (`idle2t`, `s5-idle0`).
+Now each demo's map is a scene of its own (`build_scenes.py`'s `DEMOS`: 46, 114, 62 and 70 MB), which the menu loads ahead while it idles ([Fades that wait](#fades-that-wait)), and no scene is lazy.
 
 Pages in main memory cost no frame time that the heartbeat shows: Future War 2, 3 and 4, Freeway, Steel Mill, the story's Future War 1 and the Factory each have 24 to 40 MB of pages in main memory and run at p90 17.2 to 17.5 ms, as the levels with none do ([build.md](build.md#levels)).
 
@@ -191,8 +192,8 @@ What does it now, each a field that the probe's `-t2d-set` can turn off for a co
 - `CoverMs` (0.3 s): `Transition.getApp` makes the next App while the fade covers the screen, so for that long after an App's Enter, and a level's after a briefing, its own pages still waiting are warmed all at once, unpaced. Pages over `WarmBigBytes` (8 MB; with tiles, none) warm only then. `CoverWaits` (off) also waits for pages still loading there; see [Story mode and restarts](#story-mode-and-restarts).
 - `CoverWarmBytes` (16 MB): under the cover, at most that much is warmed in one flush, the first page whatever its size; the rest go on at the usual pace. A briefing skipped early left the level's whole scene to one flush. 0 lifts the limit.
 - A page a miss loaded stays wanted until the next Switch: with CDRAM full, evictions made the Factory load p007, p043 and p065 again every few frames.
-- `StickyMisses` (2): a page a miss loaded that many times stays loaded like the sticky fonts, at most `StickyMissMax` (6) of them. The scene data lacks p076 and p083, which nearly every scene draws, and each scene loaded them again in a 200 ms frame.
-- `AheadIfApps`, `LevelKeep`, `FirstPages` and `SwitchQueues`: [Story mode and restarts](#story-mode-and-restarts).
+- `StickyMisses` (2): a page a miss loaded that many times stays loaded like the sticky fonts, at most `StickyMissMax` (6) of them. The scene data lacked p076 and p083, which nearly every scene drew, and each scene loaded them again in a 200 ms frame; their images are in every scene now ([Fades that wait](#fades-that-wait)), and this stays for the misses still to find.
+- `AheadIfApps`, `LevelKeep`, `FirstPages` and `SwitchQueues`: [Story mode and restarts](#story-mode-and-restarts). `HoldFades`, `FadeApps` and `IdleTicks`: [Fades that wait](#fades-that-wait).
 - `SlowFrameMs` (100): a frame longer than that logs what the atlas did in it and in the frame before: Switches, loads with their time, waits, finished loads, first draws (`sync` or `async`) and warm draws, and the free memory (`T2D atlas: slow frame ...`).
 
 Measured from boot to a minute of play through the arcade briefing with `-t2d-heartbeat 5 -t2d-stalls 100` and no screenshots but one at 95 s (`work/runs/hitch/run.sh`; the level-select list's 4 and 2, arcade 5). Before is the code before these changes (`b4s4`, `b5a5`, `b5s2`, with `-t2d-stalls 500` and screenshots from 70 s, so the level's worst frames there are screenshots), after is `f6s4`, `f6a5`, `f6s2` (screenshots of `m5s4` and `m5s2` checked the tiles). Times are the worst frame of each part, in ms; after, the Attract's and the briefing's first frames did no atlas work (`slow frame ... [switch app:Attract 0 ms]`, nothing loading): that is the game's own start of them.
@@ -237,7 +238,34 @@ Measured on the console, story mode from the briefing after 5 s, then a death (`
 | Restart after the continue | 414 + 1510 (Biker Bar); 2577 to 6033 in the playtest | 241 (Biker Bar), 232 + 217 (Hospital) |
 
 A briefing skipped before its prefetch ends still freezes the level's start: the Factory's first frame draws about 20 pages (40 MB) itself. With `SwitchQueues` its second frame took 3984 ms with 50 MB still to load (`skipB`), against 4082 with 44 MB (`skipC`, `SwitchQueues=false`) and 5767 with 62 MB (`skipA`, before).
-The continue screen's own 3 pages still load at its Enter, while the game-over sting plays.
+The continue screen's own 3 pages still loaded at its Enter, while the game-over sting played; they load in the fade now (below).
+
+### Fades that wait
+
+Every App the game enters comes after a fade out: `Transition.update` runs once a frame while the fade's `progress` climbs to 1, and the update that passes 1 makes the next App.
+R6 puts `Atlas.HoldFade` at the start of `Transition.update`, and the update does nothing in a frame where it returns true, so the fade stays at the covered screen while the App that shows keeps running under it (the briefing's screen, its music).
+
+- `HoldFades` (on): a fade into the level (`FadeGameApp`, Transition's class 5) waits until the briefing's prefetch is drawn, and a fade into an App of `FadeApps` (`"<Transition class>:<App class>"`: the menus, the briefing, the continue screen, the controls tutorial, the attract) until that App's pages are. At most `HoldMaxMs` (10 s); then the App starts with what is there. A page that isn't on its way (one `Resources.Load` gave, or one over `WarmBigBytes`) doesn't hold it. When the pages are ready, the fade runs as it always did.
+- At a fade's start, the next App's pages join the wanted ones and go first in the background loads, without a Switch (the App that shows keeps the pages it draws): the fade's own frames, 0.3 to 0.8 s, cover part of the load. The log says `the fade into <key>: n of its pages load first`, then `the fade into <key> waits for n pages` and `the fade waited <ms>` when it held.
+- `IdleTicks` (900): while the main menu's idle count (`MainMenu.timeOut`, 1200 ticks from the last press, counted down at 60 a second on the title and the top menu) is below this, the next attract demo's pages load ahead (`ahead, map:<n>` in the log). The menu's timeout fades into Transition's class 40, `Game.mode` 8, whose `Demo` constructor picks the next of the four maps from `Demo.demoCharacter`; `NextDemoMaps` is that rotation (6 to map 9, 4 to map 10, 1 to map 12, any other to map 11), read by reflection like `AheadIfApps`. The Sarah demo's 114 MB take about 11 s; the fade into the demo holds for whatever is left.
+- An App's Enter ends the fade: after any App but the attract, `Transition.update` enters the main menu with no fade in, so `HoldFade` doesn't see the fade end.
+
+The data has two more additions (`scene_sets.py`'s `EXTRA_IMAGES`, `'all'`): the main menu's two logos, which the title fade (style 1, any App's way back to the menu) draws through `MainMenu.drawLogo`, a method of a hub the analysis stops at; and the six named images on the page that held the images no scene reaches (`SMALL_BLACK_RECT`, `DOT`, ...), which nearly every scene drew. Those were p076 and p083, and were missed 70 times in the runs of November 2026.
+The other 123 images of that page, arrays of debris and the like, stay there.
+
+Measured on the console with `-t2d-heartbeat 1 -t2d-stalls 50` (`work/runs/stutter5`: `skip.sh`, `idle.sh`, `story.sh`), worst frames in ms:
+
+| | Before | After |
+| --- | --- | --- |
+| Cyberdyne Factory's briefing skipped at 4 to 6 s | the level's second frame 3984 (`skipB`) to 5767 (`skipA`) | the fade held 6.9 s at 50 to 60 fps (worst 57 ms); the level's first frame 278 (`s5-skip1`) |
+| The attract replayed from the menu (`-t2d-invoke com.bitmapbureau.terminator.Transition::start::37::1::3`) | 711 (`s5-idle0`); 219 + 791 in the first playtest | 211 to 227 in the fade and 125 to 132 at the start, with no atlas work: at 20 s the sound loader still loads clips, and a clip the fade asks for waits behind the page loads (`T2D sounds: waited 112 ms`, `s5-idle1`, `s5-idle2`) |
+| The first demo (map 10) | 7050, CDRAM 0.5 MB, then 220 to 410 a few times (`s5-idle0`) | 158; one miss, 250 (`s5-idle1`) |
+| The second demo (map 12) | 1484, then 220 six times | none over 100 at its start; one miss later, 240 (`s5-idle2`) |
+| The high-score table after a demo | 227 | none over 100 |
+| The continue screen's Enter | 545, or 283 + 500 (`fix5`, `fix2`) | none over 100: its 3 pages load in the death's fade (`s5-story2`); the restart 240, the level's own start |
+
+The Factory's skip-to-playable takes longer than before, about 7.8 s from the press instead of about 4.9, because the level now starts with all 51 of its pages drawn, where the freeze drew only the 20 its first frame needed and the rest loaded during play.
+While the menu loads the Sarah demo, CDRAM goes down to 0.5 MB for a few seconds, as in the Factory's prefetch, and the ballast then lets go; the demo plays with 4.5 to 14.5 MB free.
 
 
 ## The rules
@@ -258,8 +286,9 @@ The counts are those of the Steam release, build 24040403, as Rewind recovers it
 | R6 | every `call Transition.getApp(int)` | 2 sites, both in `Transition.update` | after the call: `dup; call Atlas.EnterApp(object)` |
 | R6 | `GameMap.loadFile(int, int)` | static, two int parameters | at its start: `ldarg.0; ldarg.1; call Atlas.EnterMap(int, int)` |
 | R6 | `Game.loadScriptByLevelID(int)` | static, one int parameter | at its start: `ldarg.0; call Atlas.EnterLevel(int)` |
+| R6 | `Transition.update()` | static, and static `int dir`, `nextApp`, `double progress`, `speed` | at its start: `ldsfld dir; ldsfld progress; ldsfld speed; ldsfld nextApp; call Atlas.HoldFade(int, double, double, int); brfalse <its first instruction>; ret` |
 
-Each R6 hook is followed by `ldsfld BitmapData.TEXTURE_UNKNOWN; stsfld BitmapData.texused`.
+Each R6 hook but `HoldFade` is followed by `ldsfld BitmapData.TEXTURE_UNKNOWN; stsfld BitmapData.texused`.
 The draw methods skip `SetTexture` when the page index equals `texused`, and after an Enter the page under an index may be a new Texture2D.
 
 R1 also makes the 2,436 stores an older Rewind dropped from those tables irrelevant.
@@ -284,7 +313,7 @@ It compiles Atlas.cs with Roslyn against Unity 2018.2's unityaot class libraries
 Then it compiles `check/RuleCheck.cs` with AtlasPatches.cs and the rewriter's `Stack.cs`, using the .NET Framework's csc and Mono.Cecil 0.10 as the pipeline does.
 It runs the passes on the assembly alone and checks each rule's site count, the stack of every changed method, and that nothing still calls `loadTexturePacks` or reads `texpack`.
 It writes the assembly and reads it back.
-On Rewind's output for the Steam release: R1 6 sites, R2 and R3 3, R4 1, R5 4, R6 4, every changed method's stack balanced, all rules OK.
+On Rewind's output for the Steam release: R1 6 sites, R2 and R3 3, R4 1, R5 4, R6 5, every changed method's stack balanced, all rules OK.
 
 `check/verify_render.py` draws frames the way the game's meshes do, at pixel centres with float32 interpolation and point sampling.
 It draws each from the original packs through the game's table and from the pages through `frames.bytes`, in all four mesh variants, and compares.
@@ -306,7 +335,7 @@ The sprite renderer's R8 is one: it replaces `unityDraw` and `unityDrawClippedWi
 `GameMap.loadFile` has 3 Rewind gap sites; if a repair rewrites it, `AtlasSceneHooks` must still find its pattern, or it throws and says which.
 
 With this wiring, `uv run tools/downgrade/pipeline.py project` runs through in 43 to 52 seconds.
-The rewriter's log shows `atlas: AtlasTables=6 AtlasSplash=3 AtlasPackLoads=1 AtlasDraws=4 AtlasSceneHooks=4`; with the sprite renderer's rules in the pipeline, `AtlasDraws=0`.
+The rewriter's log shows `atlas: AtlasTables=6 AtlasSplash=3 AtlasPackLoads=1 AtlasDraws=4 AtlasSceneHooks=5`; with the sprite renderer's rules in the pipeline, `AtlasDraws=0`.
 Its problem count stays at 245, none of them in a method the rules change.
 The project gets `Assets/Resources/atlas` with 106 pages, the two tables and their metas, and no `texturepack` folder.
 The pages are PNGs; `T2D_ATLAS_PAGES=raw` makes them raw `.bytes` TextAssets instead.
