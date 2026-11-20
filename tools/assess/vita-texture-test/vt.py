@@ -59,10 +59,13 @@ def log(message):
 
 
 def check_lock():
-    lock = Path(os.environ.get('VITA_DEVICE_LOCK') or Path.home() / '.t3' / 'vita-device.lock')
-    text = lock.read_text(encoding='utf-8', errors='replace') if lock.exists() else ''
-    if 't2d:' not in text:
-        sys.exit(f'vt.py: run inside lock.py run vita-device "t2d: ..." (the lock holds: {text.strip()[:200] or "nobody"})')
+    """Stops unless this session holds the shared vita-device lock: a lock.py run (any port's) this process runs
+    under, or T2D_HOLDER naming the holder (lock.ours checks who, not what the holder's text says). Before (Nov 2026)
+    any lock whose text held "t2d:" passed, another job's included."""
+    sys.path.insert(0, str(ROOT / 'tools' / 'downgrade'))
+    import lock
+
+    lock.require_ours('vita-device', 'vt.py')
 
 
 def ftp():

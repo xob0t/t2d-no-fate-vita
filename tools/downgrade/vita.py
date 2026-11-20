@@ -4,13 +4,13 @@ From butcher-vita's tools/downgrade/vita.py (same author, MIT), for this port's 
     uv run tools/downgrade/vita.py <command> [options]
 
 The console is at T2D_VITA_HOST (or the variable an earlier port set for the same console). sync, log, args, files and crashes need
-only an FTP server on port 1337: VitaShell's (press Select in VitaShell) or vitacompanion's; seed
-needs no console. The other commands need vitacompanion's command server on port 1338. The app
+only an FTP server on port 1337: VitaShell's (press Select in VitaShell) or vitacompanion's, and so does
+seed. The other commands need vitacompanion's command server on port 1338. The app
 must have been installed once from the VPK (install, or the VPK in VitaShell); after that:
 
-  sync [--build dir]    upload the files that changed since the last sync into
-                        ux0:app/<title> (the first sync uploads everything); quits a
-                        running game first
+  sync [--build dir]    upload the files the console's record (ux0:app/<title>/t2d-sync.json, whichever
+                        checkout synced) doesn't list with this build's content into ux0:app/<title>
+                        (with no record, everything); quits a running game first
   seed [--build dir]    record that build as installed (e.g. from its VPK) without
                         uploading, so the next sync sends only differences
   install [--build dir] package the build as a VPK and stream it to the installer (also
@@ -38,7 +38,7 @@ must have been installed once from the VPK (install, or the VPK in VitaShell); a
                         artifacts/vita/symbols, and the copy whose fingerprint the dump lists is
                         used); --dump FILE reads a local dump
 
-The commands that change the console (sync, install, launch, quit, run, do, reboot, args) refuse
+The commands that change the console (sync, seed, install, launch, quit, run, do, reboot, args) refuse
 while someone else holds the vita-device lock, and sync, install and seed read the build under the
 vita-build lock. docs/vita.md (vita.py) has the locks, the vitacompanion versions each command needs,
 why not to kill vita.py while it transfers a file, and keeping the display on.
@@ -75,7 +75,7 @@ FTP_ERRORS = (OSError, EOFError, ftplib.Error)
 FTP_SECONDS = 30  # connect, and any read or write of a transfer, before it counts as stalled
 PART = '.part'  # an upload's name until it is complete (upload)
 # The commands that change what the console runs or reads; they respect the vita-device lock.
-CHANGING = ('sync', 'install', 'launch', 'quit', 'run', 'do', 'reboot', 'args')
+CHANGING = ('sync', 'seed', 'install', 'launch', 'quit', 'run', 'do', 'reboot', 'args')
 # The commands that take words after them (the rest of the command line), and how many at most.
 WORDS = {'do': None, 'args': None, 'shot': 1, 'files': 1}
 # The vitacompanion chain that keeps the console awake, and how often it is repeated (keep_awake).
@@ -225,6 +225,9 @@ def install(build: Path, build_wait=BUILD_WAIT_SECONDS):
     with reading(build, build_wait):
         vpk = pipeline.package_vita(build)
         size = vpk.stat().st_size
+        # The record of the app the install replaces goes first: if the install stops part way, no sync trusts it.
+        with contextlib.suppress(*FTP_ERRORS, Unreachable), ftp() as connection:
+            connection.delete(CONSOLE_RECORD)
         with (
             connect_commands(timeout=30) as connection,
             vpk.open('rb') as handle,
@@ -247,7 +250,10 @@ def install(build: Path, build_wait=BUILD_WAIT_SECONDS):
         print(reply)
         if not reply.startswith('Installed'):
             sys.exit(f'Installation failed: {reply}')
-        seed(build)
+        try:
+            seed(build)
+        except (*FTP_ERRORS, Unreachable) as error:
+            log(f"WARNING: installed, but the console's record of it was not written ({error}); the next sync sends all")
 
 
 @contextlib.contextmanager
@@ -343,6 +349,16 @@ def makedirs(connection, directory, known):
         known.add(partial)
 
 
+# What the console holds is recorded on the console itself, in the app's folder (CONSOLE_RECORD): one record per
+# console and title, whichever checkout synced last, and it goes with the app when another tool installs over it.
+# Before (Nov 2026) the record was each checkout's own (MANIFEST), so a sync from one worktree left every other
+# worktree's record stale, and an interrupted sync from another worktree left files its record never learned of.
+# The record lists each file's SHA-1 with the size and time the console's FTP server lists for it; a file counts as
+# the recorded one only while the console still lists it with that size and time, so a write by anything else (an
+# older vita.py, VitaShell) shows. Before a file is replaced its entry goes from the record (state "syncing"); the
+# sync's end writes it whole (state "clean"). No record, or one that can't be read: every file is sent.
+CONSOLE_RECORD = f'{APP}/t2d-sync.json'
+# The checkout's own copy, kept for checkouts on older tools (their forget_replaced reads it); not read here.
 MANIFEST = ARTIFACTS / f'vita-synced-{pipeline.VITA_TITLE_ID}.json'
 
 
@@ -353,11 +369,76 @@ def digests(build: Path):
 
 
 def seed(build: Path):
+    """Records the build as what the console holds (after an install of its VPK): the console's record, with each
+    file the console lists at the build's size, and the checkout's copy."""
     pipeline.require_complete(build)
-    MANIFEST.parent.mkdir(parents=True, exist_ok=True)
-    MANIFEST.write_text(json.dumps({name: digest for name, _, digest in digests(build)}, indent=0))
-    log(f'Recorded {build} as installed')
+    sums = {name: (digest, len(data)) for name, data, digest in digests(build)}
+    with ftp() as connection:
+        listed = console_files(connection)
+        files = {}
+        for name, (digest, size) in sums.items():
+            facts = listed.get(name)
+            if facts and facts[0] == str(size):
+                files[name] = [digest, *facts]
+        write_record(connection, 'clean', files)
+    write_manifest({name: digest for name, (digest, _) in sums.items() if name in files})
+    missing = len(sums) - len(files)
+    note = f'; {missing} files the console lacks or holds at another size go with the next sync' if missing else ''
+    log(f'Recorded {build} as installed{note}')
     keep_symbols(build)
+
+
+def write_manifest(files: dict):
+    MANIFEST.parent.mkdir(parents=True, exist_ok=True)
+    MANIFEST.write_text(json.dumps(files, indent=0))
+
+
+def console_files(connection):
+    """{path under the app's folder: (size, modify)} of every file the console lists there (MLSD), but the record
+    and upload parts."""
+    found = {}
+
+    def walk(directory, prefix):
+        # The console's FTP server lists a folder only with the trailing slash.
+        for name, facts in connection.mlsd(directory + '/', facts=['type', 'size', 'modify']):
+            if name in ('.', '..'):
+                continue
+            if facts.get('type') == 'dir':
+                walk(f'{directory}/{name}', f'{prefix}{name}/')
+            elif not name.endswith(PART) and f'{directory}/{name}' != CONSOLE_RECORD:
+                found[prefix + name] = (facts.get('size', ''), facts.get('modify', ''))
+
+    walk(APP, '')
+    return found
+
+
+def file_facts(connection, target):
+    """(size, modify) the console lists for one file, or None."""
+    folder, leaf = target.rsplit('/', 1)
+    for name, facts in connection.mlsd(folder + '/', facts=['type', 'size', 'modify']):
+        if name == leaf and facts.get('type') != 'dir':
+            return facts.get('size', ''), facts.get('modify', '')
+    return None
+
+
+def read_record(connection):
+    """The console's record ({'state', 'by', 'at', 'files': {name: [sha1, size, modify]}}), or None when it has none
+    or one that can't be read."""
+    buffer = io.BytesIO()
+    try:
+        connection.retrbinary(f'RETR {CONSOLE_RECORD}', buffer.write)
+        record = json.loads(buffer.getvalue().decode('utf-8'))
+    except ftplib.error_perm:
+        return None
+    except (ValueError, UnicodeDecodeError):
+        log(f"{CONSOLE_RECORD} can't be read; taken as no record")
+        return None
+    return record if isinstance(record, dict) and isinstance(record.get('files'), dict) else None
+
+
+def write_record(connection, state, files: dict):
+    record = {'state': state, 'by': str(ROOT), 'at': time.strftime('%Y-%m-%d %H:%M:%S'), 'files': files}
+    upload(connection, CONSOLE_RECORD, json.dumps(record, indent=0).encode())
 
 
 @contextlib.contextmanager
@@ -417,42 +498,10 @@ def stopped():
         time.sleep(1)
 
 
-def other_checkouts():
-    """The repository's other checkouts (git worktrees), which may sync their own builds to the same app."""
-    try:
-        out = subprocess.run(
-            ['git', 'worktree', 'list', '--porcelain'], cwd=ROOT, capture_output=True, text=True, timeout=30
-        ).stdout
-    except (OSError, subprocess.SubprocessError):
-        return []
-    paths = [Path(line[len('worktree ') :]) for line in out.splitlines() if line.startswith('worktree ')]
-    return [p for p in paths if p.resolve() != ROOT.resolve()]
-
-
-def forget_replaced(synced: dict):
-    """Drops from this checkout's record the files another checkout's record has with other content: when
-    another worktree synced its build since this one did, the console has its copy of those files, which
-    this record alone would take for this build's. Sending one again is harmless when this checkout's
-    sync was the later."""
-    dropped = set()
-    for checkout in other_checkouts():
-        theirs = checkout / MANIFEST.relative_to(ROOT)
-        try:
-            record = json.loads(theirs.read_text())
-        except (OSError, ValueError):
-            continue
-        dropped.update(name for name, digest in record.items() if name in synced and synced[name] != digest)
-    for name in dropped:
-        synced.pop(name, None)
-    if dropped:
-        log(f'{len(dropped)} files differ from what another checkout synced; sending them again')
-        MANIFEST.write_text(json.dumps(synced, indent=0))
-
-
 def sync_files(build: Path):
+    """Uploads the build's files the console's record (CONSOLE_RECORD) doesn't list with their content, and records
+    them."""
     pipeline.require_complete(build)
-    synced = json.loads(MANIFEST.read_text()) if MANIFEST.exists() else {}
-    forget_replaced(synced)
     connection = ftp()
     try:
         try:
@@ -461,15 +510,35 @@ def sync_files(build: Path):
             sys.exit(
                 f'{APP} does not exist: install the VPK once (vita.py install, or pipeline.py package and VitaShell)'
             )
-        changed, total, known = 0, 0, set()
+        record = read_record(connection)
+        listed = console_files(connection)
+        if record is None:
+            log(f'The console has no record of what {APP} holds: sending every file (an install sends it all faster)')
+        elif record.get('state') != 'clean':
+            log(
+                f"The console's record says a sync from {record.get('by')} at {record.get('at')} stopped part way: "
+                'the files it was replacing are sent again'
+            )
+        recorded = (record or {}).get('files', {})
+        # The entries the console still lists as recorded; a file anything else wrote since doesn't match.
+        files = {
+            name: entry
+            for name, entry in recorded.items()
+            if isinstance(entry, list) and len(entry) == 3 and listed.get(name) == (entry[1], entry[2])
+        }
+        if len(files) < len(recorded):
+            log(f'{len(recorded) - len(files)} files changed on the console since they were recorded; sending them again')
+        local = {}
+        changed, total, known, names = 0, 0, set(), []
         for name, data, digest in digests(build):
             total += 1
-            if synced.get(name) == digest:
+            names.append(name)
+            if name in files and files[name][0] == digest:
+                local[name] = digest
                 continue
-            # Out of the record until it is sent whole: a sync stopped while sending it sends it again
-            # next time, even for a build that has the recorded file back.
-            if synced.pop(name, None) is not None:
-                MANIFEST.write_text(json.dumps(synced, indent=0))
+            # Out of the record before it is replaced: a sync stopped while sending it sends it again next time.
+            files.pop(name, None)
+            write_record(connection, 'syncing', files)
             target = f'{APP}/{name}'
             # The console's FTP server sometimes stops answering mid-transfer; a new
             # connection usually carries on.
@@ -477,6 +546,7 @@ def sync_files(build: Path):
                 try:
                     makedirs(connection, target.rsplit('/', 1)[0], known)
                     upload(connection, target, data)
+                    facts = file_facts(connection, target)
                     break
                 except FTP_ERRORS as error:
                     if attempt == 2:
@@ -486,11 +556,20 @@ def sync_files(build: Path):
                         connection.close()
                     time.sleep(5)
                     connection = ftp()
-            synced[name] = digest
+            if facts and facts[0] == str(len(data)):
+                files[name] = [digest, *facts]
+            else:
+                log(f'{name}: the console lists it as {facts}, not {len(data)} bytes; it is sent again next time')
+            local[name] = digest
             changed += 1
-            MANIFEST.write_text(json.dumps(synced, indent=0))  # progress survives an interrupted sync
+            write_manifest(local)
             if name == MODULE:
                 keep_symbols(build)
+        # Whole: only the build's files, each as sent or found.
+        files = {name: files[name] for name in names if name in files}
+        if changed or record is None or record.get('state') != 'clean' or files != recorded:
+            write_record(connection, 'clean', files)
+        write_manifest(local)
     finally:
         connection.close()
     log(f'Synced {changed} of {total} files to {APP}')
@@ -1047,6 +1126,13 @@ def dispatch(args):
         sys.stdout.flush()
     if args.command == 'args':
         line = show_args() if args.show else set_args(args.rest)
+        if line and not args.show:
+            real = '-t2d-real-saves' in line.split()
+            print(
+                "WARNING: the launch that reads these flags plays on the player's own saves (-t2d-real-saves)"
+                if real
+                else f"the launch that reads these flags keeps its saves in {REMOTE}/test, not the player's"
+            )
         print('args.txt: ' + (line or '(empty)'))
     if args.command == 'crashes' and args.dump:
         symbolize(args.dump, build, args.thread)

@@ -97,13 +97,29 @@ METADATA = Path('il2cpp_data') / 'Metadata' / 'global-metadata.dat'
 GAME_ASSEMBLIES = ['Assembly-CSharp', 'InControl', 'Steamworks']
 
 
+# REWIND_* variables that don't change what Rewind writes: setup's clone URL, and its thread count.
+REWIND_ENV_NOT_OUTPUT = {'REWIND_REPOSITORY', 'REWIND_THREADS', 'REWIND_UTF8_OUTPUT'}
+
+
+def rewind_env():
+    """The REWIND_* variables set for this run (REWIND_NO_EARLY_COPIED_OBJECTS and the other switches, the traces),
+    as name=value lines: they can change the recovered code, so they are part of the stamp."""
+    return sorted(
+        f'{name.upper()}={value}'
+        for name, value in os.environ.items()
+        if name.upper().startswith('REWIND_') and name.upper() not in REWIND_ENV_NOT_OUTPUT
+    )
+
+
 def recover_stamp(game: Path):
-    """What Rewind's output depends on: the game's code and metadata, Rewind's build and the signatures."""
+    """What Rewind's output depends on: the game's code and metadata, Rewind's build, the signatures and the REWIND_*
+    variables."""
     lines = [
         f'binary {file_hash(game / "GameAssembly.dll")}',
         f'metadata {file_hash(game_data(game) / METADATA)}',
         (REWIND_STAMP.read_text(encoding='utf-8') if REWIND_STAMP.exists() else 'no Rewind build').strip(),
         f'signatures {file_hash(REWIND_SIGNATURES) if REWIND_SIGNATURES.exists() else "Rewind own"}',
+        *(f'env {line}' for line in rewind_env()),
     ]
     return hashlib.sha256('\n'.join(lines).encode()).hexdigest()
 
@@ -1075,8 +1091,10 @@ def package_vita(build: Path) -> Path:
     vpk = build.with_name(build.name + '.vpk')  # with_suffix would cut the version at its dots
     files = list(vita_app_files(build))
     total = sum(len(source) if isinstance(source, bytes) else source.stat().st_size for _, source in files)
+    # Written beside the last VPK and renamed over it when whole, so a packaging that stops leaves the last one.
+    part = vpk.with_name(vpk.name + '.part')
     with (
-        zipfile.ZipFile(vpk, 'w', zipfile.ZIP_DEFLATED) as archive,
+        zipfile.ZipFile(part, 'w', zipfile.ZIP_DEFLATED) as archive,
         progress.step('Packaging the VPK', total=total, eta=True, count='MB', timed=True) as step,
     ):
         for name, source in files:
@@ -1094,6 +1112,7 @@ def package_vita(build: Path) -> Path:
                 while chunk := src.read(PACKAGE_CHUNK):
                     dest.write(chunk)
                     step.advance(len(chunk))
+    replace_path(part, vpk)
     log(f'Packaged {vpk} ({vpk.stat().st_size / 2**20:.0f} MB)')
     return vpk
 

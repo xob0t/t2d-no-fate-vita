@@ -28,7 +28,7 @@ using UnityEngine.SceneManagement;
 //   -t2d-peek <path>[,<path>...]     static fields by reflection, Namespace.Type.field, then .field or [index] (into
 //                                    an array or a haxe Array's __a) as often as wanted; T2D_PEEK lines on the first
 //                                    frame and whenever a value changes
-//   -t2d-invoke <call>[,<call>...]   at the second heartbeat (or 10 s), calls by reflection and logs T2D_INVOKE lines with
+//   -t2d-invoke <call>[,<call>...]   at 10 s (-t2d-invoke-at <s>), or +<s>:<call> at its own s, calls by reflection and logs T2D_INVOKE lines with
 //                                    the result or the exception: <path to an object or a type>::<method>[::<arg>...],
 //                                    each arg an int, @<peek path>, or a string; or <path>=<value>, a field (static, or
 //                                    of the object the path reaches) set to an int, bool or double
@@ -95,9 +95,9 @@ namespace T2DCompat
                 sets = set.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
                 Atlas.AppEntered += app => ApplySets(app);
             }
-            string invoke = Flags.Value("-t2d-invoke");
-            if (invoke != null) invokes = invoke.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
             invokeAt = Flags.Number("-t2d-invoke-at", 1, 10f);
+            string invoke = Flags.Value("-t2d-invoke");
+            if (invoke != null) ParseInvokes(invoke.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries));
             Atlas.PrefetchAsync = !Flags.Has("-t2d-atlas-sync");
             // Clip loads wait while pages load: a page's integration waited for the clip read in flight (Atlas.Busy).
             SoundLoads.Hold = () => Atlas.Busy;
@@ -149,7 +149,7 @@ namespace T2DCompat
                 setsAtStart = true;
                 ApplySets("*");
             }
-            if (invokes != null && PlayerLog.Seconds >= invokeAt) Invoke();
+            if (invokes != null && PlayerLog.Seconds >= nextInvokeAt) Invoke();
             if (ticks++ == 0) Debug.Log("T2D_PROBE first tick from " + from + " " + Stamp());
             try
             {
@@ -256,26 +256,46 @@ namespace T2DCompat
             }
         }
 
-        static string[] invokes;
+        // The calls not run yet, each with its time, and the earliest of those times.
+        static List<KeyValuePair<double, string>> invokes;
         static double invokeAt = 10.0;
+        static double nextInvokeAt = double.MaxValue;
 
-        // A call written +<s>:<call> waits until s seconds; the others run at -t2d-invoke-at's time.
-        static void Invoke()
+        // A call written +<s>:<call> waits until s seconds; the others run at -t2d-invoke-at's time. Each time is
+        // read once, here, and Tick wakes for the earliest.
+        static void ParseInvokes(string[] entries)
         {
-            var due = new List<string>();
-            var later = new List<string>();
-            foreach (string entry in invokes)
+            invokes = new List<KeyValuePair<double, string>>();
+            foreach (string entry in entries)
             {
                 int colon = entry.IndexOf(':');
                 double at;
                 if (entry.StartsWith("+") && colon > 1 && double.TryParse(entry.Substring(1, colon - 1), NumberStyles.Float, Inv, out at))
-                {
-                    if (PlayerLog.Seconds >= at) due.Add(entry.Substring(colon + 1));
-                    else later.Add(entry);
-                }
-                else due.Add(entry);
+                    invokes.Add(new KeyValuePair<double, string>(at, entry.Substring(colon + 1)));
+                else invokes.Add(new KeyValuePair<double, string>(invokeAt, entry));
             }
-            invokes = later.Count > 0 ? later.ToArray() : null;
+            NextInvoke();
+        }
+
+        static void NextInvoke()
+        {
+            nextInvokeAt = double.MaxValue;
+            foreach (var pending in invokes) nextInvokeAt = Math.Min(nextInvokeAt, pending.Key);
+            if (invokes.Count == 0) invokes = null;
+        }
+
+        static void Invoke()
+        {
+            double now = PlayerLog.Seconds;
+            var due = new List<string>();
+            var later = new List<KeyValuePair<double, string>>();
+            foreach (var pending in invokes)
+            {
+                if (now >= pending.Key) due.Add(pending.Value);
+                else later.Add(pending);
+            }
+            invokes = later;
+            NextInvoke();
             foreach (string call in due)
             {
                 string result;
@@ -502,7 +522,7 @@ namespace T2DCompat
             string path;
             try
             {
-                string folder = Saves.PersistentDataPath() + "/shots";
+                string folder = Saves.FilesFolder() + "/shots";
                 System.IO.Directory.CreateDirectory(folder);
                 path = folder + "/" + name + ".png";
             }

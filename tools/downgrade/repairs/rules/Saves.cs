@@ -29,12 +29,12 @@ static partial class Rules
 {
     static void SaveStatsLoadStats(Engine e)
     {
-        MethodRepair m = e.Method("com.bitmapbureau.terminator.savedata.SaveStats::loadStats()", "1e75a4d6");
+        MethodRepair m = e.Method("com.bitmapbureau.terminator.savedata.SaveStats::loadStats()", "e9deae9b");
         m.RetypeLocal(43, "System.Object").RetypeLocal(61, "System.Object");
         int[] caught = { 40, 47 }, read = { 43, 61 };
         string[][] hashes =
         {
-            new[] { "ead1e2fb", "4d6ef90e", "33117b68", "c12ec8fc", "2d8f1eb1", "60ec6637" },
+            new[] { "ead1e2fb", "4d6ef90e", "817641ff", "458b459b", "2d8f1eb1", "60ec6637" },
             new[] { "5727b4e6", "995b9ddb", "80d0f90a", "fb274d8d", "d3685d6a", "b08f8758" },
         };
         for (int k = 0; k < 2; k++)

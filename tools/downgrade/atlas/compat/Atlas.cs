@@ -785,8 +785,9 @@ namespace T2DCompat
                 }
                 // The idle demo's pages only into video memory while the menu shows: in main memory each costs its
                 // integration on the main thread, a 40 to 55 ms frame (fin-boot, fin-ach). The rest load in the
-                // fade into the demo, which holds for them.
-                if (holding && InScenes(p, aheadScenes) && !Evict(PageBytes(p), false))
+                // fade into the demo, which holds for them. LoadAsync holds the ballast first, if it isn't held yet, so
+                // the page must fit beside that too: else it would go to main memory all the same.
+                if (holding && InScenes(p, aheadScenes) && !Evict(PageBytes(p) + BallastToCome(), false))
                 {
                     i++;
                     idleHeld++;
@@ -1052,6 +1053,14 @@ namespace T2DCompat
         static RenderTexture ballast;
         static int ballastIdle, ballastLogs;
         static long ballastFreeBefore = -1;
+
+        // The video memory HoldBallast would take now: BallastBytes if it isn't held and there is room for it.
+        static long BallastToCome()
+        {
+            if (ballast != null) return 0;
+            long free = FreeMemory.Bytes(FreeMemory.Cdram);
+            return free < 0 || free < BallastBytes + CdramReserveBytes ? 0 : BallastBytes;
+        }
 
         // Before a page that waits for its first draw: CDRAM's headroom goes to a render texture, so that the page
         // goes to main memory if it doesn't fit beside it. Only with room for it and the reserve.

@@ -35,7 +35,7 @@ In this order, it:
 - Installs the current Visual C++ runtime when Windows has an older one: the builder's texture encoder crashes in the 2015 runtime.
 - Downloads the .NET 10 SDK 10.0.404 into `tools/external/dotnet10`.
 - Clones this project's fork of Rewind ([the fork](https://github.com/xob0t/Rewind-IL2CPP-Decompiler), upstream's `ea8e305` plus one commit per fix) at the commit pinned in `tools/downgrade/common.py` into `tools/external/rewind`, and builds its command line with the .NET 10 SDK. `REWIND_REPOSITORY` clones from another URL or a local clone instead.
-  The fork's 35 change commits (the former patches 0001 to 0033, in order, then the class check's scope, and the class check at each use) fix most of the issues in [rewind-issues.md](rewind-issues.md); [tools/rewind/README.md](../tools/rewind/README.md) lists them, as Apache-2.0 asks for modified files, and the fork's FORK.md maps them to the issues. The build restores from nuget.org whatever the machine's NuGet configuration says. A change of the pinned commit builds it again.
+  The fork's 37 change commits (the former patches 0001 to 0033, in order, then the class check's scope, the class check at each use, and two for an allocation read before its constructor call) fix most of the issues in [rewind-issues.md](rewind-issues.md); [tools/rewind/README.md](../tools/rewind/README.md) lists them, as Apache-2.0 asks for modified files, and the fork's FORK.md maps them to the issues. The build restores from nuget.org whatever the machine's NuGet configuration says. A change of the pinned commit builds it again.
 - Downloads AssetRipper 2.0.0 into `tools/external/assetripper-2.0.0`, the .NET 8 SDK 8.0.425 into `tools/external/dotnet` (for the builder's TypeModelGen), and Mono.Cecil 0.10.0-beta6 from NuGet (for the rewriter).
 - Finds [the game](#the-game).
 - Finds or installs [the PS Vita SDK](#the-ps-vita-sdk).
@@ -97,7 +97,7 @@ uv run build.py --dry-run             # list setup and the stages with their ste
 
 1. `recover`: Rewind rebuilds the game's 44 assemblies from `GameAssembly.dll` and `global-metadata.dat` into `work/recover/assemblies`, assemblies only, no C# source. It names IL2CPP's runtime functions with the signature library for the game's Unity, `tools/rewind/signatures/unity-6000.0.60f1-windows-x64.sig`; without that file it falls back on the nearest library Rewind ships, which recovers less.
    The library was built from four test builds of 6000.0.60f1 (Master, Release, Master for size, Master without incremental GC; MSVC 14.50) with patch 0002's helper rules, so it also names `Array::NewSpecific`, `Object::New` and `Object::NewAllocSpecific`.
-   Checked against the test builds' PDB symbols it makes no wrong identification, on each build and on each build left out of the library. `build.py` skips the stage while the output comes from the same game files, Rewind build and library.
+   Checked against the test builds' PDB symbols it makes no wrong identification, on each build and on each build left out of the library. `build.py` skips the stage while the output comes from the same game files, Rewind build, library and `REWIND_*` variables (all but `REWIND_REPOSITORY`, `REWIND_THREADS` and `REWIND_UTF8_OUTPUT`, which change nothing it writes).
 2. `rip`: AssetRipper exports the game as a 2018.2 project into `work/rip-2018.2.19f1`. AssetRipper has no way to take recovered assemblies for an IL2CPP game, so it reads a Mono-layout copy of the game in `work/rip-input`: the game's data files, Rewind's assemblies in `Managed/` and an empty executable. The export then keeps the method bodies. That folder's path stays the same from run to run, since the export's `.meta` GUIDs depend on what AssetRipper loads. `build.py` skips the stage while the export comes from the same game files, recovered assemblies, AssetRipper and settings.
 3. `project`: assembles the Unity project in `work/t2d-2018.2.19f1-vita`. It runs the code stage (below), puts the rewritten assemblies and T2DCompat into `Assets/Plugins` with the exported assemblies' `.meta` files, and applies the asset rules (`asset_rules.py`).
 4. `build`: the editor-free builder (`tools/builder`, from Butcher's port) writes the PS Vita player into `builds/t2d-2018.2.19f1-vita`: the player's data, the code module from UnityLinker and IL2CPP, and the files Unity's build copies. It writes `builds/t2d-2018.2.19f1-vita.incomplete` before its first write and removes it when the player is whole; while it is there, `package` and `vita.py`'s `install`, `sync` and `seed` refuse the folder, since a build that stopped at IL2CPP leaves the new data beside the last code module.
@@ -198,7 +198,7 @@ The list is `BUILD_SWITCHES` in `tools/downgrade/common.py`:
 
 ## Where it stands
 
-As of 2026-11-20 on the Steam release, `uv run build.py` makes a VPK that boots and plays on the console ([On the console](#on-the-console)), with Rewind from the fork at `ac9e2ce`.
+As of 2026-11-20 on the Steam release, `uv run build.py` makes a VPK that boots and plays on the console ([On the console](#on-the-console)), with Rewind from the fork at `39afe89`.
 The game has been playtested by hand on the console: it plays at about 60 fps, all 19 levels load and play, a level's end saves the story's progress, and story mode, arcade mode, the menus and the achievements work.
 The briefings, the controls tutorials, the restarts and the attract demos no longer freeze ([textures.md](textures.md#story-mode-and-restarts), [Fades that wait](textures.md#fades-that-wait)).
 Left: an occasional single frame of about 200 ms when a level draws an image its scene doesn't hold, and a briefing skipped early that waits a few seconds behind the fade while the level loads.
@@ -207,7 +207,7 @@ The 3 gap methods left still throw when they reach a marker, all on paths the po
 | Stage | Time | Result |
 | --- | --- | --- |
 | Setup, from nothing | 12 min | Every doctor check passes. 2.8 GB in `tools/external`. A rerun with everything in place takes seconds. |
-| `recover` | 33 s | 44 assemblies, 16 MB. Rewind, the fork at `ac9e2ce`, identifies 59 kinds of runtime function with the 6000.0.60f1 library and recovers 15,734 of 18,368 native bodies completely (by its own count). |
+| `recover` | 33 s | 44 assemblies, 16 MB. Rewind, the fork at `39afe89`, identifies 59 kinds of runtime function with the 6000.0.60f1 library and recovers 15,734 of 18,368 native bodies completely (by its own count). |
 | `rip` | 9 to 29 s | 1,005 assets; the Mono-layout copy is 0.6 GB, the export 0.6 GB. |
 | `code` | 4 s | Runs through: 0 problems from the rewriter, no repair errors or warnings, 3 gap methods with 135 marker sites in `Recovered.T2D` (below). |
 | `project` | 41 s | `work/t2d-2018.2.19f1-vita`, 0.6 GB; most of the time is the atlas repack (106 pages). |
