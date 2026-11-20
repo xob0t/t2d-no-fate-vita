@@ -131,14 +131,8 @@ def main():
     setup = [sys.executable, ROOT / 'tools' / 'setup.py', '--then-build']
     setup += ['--game', args.game] if args.game else []
     setup += ['--vita-sdk', args.vita_sdk] if args.vita_sdk else []
-    if args.locked or os.environ.get('T2D_LOCK'):
-        # Setup under the build lock too: two builds' setups both cloned or checked out Rewind's checkout, and a
-        # setup changed it under another job's pipeline.
-        if args.locked and not args.skip_setup and not args.dry_run:
-            run(f'setup stopped. {RETRY}', setup)
-        build(args)
-        return
-
+    # First: a dry run runs nothing, also in a shell that holds the build lock (T2D_LOCK), where build() would run
+    # the stages (before Nov 2026 it did).
     if args.dry_run:
         print('under the vita-build lock:')
         if not args.skip_setup:
@@ -146,6 +140,14 @@ def main():
         for stage, arguments, output in plan(args):
             print(f'  {stage:8} uv run tools/downgrade/pipeline.py {" ".join(map(str, arguments))}  ->  {output}')
         return
+    if args.locked or os.environ.get('T2D_LOCK'):
+        # Setup under the build lock too: two builds' setups both cloned or checked out Rewind's checkout, and a
+        # setup changed it under another job's pipeline.
+        if args.locked and not args.skip_setup:
+            run(f'setup stopped. {RETRY}', setup)
+        build(args)
+        return
+
     # Setup and the stages under one build lock, so no other job's pipeline runs between them. lock.py run waits for
     # the lock and releases it however build.py ends.
     rerun = [sys.executable, ROOT / 'build.py', '--locked', *sys.argv[1:]]
