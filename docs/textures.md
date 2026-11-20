@@ -188,9 +188,11 @@ What does it now, each a field that the probe's `-t2d-set` can turn off for a co
 - `PrefetchInFlight` (2) and `PrefetchDelayMs` (0.5 s): the prefetch's and the next App's loads wait in a queue, smallest first, and start a few at a time, so a synchronous load on the main thread (the briefing's music) waits behind few.
 - `SoundLoads.HoldForPages`: the sound loader starts no clip load while pages load (`Atlas.Busy`, joined in `Probe.Install`). At boot a 2 MB page's integration took one ~200 ms frame while the clips loaded, and 40 ms after.
 - `WarmAll`: every wanted page not drawn yet gets its invisible draw, not only the prefetch's, `WarmDelayMs` (0.5 s) after a Switch so that the scene's own first draws come first. A page from `Resources.Load` is warmed only under a transition's cover (its first draw reads the texels, about 80 ms a MB).
-- `CoverMs` (0.3 s): `Transition.getApp` makes the next App while the fade covers the screen, so for that long after an App's Enter, and a level's after a briefing, its own pages still waiting are warmed all at once, unpaced, and still-loading ones are waited for. Pages over `WarmBigBytes` (8 MB; with tiles, none) warm only then.
-- `CoverWarmBytes` (16 MB): under the cover, at most that much is warmed (and waited for) in one flush, the first page whatever its size; the rest go on at the usual pace. A briefing skipped early left the level's whole scene to one flush. 0 lifts the limit.
+- `CoverMs` (0.3 s): `Transition.getApp` makes the next App while the fade covers the screen, so for that long after an App's Enter, and a level's after a briefing, its own pages still waiting are warmed all at once, unpaced. Pages over `WarmBigBytes` (8 MB; with tiles, none) warm only then. `CoverWaits` (off) also waits for pages still loading there; see [Story mode and restarts](#story-mode-and-restarts).
+- `CoverWarmBytes` (16 MB): under the cover, at most that much is warmed in one flush, the first page whatever its size; the rest go on at the usual pace. A briefing skipped early left the level's whole scene to one flush. 0 lifts the limit.
 - A page a miss loaded stays wanted until the next Switch: with CDRAM full, evictions made the Factory load p007, p043 and p065 again every few frames.
+- `StickyMisses` (2): a page a miss loaded that many times stays loaded like the sticky fonts, at most `StickyMissMax` (6) of them. The scene data lacks p076 and p083, which nearly every scene draws, and each scene loaded them again in a 200 ms frame.
+- `AheadIfApps`, `LevelKeep`, `FirstPages` and `SwitchQueues`: [Story mode and restarts](#story-mode-and-restarts).
 - `SlowFrameMs` (100): a frame longer than that logs what the atlas did in it and in the frame before: Switches, loads with their time, waits, finished loads, first draws (`sync` or `async`) and warm draws, and the free memory (`T2D atlas: slow frame ...`).
 
 Measured from boot to a minute of play through the arcade briefing with `-t2d-heartbeat 5 -t2d-stalls 100` and no screenshots but one at 95 s (`work/runs/hitch/run.sh`; the level-select list's 4 and 2, arcade 5). Before is the code before these changes (`b4s4`, `b5a5`, `b5s2`, with `-t2d-stalls 500` and screenshots from 70 s, so the level's worst frames there are screenshots), after is `f6s4`, `f6a5`, `f6s2` (screenshots of `m5s4` and `m5s2` checked the tiles). Times are the worst frame of each part, in ms; after, the Attract's and the briefing's first frames did no atlas work (`slow frame ... [switch app:Attract 0 ms]`, nothing loading): that is the game's own start of them.
@@ -207,6 +209,35 @@ Measured from boot to a minute of play through the arcade briefing with `-t2d-he
 What is left over 100 ms: the Attract's and the briefing's own first frames, frames of 110 to 220 ms in the attract around 23 to 25 s, when the clips finish loading, the level's first frame under the fade (136 to 197 ms), and the Factory's three misses, pages the scene data lacks. At boot the splash's frames after the first stay under 150 ms; with `AsyncSwitch` on its Switch too, one of them took 0.7 to 2 s (`m5s4`).
 Tiles cost draws: the Factory runs 38 to 64 SpriteBatch runs a frame (86 at most) against 8 to 35 (55), Future War 2 18 to 21 against 7 to 9; frame time stays where it was.
 Memory is the same bytes in more textures; with tiles the player puts more of a level in CDRAM, as the big layers no longer need 32 MB in one piece (Future War 2: CDRAM 12.5 MB free instead of 38.5, main memory 188 MB instead of 162).
+
+### Story mode and restarts
+
+A playtest of story mode (`work/runs/playtest2`) found the loads still froze, every time:
+
+- The controls tutorial (`LevelControls`), which story mode shows between a level's briefing and the level when `Game.showTutorials` is on, loaded its 10 pages at its Enter, and the cover warmed them in one flush: 1.0 to 1.6 s, on all six levels played.
+- After a death, the continue screen unloaded the level's pages, and the restart loaded the level's whole scene again: its first frames took 2.6 to 6 s.
+- 3 s into a briefing, its level's portrait, a page of the level's scene, waited for the prefetch: 350 to 430 ms.
+
+What makes a frame slow is a page drawn before its `LoadAsync` is done: its texels are then read at the draw, about 100 ms a MB, as the loading thread reads them (about 8 MB/s; a 2 MB page is done 230 to 290 ms after it starts). Waiting for one request also completes every request started before it.
+
+- `AheadIfApps`: an App followed by another only sometimes loads the next one's pages ahead when a bool field of the App and a static bool are both true at `AheadDelayMs`, read by reflection. `MissionBriefing.start` sets `forceControlsExplanation` for the levels that show the tutorial, so the briefing loads the tutorial's pages when that and `Game.showTutorials` are true, ahead of the level's pages still waiting.
+- `LevelKeep`: the continue screen keeps the level's pages, and the restart's Enter only lets the continue screen's go.
+- `FirstPages`: the briefing's `previewImage` (its frames' pages, `BitmapData.texpack_tex`) goes first in its loads.
+- `CoverWaits` (off): the cover warms only pages that are loaded, and no longer waits for those still loading.
+- `SwitchQueues` (on): a Switch queues the scenes' own pages first among the background loads, `PrefetchInFlight` at a time, rather than starting them all; `Get` waits only for those the scene draws.
+
+Measured on the console, story mode from the briefing after 5 s, then a death (`-t2d-invoke ...Game::changeState::3`) and a continue (`work/runs/loadanim/story.sh`; before is `base2` and the playtest, after `fix2`, `fix3h`, `fix5`), worst frames in ms:
+
+| | Before | After |
+| --- | --- | --- |
+| Briefing after its start | 350 to 430 at about 3 s (playtest, Truck Chase, Hospital, Cyberdyne HQ) | none over 100 (Biker Bar, Hospital) |
+| Controls tutorial's Enter | 1282 (Biker Bar); 999 to 1645 in the playtest | none over 100 |
+| Level's first frames | 186 (Biker Bar) | 159 to 174 (Biker Bar), 161 and 196 (Hospital, a p083 miss) |
+| Continue screen's Enter | 248 + 383 | 545, or 283 + 500 |
+| Restart after the continue | 414 + 1510 (Biker Bar); 2577 to 6033 in the playtest | 241 (Biker Bar), 232 + 217 (Hospital) |
+
+A briefing skipped before its prefetch ends still freezes the level's start: the Factory's first frame draws about 20 pages (40 MB) itself. With `SwitchQueues` its second frame took 3984 ms with 50 MB still to load (`skipB`), against 4082 with 44 MB (`skipC`, `SwitchQueues=false`) and 5767 with 62 MB (`skipA`, before).
+The continue screen's own 3 pages still load at its Enter, while the game-over sting plays.
 
 
 ## The rules
