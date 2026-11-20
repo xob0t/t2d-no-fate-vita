@@ -198,7 +198,7 @@ The list is `BUILD_SWITCHES` in `tools/downgrade/common.py`:
 
 ## Where it stands
 
-As of 2026-11-20 on the Steam release, `uv run build.py` makes a VPK that boots and plays on the console ([On the console](#on-the-console)), with Rewind from the fork at `86258fc`.
+As of 2026-11-20 on the Steam release, `uv run build.py` makes a VPK that boots and plays on the console ([On the console](#on-the-console)), with Rewind from the fork at `ac9e2ce`.
 The game has been playtested by hand on the console: it plays at about 60 fps, all 19 levels load and play, a level's end saves the story's progress, and story mode, arcade mode, the menus and the achievements work.
 The briefings, the controls tutorials, the restarts and the attract demos no longer freeze ([textures.md](textures.md#story-mode-and-restarts), [Fades that wait](textures.md#fades-that-wait)).
 Left: an occasional single frame of about 200 ms when a level draws an image its scene doesn't hold, and a briefing skipped early that waits a few seconds behind the fade while the level loads.
@@ -207,7 +207,7 @@ The 3 gap methods left still throw when they reach a marker, all on paths the po
 | Stage | Time | Result |
 | --- | --- | --- |
 | Setup, from nothing | 12 min | Every doctor check passes. 2.8 GB in `tools/external`. A rerun with everything in place takes seconds. |
-| `recover` | 33 s | 44 assemblies, 16 MB. Rewind, the fork at `86258fc`, identifies 59 kinds of runtime function with the 6000.0.60f1 library and recovers 15,736 of 18,368 native bodies completely (by its own count). |
+| `recover` | 33 s | 44 assemblies, 16 MB. Rewind, the fork at `ac9e2ce`, identifies 59 kinds of runtime function with the 6000.0.60f1 library and recovers 15,734 of 18,368 native bodies completely (by its own count). |
 | `rip` | 9 to 29 s | 1,005 assets; the Mono-layout copy is 0.6 GB, the export 0.6 GB. |
 | `code` | 4 s | Runs through: 0 problems from the rewriter, no repair errors or warnings, 3 gap methods with 135 marker sites in `Recovered.T2D` (below). |
 | `project` | 41 s | `work/t2d-2018.2.19f1-vita`, 0.6 GB; most of the time is the atlas repack (106 pages). |
@@ -280,6 +280,7 @@ The blockers met on the way, in order:
 | A 5.1 s frame entering Future War 1 | the level load | performance | the briefing prefetches the level's pages with `LoadAsync`: the worst frame of the Enter is 0.16 s (`b2a0`) |
 | The level-select list wasn't reachable on a new save, so most story levels couldn't be tried | the probe | test | `-t2d-set` writes int arrays: `Game.levelIDs` and `Game.mode = 5` at the briefing ([levels](#levels)) |
 | Cyberdyne Factory's first frame never ended; a `T2D_TRACE` run put the main thread in `Script.drawParallaxTiled` with no method entered for 90 s | `Script.drawParallaxTiled` (also Future War 2 to 4, the attract demos) | Rewind (issue 31) | `rules/Scripts.cs`: the culled tiles' loop counter |
+| Future War 3 hung after its first boss: the camera rose a screen, then nothing but the music (playtest). A `T2D_TRACE` run put a `NullReferenceException` in `FW3Boss2ndPhase.start`, the left leg null; `FutureWar3.setupScene(1)` stopped half done and every frame after threw | `FW3Boss2ndPhase.start` | Rewind (issue 34) | the fork's change 36: an allocation a merge copied before its constructor stays raw; the second phase, its death and the story's ending cutscene run (`fw3f1`) |
 | The prefetch's `LoadAsync` pages skipped the budget, and the player filled CDRAM to its last 0.5 MB | `Atlas.Switch` | atlas | the prefetch evicts and counts its loads, and a ballast render texture keeps 8 MB of CDRAM while pages wait for their first draw |
 
 With Rewind patches 0001 to 0031 and these rules the code stage leaves 69 gap methods with 405 marker sites; the rules for the main menu and Future War 1 (docs/repairs.md) take that to 50 methods with 319 sites, and Rewind patch 0032 with the issue 30 rule to 43 methods with 301 sites; the rules for the tutorial and Desert Town to 39 with 289; the rules for the later levels and menus ([repairs](repairs.md#the-later-levels-and-the-menus-after-them)) to 3 with 135, all on paths the port doesn't take: `SaveStats.saveStats` (119, the Xbox and UWP writers), `Runtime.eq` (9, the Decimal compare) and `HighscoreTable.draw` (7, the Steam leaderboard rows).
@@ -327,7 +328,7 @@ Runs are SpriteBatch's draws a frame, switches the runs that change texture; the
 | L10/18 Future War 3, story (18) | `b9s18` | yes | yes | | | 16.7 / 17.2-17.5 | 59.1-60.3 | 11.0-17.2 (22) | 9.0-15.2 | 74 MB, 32 in main memory | 38.5 MB | 162 MB |
 | Attract demos (menu left idle; maps 10, 12) | `idle1`, `idle2t`, `idle3` | yes | yes | 190 MB of pages at the Enter: a 19 s frame, CDRAM 0.5 MB, main memory 55 MB; then every flush threw and the menu ran at 30 fps | `LazyScenes`, then a scene per demo map that the idle menu loads ahead ([textures](textures.md#fades-that-wait)); the flush skips a released texture and always empties its queue | 16.7 / - (worst 7.1 s and 3.3 s, the first frames of each demo; 158 ms after the per-map scenes, `s5-idle1`) | 57-60 after the first seconds | | | 82-100 MB (map 10), 44-60 MB (map 12) | 4.5-26.5 MB | 162-194 MB |
 
-Infinite mode (level 48) and boss rush weren't tried; story mode's cutscenes between levels were tried only up to Desert Town (the levels here start from their briefing).
+Infinite mode (level 48) and boss rush weren't tried; story mode's cutscenes between levels were tried only up to Desert Town (the levels here start from their briefing), and its end after Future War 3 with the probe killing both boss phases (`fw3f1`, `fw3f2`: the story's ending cutscene and the credits).
 None of the levels threw an exception in its minute; the runs before `b3s0` are on builds without the ballast.
 
 - The briefing prefetches the level's pages, so no level's Enter stalls: the level switch takes 0 ms, and the worst frame of an Enter was 0.18 s (Cyberdyne Factory); Future War 1's 5.1 s frame is gone.
