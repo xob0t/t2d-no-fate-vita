@@ -186,6 +186,9 @@ def load_rgba(path):
         return np.ascontiguousarray(np.asarray(img.convert('RGBA'))[::-1])
 
 
+CACHE_USE = {'cache': 0, 'encoded': 0}  # pixels()'s calls by where the data came from, for build.py's line
+
+
 def pixels(path, settings, fmt, rgba, mips=1):
     """The image data Unity stores for one texture, its mip levels one after another (cached under
     work/builder/textures)."""
@@ -194,7 +197,9 @@ def pixels(path, settings, fmt, rgba, mips=1):
     key = hashlib.sha1(path.read_bytes() + repr(recipe).encode())
     cached = CACHE / f'{key.hexdigest()}.bin'
     if cached.exists():
+        CACHE_USE['cache'] += 1
         return cached.read_bytes()
+    CACHE_USE['encoded'] += 1
     if fmt in COMPRESSED and mips > 1:
         raise NotImplementedError(f'{path.name}: mipmaps of a compressed texture')
     if settings.get('alphaIsTransparency') == '1':

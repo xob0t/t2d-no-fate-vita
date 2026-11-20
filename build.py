@@ -19,6 +19,7 @@ import argparse
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -28,7 +29,18 @@ from common import TARGET, WORK, default_game, registry_env  # noqa: E402
 
 PIPELINE = ROOT / 'tools' / 'downgrade' / 'pipeline.py'
 LOCK = ROOT / 'tools' / 'downgrade' / 'lock.py'
-STAGES = ('recover', 'rip', 'project', 'build', 'package')
+# code is no stage of its own here: project runs it (pipeline.assembly_overlay); --from code starts at project.
+STAGES = ('recover', 'rip', 'code', 'project', 'build', 'package')
+# What each stage does, its steps in order (the progress lines name them as they run), for --dry-run.
+STEPS = {
+    'setup': 'installs what is missing, checks the rest',
+    'recover': 'Rewind decompiles GameAssembly.dll',
+    'rip': 'copies the game into the Mono layout; AssetRipper loads it and exports the project',
+    'project': 'code (compiles the C# tools, rewrites the assemblies); the asset rules (the atlas repack); the sync',
+    'build': 'reads the project; the data files (audio, textures, shaders); the code module (UnityLinker, IL2CPP: '
+    'C++ conversion, psp2snc, psp2ld)',
+    'package': 'the LiveArea art; the VPK',
+}
 RETRY = 'Fix what it says above and run uv run build.py again: it picks up where it stopped.'
 # lock.py run's exit code when the lock stayed held.
 LOCK_NOT_TAKEN = 75
@@ -45,11 +57,32 @@ def environment():
     return env
 
 
-def run(failed, command, env=None):
-    """Run a command; stop with failed (what to tell the user) when it fails."""
+def run(failed, command, env=None, times=None, stage=None):
+    """Run a command; stop with failed (what to tell the user) when it fails. times: {stage: seconds, a note,
+    or ('failed', seconds)}, the summary's, which gets the command's time under stage (and is shown when it
+    fails)."""
+    started = time.monotonic()
     code = subprocess.run([str(c) for c in command], env=env or environment(), check=False).returncode
+    seconds = time.monotonic() - started
+    if times is not None:
+        times[stage] = seconds if not code else ('failed', seconds)
     if code:
-        progress.fail(f'\nbuild.py: {failed} (exit code {code}).')
+        if times:
+            summary(times)
+        progress.fail(f'\nbuild.py: {failed} (exit code {code}, after {progress.duration(seconds)}).')
+
+
+def summary(times):
+    """The stages' times, the skipped ones with why."""
+    progress.console.print('\nStages:')
+    for stage in sorted(times, key=('setup', *STAGES).index):
+        value = times[stage]
+        if isinstance(value, tuple):
+            value = f'failed after {progress.duration(value[1])}'
+        shown = progress.duration(value) if isinstance(value, float) else value
+        progress.console.print(f'  {stage:8} {shown}')
+    total = sum(v[1] if isinstance(v, tuple) else v for v in times.values() if not isinstance(v, str))
+    progress.console.print(f'  {"total":8} {progress.duration(total)}')
 
 
 def plan(args):
@@ -65,6 +98,21 @@ def plan(args):
     steps.append(('package', ['package', *game], f'builds/t2d-{TARGET}-vita.vpk'))
     first = STAGES.index(args.start)
     return [step for step in steps if STAGES.index(step[0]) >= first]
+
+
+def skipped(args):
+    """{stage: why} for the stages plan() leaves out, in order, and code (which project runs)."""
+    out = {}
+    for stage in ('recover', 'rip'):
+        if STAGES.index(stage) < STAGES.index(args.start):
+            out[stage] = 'skipped: before --from ' + args.start
+        elif stage == 'recover' and recover_current(args):
+            out[stage] = "skipped: current (Rewind's output is from this game, Rewind and signatures)"
+        elif stage == 'rip' and rip_current(args):
+            out[stage] = 'skipped: current (the export is from this game, recovered code and AssetRipper)'
+    if STAGES.index(args.start) <= STAGES.index('project'):
+        out['code'] = 'runs in project'
+    return out
 
 
 def recover_current(args):
@@ -92,18 +140,42 @@ def rip_current(args):
     return pipeline.rip_is_current(game, WORK / f'rip-{TARGET}', TARGET)
 
 
-def build(args):
-    """The pipeline's stages, in this process, under the build lock."""
+def build(args, times=None):
+    """The pipeline's stages, in this process, under the build lock. times: the summary's so far (setup's)."""
     steps = plan(args)
     if not steps:
         progress.done('Nothing to run from that stage.')
         return
+    times = {**(times or {}), **skipped(args)}
+    for stage, why in times.items():
+        if str(why).startswith('skipped: current'):
+            progress.console.print(f'\nbuild.py: {stage} {why}')
     env = environment()
-    for stage, arguments, output in steps:
-        progress.console.print(f'\nbuild.py: pipeline.py {" ".join(map(str, arguments))}  ->  {output}')
-        run(f'pipeline.py {stage} failed. {RETRY}', [sys.executable, PIPELINE, *arguments], env)
+    for number, (stage, arguments, output) in enumerate(steps, 1):
+        progress.console.print(
+            f'\nbuild.py: pipeline.py {" ".join(map(str, arguments))}  ->  {output}  (stage {number} of {len(steps)})'
+        )
+        run(f'pipeline.py {stage} failed. {RETRY}', [sys.executable, PIPELINE, *arguments], env, times, stage)
+    summary(times)
     made = [ROOT / output for _, _, output in steps if output.startswith('builds/')]
     progress.done('\nDone:\n' + '\n'.join(f'  {path}' for path in made))
+
+
+def dry_run(args, setup):
+    """Every stage with what it does, the skipped ones with why."""
+    print('under the vita-build lock:')
+    if not args.skip_setup:
+        print('  setup    ' + ' '.join(map(str, ['uv run tools/setup.py', *setup[2:]])))
+        print(f'           {STEPS["setup"]}')
+    steps = {stage: (arguments, output) for stage, arguments, output in plan(args)}
+    left_out = skipped(args)
+    for stage in STAGES:
+        if stage in steps:
+            arguments, output = steps[stage]
+            print(f'  {stage:8} uv run tools/downgrade/pipeline.py {" ".join(map(str, arguments))}  ->  {output}')
+            print(f'           {STEPS[stage]}')
+        elif stage in left_out:
+            print(f'  {stage:8} {left_out[stage]}')
 
 
 def main():
@@ -134,18 +206,15 @@ def main():
     # First: a dry run runs nothing, also in a shell that holds the build lock (T2D_LOCK), where build() would run
     # the stages (before Nov 2026 it did).
     if args.dry_run:
-        print('under the vita-build lock:')
-        if not args.skip_setup:
-            print('  setup    ' + ' '.join(map(str, ['uv run tools/setup.py', *setup[2:]])))
-        for stage, arguments, output in plan(args):
-            print(f'  {stage:8} uv run tools/downgrade/pipeline.py {" ".join(map(str, arguments))}  ->  {output}')
+        dry_run(args, setup)
         return
     if args.locked or os.environ.get('T2D_LOCK'):
         # Setup under the build lock too: two builds' setups both cloned or checked out Rewind's checkout, and a
         # setup changed it under another job's pipeline.
+        times = {}
         if args.locked and not args.skip_setup:
-            run(f'setup stopped. {RETRY}', setup)
-        build(args)
+            run(f'setup stopped. {RETRY}', setup, times=times, stage='setup')
+        build(args, times)
         return
 
     # Setup and the stages under one build lock, so no other job's pipeline runs between them. lock.py run waits for

@@ -11,9 +11,10 @@ and artifacts/downgrade/atlas (report.json, memory.md).
 import hashlib
 import os
 import struct
-import subprocess
 import sys
 from pathlib import Path
+
+import progress  # tools/downgrade's: the pipeline imports this module
 
 HERE = Path(__file__).resolve().parent
 RESOURCES = Path('Assets') / 'Resources'
@@ -46,7 +47,6 @@ def atlas_overlay(exported: Path, assembly: Path, work: Path, report: Path, page
     stamp = work / STAMP
     current = _stamp(assembly, packs, page, raw)
     if not (stamp.exists() and stamp.read_text() == current and _missing(out, raw) == []):
-        log('Repacking the texture packs into pages (tools/downgrade/atlas/repack.py)')
         command = [
             sys.executable,
             '-I',
@@ -65,10 +65,12 @@ def atlas_overlay(exported: Path, assembly: Path, work: Path, report: Path, page
         # The stamp goes first: a repack cut off part way leaves some files new and some old, which the old stamp would
         # otherwise vouch for once the inputs are back to what it names.
         stamp.unlink(missing_ok=True)
-        code = subprocess.run(command, check=False).returncode
-        if code:
-            sys.exit(f'The texture repacker failed (exit code {code}); see {report / "report.json"}')
+        # Its output (what it has done, timed) goes to a log the step follows, not through the bars.
+        name = 'Repacking the texture packs into pages (atlas/repack.py)'
+        progress.run(name, command, report / 'repack.log', timed=True)
         stamp.write_text(current)
+    else:
+        progress.cached('Repacking the texture packs into pages', f'{out} is from the same packs and code')
     # A .part is a file repack.py was writing when it was stopped (write_if_changed), not one of its files.
     overlay = {RESOURCES / 'atlas' / f.name: f for f in sorted(out.iterdir()) if f.is_file() and f.suffix != '.part'}
     if not raw and tile:

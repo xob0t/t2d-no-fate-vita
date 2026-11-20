@@ -90,7 +90,7 @@ Items marked `optional` don't stop a build: Mono.Cecil (fetched on first use), t
 
 ```powershell
 uv run build.py                       # the PS Vita app
-uv run build.py --dry-run             # print the setup command and the stages, run nothing
+uv run build.py --dry-run             # list setup and the stages with their steps, run nothing
 ```
 
 `build.py` runs `tools/setup.py`, then these stages of `tools/downgrade/pipeline.py`:
@@ -106,14 +106,21 @@ uv run build.py --dry-run             # print the setup command and the stages, 
 `build.py` holds the `vita-build` lock from `tools/downgrade/lock.py` for the whole run, setup included; `tools/setup.py` run alone takes it too while it changes `tools/external` (not with `--dry-run`), so two setups never update Rewind's checkout at once, nor one under a running pipeline.
 If another job runs the pipeline, it waits.
 
+While it runs, each step that takes a while shows a line with a spinner, its name, what it is on and its time, with a bar where it counts something (the files mirrored, the assets exported, the data files, the shaders compiled, the MB packed); IL2CPP counts the C++ files it has written and the objects psp2snc has compiled. The bars show only on an interactive terminal. What stays, also in a redirected output:
+
+- the steps a build is made of, each with what it counted and its time (`Rewriting the game's assemblies  2.6 s`, `IL2CPP  1 min 30 s`);
+- a line for each step skipped because its output is there from the same inputs (`Repacking the texture packs into pages  skipped: ...`), and the stages `build.py` skips (`recover skipped: current ...`);
+- `Failed in: <step> (after <time>)` above the error when a step fails;
+- at the end, or when a stage fails, `Stages:` with each stage's time, the skipped ones and the total.
+
 | Option | Effect |
 | --- | --- |
 | `--game <folder>` | The game's folder, if it isn't in Steam's default folder. Setup saves it in `T2D_GAME`. |
 | `--vita-sdk <path>` | Passed to setup. |
 | `--skip-setup` | Go straight to the pipeline. |
-| `--from <stage>` | Start at `recover`, `rip`, `project`, `build` or `package`, when the earlier stages are done. |
+| `--from <stage>` | Start at `recover`, `rip`, `code`, `project`, `build` or `package`, when the earlier stages are done. `project` runs the code stage, so `--from code` starts there. |
 | `--wait <seconds>` | How long to wait for the build lock. The default is 6 hours. |
-| `--dry-run` | Print the setup command and the stages, and run nothing. |
+| `--dry-run` | List setup and every stage with its steps (the skipped ones with why), and run nothing. |
 
 ### Running the stages one at a time
 

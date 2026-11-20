@@ -26,6 +26,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 from rich.console import Console
@@ -108,6 +109,11 @@ class Step:
     def advance(self, n=1):
         self.progress.advance(self.task, n)
 
+    def more(self, n):
+        """n more items to the total (no total yet: n), for a step whose parts each count their own."""
+        total = next(t for t in self.progress.tasks if t.id == self.task).total
+        self.progress.update(self.task, total=(total or 0) + n)
+
     def update(self, completed, total=None):
         self.progress.update(self.task, completed=completed, **({} if total is None else {'total': total}))
 
@@ -117,11 +123,13 @@ class Step:
 
 
 @contextlib.contextmanager
-def step(name, total=None, eta=False, count='items'):
+def step(name, total=None, eta=False, count='items', timed=False):
     """A bar for the block (a spinner without a total), removed when it ends. Yields a Step. eta:
     show the time left, for steps whose items take about as long as each other. count: what the bar
     shows it has done: 'items' (done/total), 'MB' (it counts bytes), or None (the total is a measure
-    of the work, as the audio's frames)."""
+    of the work, as the audio's frames). timed: leave a line with the step's name, count and time when
+    it ends, for the steps a build is made of (not one per file). A step that fails says so, with its
+    time, whether timed or not: the innermost one, the step the build stopped in."""
     with display():
         p = _progress
         task = p.add_task(escape(name), total=total, eta=eta, count=count)
@@ -129,27 +137,78 @@ def step(name, total=None, eta=False, count='items'):
         # comes later, as following()'s with a pattern, starts its samples over then.)
         if eta:
             p.advance(task, 0)
+        started = time.monotonic()
         try:
             yield Step(p, task, escape(name))
+        except BaseException as error:
+            if _failure(error) and not getattr(error, 'progress_step', None):
+                error.progress_step = name  # the outer steps leave it to this one
+                failed_in(name, time.monotonic() - started)
+            raise
+        else:
+            if timed:
+                finished(name, time.monotonic() - started, _done(next(t for t in p.tasks if t.id == task)))
         finally:
             p.remove_task(task)
 
 
-def track(items, name):
+def _failure(error):
+    """Whether an exception leaving a step stops the build with an error (not Ctrl+C, nor sys.exit(0))."""
+    if isinstance(error, (KeyboardInterrupt, GeneratorExit)):
+        return False
+    return not isinstance(error, SystemExit) or error.code not in (None, 0)
+
+
+def _done(task):
+    """What a finished step did, as its bar counted it: '161/161', '334 MB', or ''."""
+    count = task.fields.get('count')
+    if count == 'MB':
+        return f'{task.completed / 2**20:.0f} MB'
+    if count == 'items' and task.total is not None:
+        return f'{task.completed:.0f}/{task.total:.0f}'
+    return ''
+
+
+def duration(seconds):
+    """'4.2 s', '2 min 41 s'."""
+    if seconds < 60:
+        return f'{seconds:.1f} s'
+    minutes, seconds = divmod(round(seconds), 60)
+    return f'{minutes} min {seconds:02} s'
+
+
+def finished(name, seconds, what=''):
+    """The line a timed step leaves: its name, what it did, its time."""
+    what = (f'  {what}' if what else '', 'progress.download')
+    console.print(Text.assemble(name, what, (f'  {duration(seconds)}', 'dim')))
+
+
+def cached(name, why='its inputs have not changed'):
+    """The line for a step skipped because its output is there from the same inputs."""
+    console.print(Text.assemble(name, (f'  skipped: {why}', 'dim')))
+
+
+def failed_in(name, seconds):
+    errors.print(Text(f'Failed in: {name} (after {duration(seconds)})', 'bold red'))
+
+
+def track(items, name, timed=False):
     """The items (a list), with a step for them that advances as each is taken."""
-    with step(name, total=len(items)) as s:
+    with step(name, total=len(items), timed=timed) as s:
         for item in items:
             yield item
             s.advance()
 
 
 @contextlib.contextmanager
-def following(name, log, start=0, pattern=None):
+def following(name, log, start=0, pattern=None, status=None, timed=False):
     """A step called `name` for a block that waits on a tool writing `log`: its note is the last line
     the log has after byte `start`, read every POLL_SECONDS. pattern: a regular expression whose
     groups are the items done and their total, for a tool that logs them (AssetRipper's export); the
-    step then has a bar and the time left, and the note is the rest of the line."""
-    with step(name, eta=pattern is not None) as s:
+    step then has a bar and the time left, and the note is the rest of the line. status: a function
+    of that line giving the note instead, for a tool that logs little while it works (IL2CPP: what
+    it has written so far). timed: as step's."""
+    with step(name, eta=pattern is not None, timed=timed) as s:
         stop = threading.Event()
 
         def poll():
@@ -160,7 +219,7 @@ def following(name, log, start=0, pattern=None):
                     if found:
                         s.update(int(found[1]), int(found[2]))
                         line = line[found.end() :].strip()
-                    s.note(line)
+                    s.note(status(line) if status else line)
 
         thread = threading.Thread(target=poll, daemon=True)
         thread.start()
@@ -169,22 +228,33 @@ def following(name, log, start=0, pattern=None):
         finally:
             stop.set()
             thread.join()
+        if pattern:  # the count the tool got to, for the step's line: the last poll can miss its last items
+            with contextlib.suppress(OSError):
+                with open(log, 'rb') as f:
+                    f.seek(max(start, f.seek(0, os.SEEK_END) - 16 * TAIL_BYTES))
+                    lines = f.read().decode('utf-8', errors='replace').splitlines()
+                found = next(filter(None, (re.search(pattern, x.strip()) for x in reversed(lines))), None)
+                if found:
+                    s.update(int(found[1]), int(found[2]))
 
 
-def run(name, command, log, cwd=None, env=None, check=True):
+def run(name, command, log, cwd=None, env=None, check=True, timed=False, status=None):
     """Run a tool under a step called name: its command line, then its output (stdout and stderr), go to
     log, whose last line is the step's note. check: stop on a failure, with the log's last lines.
-    Returns the exit code."""
+    timed: as step's; status: as following()'s. Returns the exit code."""
     log = Path(log)
     log.parent.mkdir(parents=True, exist_ok=True)
     command = [str(c) for c in command]
     with open(log, 'w', encoding='utf-8', errors='replace') as out:
         out.write(subprocess.list2cmdline(command) + '\n\n')
         out.flush()
-        with following(name, log, start=out.tell()):
+        started = time.monotonic()
+        with following(name, log, start=out.tell(), status=status):
             code = subprocess.run(
                 command, cwd=cwd, env=env, stdout=out, stderr=subprocess.STDOUT, check=False
             ).returncode
+    if timed and not (code and check):
+        finished(name, time.monotonic() - started, f'exit code {code}' if code else '')
     if code and check:
         tail = log.read_text(encoding='utf-8', errors='replace').splitlines()[-15:]
         fail(f'{name} failed (exit code {code}); the end of {log}:\n' + '\n'.join(tail))

@@ -27,6 +27,7 @@ from pathlib import Path
 import io
 import sys
 
+import progress
 from common import STEAM_APP_ID, TARGET, WORK, log
 from PIL import Image
 
@@ -166,6 +167,7 @@ def generate(force=False):
     marker = OUT / 'stamp.txt'
     current = stamp(sources, inputs)
     if not force and marker.exists() and marker.read_text() == current and all((OUT / f).exists() for f in FILES):
+        progress.cached('LiveArea art', f'{OUT} is from the same images')
         return OUT
     for name, image in compose(sources, bubble).items():
         image.save(OUT / name, optimize=True)

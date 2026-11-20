@@ -473,14 +473,14 @@ def tool_env():
     return env
 
 
-def run(command, log, name, cwd=None):
+def run(command, log, name, cwd=None, status=None):
     """Run a tool, its output to a log file, under a step called `name` that shows the log's last
-    line; on failure show the log's tail."""
+    line (or status(line), as progress.following's); on failure show the log's tail."""
     start = time.time()
     with log.open('w', encoding='utf-8', errors='replace') as f:
         f.write(subprocess.list2cmdline([str(c) for c in command]) + '\n\n')
         f.flush()
-        with progress.following(name, log, start=log.stat().st_size):
+        with progress.following(name, log, start=log.stat().st_size, status=status, timed=True):
             result = subprocess.run(
                 [str(c) for c in command], cwd=cwd, env=tool_env(), stdout=f, stderr=subprocess.STDOUT, check=False
             )
@@ -488,6 +488,24 @@ def run(command, log, name, cwd=None):
         tail = log.read_text(encoding='utf-8', errors='replace').splitlines()[-30:]
         raise RuntimeError(f'{Path(command[0]).name} failed ({result.returncode}), see {log}:\n' + '\n'.join(tail))
     return time.time() - start
+
+
+def il2cpp_status(generated, cache, since):
+    """progress.following's note for IL2CPP, which logs nothing while it converts the assemblies to C++ and
+    while psp2snc compiles and psp2ld links: the C++ files written so far, the objects compiled into the cache."""
+
+    def status(line):
+        if not line:
+            return f'converting to C++: {sum(1 for _ in generated.rglob("*.cpp"))} files'
+        if line.startswith(('Building ', 'Output directory:', 'Cache directory:')):
+            # libil2cpp/ and globalcache/ hold most of them
+            compiled = sum(1 for p in cache.rglob('*.obj') if p.stat().st_mtime >= since)
+            return f'psp2snc: {compiled} objects compiled'
+        if line.startswith('Total compilation time:'):  # the last line before psp2ld's, about 10 s later
+            return 'psp2ld: linking'
+        return line
+
+    return status
 
 
 def digest(*parts):
@@ -519,34 +537,36 @@ def build(out=paths.OUT, project=paths.PROJECT, count=None, force=False, work=BU
     """Build the code module and copy what the code step writes into `out`. Returns a dict of timings."""
     times = {}
     start = time.time()
-    inputs = gather(project)
-    if count is None:
-        if not data_file_count(out):
-            print('warning: no data files under the output folder yet, so g_PSP2FileCount is too low; '
-                  'build the data first or pass --file-count')  # fmt: skip
-        count = file_count(out, inputs)
-    roots = inputs.roots(work / 'roots.json')
-    xmls = {
-        'methods.xml': methods_xml(project),
-        'modules.xml': MODULES_XML,
-        'types.xml': types_xml(roots),
-    }
-    appinfo = application_info(project, count)
-    times['inputs'] = time.time() - start
+    # To the stamp: the assemblies gathered and hashed, the XML files and ApplicationInfo written out.
+    with progress.step("Reading the code module's inputs"):
+        inputs = gather(project)
+        if count is None:
+            if not data_file_count(out):
+                print('warning: no data files under the output folder yet, so g_PSP2FileCount is too low; '
+                      'build the data first or pass --file-count')  # fmt: skip
+            count = file_count(out, inputs)
+        roots = inputs.roots(work / 'roots.json')
+        xmls = {
+            'methods.xml': methods_xml(project),
+            'modules.xml': MODULES_XML,
+            'types.xml': types_xml(roots),
+        }
+        appinfo = application_info(project, count)
+        times['inputs'] = time.time() - start
 
-    files = inputs.files()
-    stamp = digest(
-        *(f'{n}:{hashlib.sha256(p.read_bytes()).hexdigest()}' for n, p in sorted(files.items())),
-        *(xmls[n] for n in sorted(xmls)),
-        *(p.read_bytes() for p in project_link_xmls(project)),
-        appinfo,
-        tools_fingerprint(),
-    )
-    staging = work / 'StagingArea'
-    data, managed, native = staging / 'Data', staging / 'Data' / 'Managed', staging / 'Data' / 'Native'
-    generated = staging / 'il2cppOutput'
-    module = native / 'Il2CppAssemblies.suprx'
-    stamp_file = work / 'stamp.txt'
+        files = inputs.files()
+        stamp = digest(
+            *(f'{n}:{hashlib.sha256(p.read_bytes()).hexdigest()}' for n, p in sorted(files.items())),
+            *(xmls[n] for n in sorted(xmls)),
+            *(p.read_bytes() for p in project_link_xmls(project)),
+            appinfo,
+            tools_fingerprint(),
+        )
+        staging = work / 'StagingArea'
+        data, managed, native = staging / 'Data', staging / 'Data' / 'Managed', staging / 'Data' / 'Native'
+        generated = staging / 'il2cppOutput'
+        module = native / 'Il2CppAssemblies.suprx'
+        stamp_file = work / 'stamp.txt'
     fresh = (
         not force
         and stamp_file.exists()
@@ -554,7 +574,9 @@ def build(out=paths.OUT, project=paths.PROJECT, count=None, force=False, work=BU
         and module.exists()
         and (generated / 'Data' / 'Metadata' / 'global-metadata.dat').exists()
     )
-    if not fresh:
+    if fresh:
+        progress.cached('UnityLinker, IL2CPP and psp2snc', "the code module's inputs have not changed")
+    else:
         stamp_file.unlink(missing_ok=True)
         for d in (data, generated):
             if d.exists():
@@ -593,7 +615,9 @@ def build(out=paths.OUT, project=paths.PROJECT, count=None, force=False, work=BU
         cache.mkdir(parents=True, exist_ok=True)
         folder.write_text(str(work.resolve()), encoding='utf-8')
         command = il2cpp_command(inputs, roots, managed, module, generated, work / 'ApplicationInfo.o', cache)
-        times['il2cpp'] = run(command, work / 'il2cpp.log', 'IL2CPP', cwd=work)  # psp2ld writes its stub archive here
+        status = il2cpp_status(generated, cache, time.time() - 1)  # less 1 s: file times are coarser
+        # psp2ld writes its stub archive in work, the cwd.
+        times['il2cpp'] = run(command, work / 'il2cpp.log', 'IL2CPP', cwd=work, status=status)
         stamp_file.write_text(stamp)
 
     sources = {

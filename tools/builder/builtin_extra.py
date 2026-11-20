@@ -34,7 +34,7 @@ import psp2cgc
 import shader_object as so
 import unityyaml
 from container import HeaderInfo, ObjectEntry, TypeEntry, write_serialized
-from paths import PROJECT
+from paths import PROJECT, progress
 from shader_blob import blob as assemble_blob
 from shaderlab import pragmas
 from UnityPy.helpers.TypeTreeHelper import write_typetree
@@ -280,7 +280,8 @@ def project_trees(build):
 def objects(build):
     """[(path ID, serialized bytes)] in write order; a path ID can repeat (the last one wins)."""
     builder = Builder(build.layout)
-    out = [(fid, serialize(builder.shader(fid))) for fid in builtin_shader_ids(build.layout)]
+    ids = list(builtin_shader_ids(build.layout))
+    out = [(fid, serialize(builder.shader(fid))) for fid in progress.track(ids, 'Built-in shaders')]
     builder.pool.shutdown()
     out += [(PROJECT_SHADER, serialize(tree)) for tree in project_trees(build)]
     return out

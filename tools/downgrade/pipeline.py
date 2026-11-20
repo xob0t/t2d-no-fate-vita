@@ -112,6 +112,12 @@ def recover_is_current(game: Path):
     return RECOVER_STAMP.exists() and RECOVER_STAMP.read_text(encoding='utf-8').strip() == recover_stamp(game)
 
 
+def rewind_status(line):
+    """The note while Rewind runs: its log's last line, but for the bodies, most of its time (50 s of 80), which it
+    logs only when done."""
+    return 'recovering the method bodies' if line.startswith('rebuilt ') else line
+
+
 def recover(game: Path):
     """Rewind's decompile of the game, assemblies only, into work/recover. Its log names the signature library
     and counts the bodies it recovered completely."""
@@ -131,6 +137,8 @@ def recover(game: Path):
         'Rewind: recovering the code',
         [REWIND_EXE, 'decompile', game, '-o', RECOVER, '--no-source', *signatures],
         log_path,
+        timed=True,
+        status=rewind_status,
     )
     missing = [name for name in GAME_ASSEMBLIES if not (RECOVERED / f'{name}.dll').exists()]
     if missing:
@@ -183,7 +191,7 @@ def rip_input(game: Path):
     source = game_data(game)
     overlay = {Path('Managed') / dll.name: dll for dll in RECOVERED.glob('*.dll')}
     excluded = {relative for relative in walk(source) if relative.parts[0] in RIP_INPUT_SKIPPED}
-    with progress.step('Copying the game into the Mono layout') as step:
+    with progress.step('Copying the game into the Mono layout', timed=True) as step:
         sync_tree(source, data, overlay, excluded, step=step)
     exe = RIP_INPUT / GAME_EXE
     if not exe.exists():
@@ -246,10 +254,12 @@ def rip(game: Path, out: Path, version: str):
                 with progress.step('Removing the last export'):
                     shutil.rmtree(out)
             log(f'Loading {folder}')
-            with progress.following('AssetRipper: loading', ARTIFACTS / 'assetripper.log'):
+            with progress.following('AssetRipper: loading', ARTIFACTS / 'assetripper.log', timed=True):
                 post(base, '/LoadFolder', {'path': str(folder)})
             log(f'Exporting to {out}')
-            with progress.following('AssetRipper: exporting', ARTIFACTS / 'assetripper.log', pattern=EXPORT_COUNT):
+            with progress.following(
+                'AssetRipper: exporting', ARTIFACTS / 'assetripper.log', pattern=EXPORT_COUNT, timed=True
+            ):
                 post(base, '/Export/UnityProject', {'path': str(out)})
             project_version = out / 'ExportedProject' / 'ProjectSettings' / 'ProjectVersion.txt'
             if not project_version.exists():
@@ -291,7 +301,7 @@ def engine_library(version, out: Path, sources, modules=(), defines=()):
     module and the given UnityEngine modules (e.g. 'AudioModule')."""
     paths = EditorPaths(version)
     bcl, engine = paths.bcl, paths.engine
-    compile_csharp(
+    return compile_csharp(
         [
             CSC,
             '/nologo',
@@ -312,7 +322,7 @@ def engine_library(version, out: Path, sources, modules=(), defines=()):
 
 def compile_csharp(command: list):
     """Run csc, unless its output is there from the same command line, sources and references
-    (<output>.stamp). The output is made reproducible (reproducible_assembly)."""
+    (<output>.stamp). The output is made reproducible (reproducible_assembly). Returns whether it compiled."""
     out = Path(next(str(arg)[len('/out:') :] for arg in command if str(arg).startswith('/out:')))
     digest = hashlib.sha256()
     for arg in map(str, command):
@@ -324,11 +334,12 @@ def compile_csharp(command: list):
             digest.update(f'{path.stat().st_size} {path.stat().st_mtime_ns}'.encode())
     stamp = out.with_name(out.name + '.stamp')
     if out.exists() and stamp.exists() and stamp.read_text() == digest.hexdigest():
-        return
+        return False
     stamp.unlink(missing_ok=True)
     run(f'Compiling {out.name}', command, f'csc-{out.stem}')
     reproducible_assembly(out)
     stamp.write_text(digest.hexdigest())
+    return True
 
 
 PRIVATE_DETAILS = b'<PrivateImplementationDetails>{'
@@ -457,10 +468,18 @@ def compile_tools(version, platform):
     compat = compat_path(platform)
     compat.parent.mkdir(parents=True, exist_ok=True)
     # T2D_VITA: for T2DCompat code that differs on the PS Vita's player.
-    engine_library(version, compat, compat_sources(), COMPAT_MODULES, ['T2D_VITA'] if platform == 'vita' else [])
+    compiled = {
+        compat.name: engine_library(
+            version, compat, compat_sources(), COMPAT_MODULES, ['T2D_VITA'] if platform == 'vita' else []
+        )
+    }
     rewriter = bin_dir / 'DowngradeAssemblies.exe'
-    compile_csharp([CSC, '/nologo', f'/r:{cecil}', f'/out:{rewriter}', *REWRITER_SOURCES])
-    compile_csharp([CSC, '/nologo', f'/r:{cecil}', f'/out:{bin_dir / "StubAssembly.exe"}', HERE / 'StubAssembly.cs'])
+    compiled[rewriter.name] = compile_csharp([CSC, '/nologo', f'/r:{cecil}', f'/out:{rewriter}', *REWRITER_SOURCES])
+    stub = bin_dir / 'StubAssembly.exe'
+    compiled[stub.name] = compile_csharp([CSC, '/nologo', f'/r:{cecil}', f'/out:{stub}', HERE / 'StubAssembly.cs'])
+    reused = [name for name, made in compiled.items() if not made]
+    if reused:
+        progress.cached(f'Compiling {", ".join(reused)}', 'the sources and references have not changed')
     paths = EditorPaths(version, platform)
     return compat, rewriter, [paths.bcl, paths.target_engine, paths.gui]
 
@@ -493,7 +512,7 @@ def rewrite_assemblies(recovered: Path, out: Path, version: str, platform: str, 
     switches = build_switches(platform, ('code',))
     log('Code switches: ' + describe_switches(switches))
     env = {**os.environ, **switches, 'T2D_API_VERSION': version}
-    code = progress.run("Rewriting the game's assemblies", command, log_path, env=env, check=False)
+    code = progress.run("Rewriting the game's assemblies", command, log_path, env=env, check=False, timed=True)
     output = log_path.read_text(encoding='utf-8', errors='replace')
     if code not in (0, 3, 4):
         sys.exit(f'The rewriter failed (exit code {code}); see {log_path}')
@@ -625,7 +644,7 @@ def sync_tree(source: Path, destination: Path, overlay: dict, excluded: set, kno
     Unchanged files keep their timestamps so an import cache stays valid between runs. A .meta
     file the editor generated (for a folder or file that has none in the source) stays, so its GUID
     doesn't change on every run. known: copy_if_changed's record, kept by the caller between runs.
-    step: a progress step, its bar set to the files to go through and advanced per file."""
+    step: a progress step, the files to go through added to its bar's total, advanced per file."""
     refuse_links(destination)
     if inside(destination, source) or inside(source, destination):
         raise SystemExit(f'{destination} and {source} overlap; the mirror would write into its own source.')
@@ -643,7 +662,7 @@ def sync_tree(source: Path, destination: Path, overlay: dict, excluded: set, kno
     wanted = set()
     files = walk(source)
     if step:
-        step.update(0, total=len(files) + len(overlay))
+        step.more(len(files) + len(overlay))
     for relative, stat in files.items():
         if step:
             step.advance()
@@ -815,7 +834,8 @@ def assemble(rip_dir: Path, project: Path, version: str, platform: str):
     if not exported.exists():
         sys.exit(f'No export in {rip_dir}: run pipeline.py rip first')
     plugins, plugin_files, assemblies = assembly_overlay(exported, version, platform)
-    assets, excluded = asset_overlay(exported, platform, assemblies)
+    with progress.step('Applying the asset rules', timed=True):  # the atlas repack, when it runs, is most of it
+        assets, excluded = asset_overlay(exported, platform, assemblies)
     overlay = {**plugins, **assets}
     excluded |= plugin_files
     log(f'Synchronizing {project}')
@@ -828,7 +848,7 @@ def assemble(rip_dir: Path, project: Path, version: str, platform: str):
         known = json.loads(record.read_text(encoding='utf-8'))
     except (OSError, ValueError):
         known = {}
-    with progress.step(f'Synchronizing {project.name}') as step:
+    with progress.step(f'Synchronizing {project.name}', timed=True) as step:
         for part in ('Assets', 'ProjectSettings', 'Packages'):
             step.note(part)
             sync_tree(
@@ -996,7 +1016,7 @@ def vita_app_files(build: Path):
         player[marker] = 0  # no trial watermark
     patcher_usse(player)
     yield 'eboot.bin', bytes(player)
-    with progress.step('Making the LiveArea art'):  # the store images, fetched once, and the PNGs
+    with progress.step('Making the LiveArea art', timed=True):  # the store images, fetched once, and the PNGs
         art = livearea.generate()
     skip = {'SymbolFiles', 'configuration.psp2path'}
     for path in sorted(build.rglob('*')):
@@ -1057,7 +1077,7 @@ def package_vita(build: Path) -> Path:
     total = sum(len(source) if isinstance(source, bytes) else source.stat().st_size for _, source in files)
     with (
         zipfile.ZipFile(vpk, 'w', zipfile.ZIP_DEFLATED) as archive,
-        progress.step('Packaging the VPK', total=total, eta=True, count='MB') as step,
+        progress.step('Packaging the VPK', total=total, eta=True, count='MB', timed=True) as step,
     ):
         for name, source in files:
             step.note(name)
