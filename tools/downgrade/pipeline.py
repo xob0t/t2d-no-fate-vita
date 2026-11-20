@@ -110,6 +110,12 @@ def recover_is_current(game: Path):
     return RECOVER_STAMP.exists() and RECOVER_STAMP.read_text(encoding='utf-8').strip() == recover_stamp(game)
 
 
+def rewind_status(line):
+    """The note while Rewind runs: its log's last line, but for the bodies, most of its time (50 s of 80), which it
+    logs only when done."""
+    return 'recovering the method bodies' if line.startswith('rebuilt ') else line
+
+
 def recover(game: Path):
     """Rewind's decompile of the game, assemblies only, into work/recover. Its log names the signature library
     and counts the bodies it recovered completely."""
@@ -130,6 +136,7 @@ def recover(game: Path):
         [REWIND_EXE, 'decompile', game, '-o', RECOVER, '--no-source', *signatures],
         log_path,
         timed=True,
+        status=rewind_status,
     )
     missing = [name for name in GAME_ASSEMBLIES if not (RECOVERED / f'{name}.dll').exists()]
     if missing:
@@ -635,7 +642,7 @@ def sync_tree(source: Path, destination: Path, overlay: dict, excluded: set, kno
     Unchanged files keep their timestamps so an import cache stays valid between runs. A .meta
     file the editor generated (for a folder or file that has none in the source) stays, so its GUID
     doesn't change on every run. known: copy_if_changed's record, kept by the caller between runs.
-    step: a progress step, its bar set to the files to go through and advanced per file."""
+    step: a progress step, the files to go through added to its bar's total, advanced per file."""
     refuse_links(destination)
     if inside(destination, source) or inside(source, destination):
         raise SystemExit(f'{destination} and {source} overlap; the mirror would write into its own source.')
@@ -653,7 +660,7 @@ def sync_tree(source: Path, destination: Path, overlay: dict, excluded: set, kno
     wanted = set()
     files = walk(source)
     if step:
-        step.update(0, total=len(files) + len(overlay))
+        step.more(len(files) + len(overlay))
     for relative, stat in files.items():
         if step:
             step.advance()

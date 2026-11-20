@@ -109,6 +109,11 @@ class Step:
     def advance(self, n=1):
         self.progress.advance(self.task, n)
 
+    def more(self, n):
+        """n more items to the total (no total yet: n), for a step whose parts each count their own."""
+        total = next(t for t in self.progress.tasks if t.id == self.task).total
+        self.progress.update(self.task, total=(total or 0) + n)
+
     def update(self, completed, total=None):
         self.progress.update(self.task, completed=completed, **({} if total is None else {'total': total}))
 
@@ -223,12 +228,20 @@ def following(name, log, start=0, pattern=None, status=None, timed=False):
         finally:
             stop.set()
             thread.join()
+        if pattern:  # the count the tool got to, for the step's line: the last poll can miss its last items
+            with contextlib.suppress(OSError):
+                with open(log, 'rb') as f:
+                    f.seek(max(start, f.seek(0, os.SEEK_END) - 16 * TAIL_BYTES))
+                    lines = f.read().decode('utf-8', errors='replace').splitlines()
+                found = next(filter(None, (re.search(pattern, x.strip()) for x in reversed(lines))), None)
+                if found:
+                    s.update(int(found[1]), int(found[2]))
 
 
-def run(name, command, log, cwd=None, env=None, check=True, timed=False):
+def run(name, command, log, cwd=None, env=None, check=True, timed=False, status=None):
     """Run a tool under a step called name: its command line, then its output (stdout and stderr), go to
     log, whose last line is the step's note. check: stop on a failure, with the log's last lines.
-    timed: as step's. Returns the exit code."""
+    timed: as step's; status: as following()'s. Returns the exit code."""
     log = Path(log)
     log.parent.mkdir(parents=True, exist_ok=True)
     command = [str(c) for c in command]
@@ -236,7 +249,7 @@ def run(name, command, log, cwd=None, env=None, check=True, timed=False):
         out.write(subprocess.list2cmdline(command) + '\n\n')
         out.flush()
         started = time.monotonic()
-        with following(name, log, start=out.tell()):
+        with following(name, log, start=out.tell(), status=status):
             code = subprocess.run(
                 command, cwd=cwd, env=env, stdout=out, stderr=subprocess.STDOUT, check=False
             ).returncode
