@@ -16,7 +16,7 @@ There are no game files in this repository: no game assets, and none of the reco
 
 ## Building
 
-You need Windows 10 or 11 on x64, the game from Steam, and about 10 GB of free disk space.
+You need Windows 10 or 11 on x64, the game from Steam, Git, about 10 GB of free disk space, and a console on HENkaku or Ensō with VitaShell.
 
 1. Install [uv](https://docs.astral.sh/uv/): open PowerShell from the Start menu and run
 
@@ -24,15 +24,17 @@ You need Windows 10 or 11 on x64, the game from Steam, and about 10 GB of free d
    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
    ```
 
-2. Clone this repository, open its folder in a terminal, and run:
+2. Download [t2d-no-fate-vita.zip](https://github.com/xob0t/t2d-no-fate-vita/releases/latest/download/t2d-no-fate-vita.zip), right-click it and choose **Extract All** (or clone this repository).
+
+3. Open the extracted `t2d-no-fate-vita` folder, right-click in it, choose **Open in Terminal** (on Windows 10: Shift + right-click, **Open PowerShell window here**), and run:
 
    ```powershell
    uv run build.py
    ```
 
-   The VPK is `builds/t2d-2018.2.19f1-vita.vpk`.
+   The VPK is `builds/t2d-2018.2.19f1-vita.vpk`. Install it with VitaShell.
 
-It doesn't install Unity or need a Unity license: setup downloads Unity 2018.2.19f1's installers and extracts the files the build reads, Sony's PS Vita SDK 3.570 from archive.org (unless you have one), this project's [Rewind fork](https://github.com/xob0t/Rewind-IL2CPP-Decompiler) at a pinned commit with two .NET SDKs to build and run it, AssetRipper and Mono.Cecil. Git must be installed. A rerun picks up where the last one stopped.
+A first build takes about 20 minutes and leaves about 7.5 GB in the folder. It doesn't install Unity or need a Unity license: setup downloads Unity 2018.2.19f1's installers and extracts the files the build reads, Sony's PS Vita SDK 3.570 from archive.org (unless you have one), this project's [Rewind fork](https://github.com/xob0t/Rewind-IL2CPP-Decompiler) at a pinned commit with two .NET SDKs to build and run it, AssetRipper and Mono.Cecil. A rerun picks up where the last one stopped.
 
 - `--game <folder>` reads the game from that folder, if it isn't in Steam's default folder.
 - `--vita-sdk <archive or folder>` uses your own copy of the SDK.
