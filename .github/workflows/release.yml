@@ -1,6 +1,6 @@
 # A pushed tag v* becomes a published GitHub release with the repository attached as t2d-no-fate-vita.zip, so
 # the README can link to releases/latest/download/t2d-no-fate-vita.zip: one click for the newest release. The
-# release notes are the annotated tag's message (git tag -a v1.0.0, the notes in the editor); tags with a suffix
+# annotated tag's message is the release: its first line the title, the rest the notes (git tag -a v1.0.0); tags with a suffix
 # (v1.1.0-rc.1) are pre-releases. The zip holds only the pipeline: no game files, no VPK.
 name: Release
 
@@ -25,6 +25,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           git fetch --force origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
-          opts=(--title "$GITHUB_REF_NAME" --notes-from-tag --verify-tag)
+          # The tag message's first line is the title, the rest the notes.
+          git tag -l --format='%(contents:body)' "$GITHUB_REF_NAME" > notes.md
+          title=$(git tag -l --format='%(contents:subject)' "$GITHUB_REF_NAME")
+          opts=(--title "${title:-$GITHUB_REF_NAME}" --notes-file notes.md --verify-tag)
           case "$GITHUB_REF_NAME" in *-*) opts+=(--prerelease) ;; esac
           gh release create "$GITHUB_REF_NAME" t2d-no-fate-vita.zip "${opts[@]}"
