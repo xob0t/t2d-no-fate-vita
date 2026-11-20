@@ -58,13 +58,14 @@ def environment():
 
 
 def run(failed, command, env=None, times=None, stage=None):
-    """Run a command; stop with failed (what to tell the user) when it fails. times: {stage: seconds or a
-    note}, the summary's, which gets the command's time under stage (and is shown when it fails)."""
+    """Run a command; stop with failed (what to tell the user) when it fails. times: {stage: seconds, a note,
+    or ('failed', seconds)}, the summary's, which gets the command's time under stage (and is shown when it
+    fails)."""
     started = time.monotonic()
     code = subprocess.run([str(c) for c in command], env=env or environment(), check=False).returncode
     seconds = time.monotonic() - started
     if times is not None:
-        times[stage] = seconds if not code else f'failed after {progress.duration(seconds)}'
+        times[stage] = seconds if not code else ('failed', seconds)
     if code:
         if times:
             summary(times)
@@ -76,9 +77,11 @@ def summary(times):
     progress.console.print('\nStages:')
     for stage in sorted(times, key=('setup', *STAGES).index):
         value = times[stage]
+        if isinstance(value, tuple):
+            value = f'failed after {progress.duration(value[1])}'
         shown = progress.duration(value) if isinstance(value, float) else value
         progress.console.print(f'  {stage:8} {shown}')
-    total = sum(v for v in times.values() if isinstance(v, float))
+    total = sum(v[1] if isinstance(v, tuple) else v for v in times.values() if not isinstance(v, str))
     progress.console.print(f'  {"total":8} {progress.duration(total)}')
 
 
@@ -107,7 +110,8 @@ def skipped(args):
             out[stage] = "skipped: current (Rewind's output is from this game, Rewind and signatures)"
         elif stage == 'rip' and rip_current(args):
             out[stage] = 'skipped: current (the export is from this game, recovered code and AssetRipper)'
-    out['code'] = 'runs in project'
+    if STAGES.index(args.start) <= STAGES.index('project'):
+        out['code'] = 'runs in project'
     return out
 
 
