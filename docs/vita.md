@@ -25,7 +25,7 @@ uv run tools/downgrade/vita.py crashes --pull         # this title's newest cras
 
 ```powershell
 uv run tools/downgrade/lock.py run vita-device "t2d: boot" --wait 3000 -- uv run tools/downgrade/drive.py menu1 `
-  "-t2d-heartbeat 5 -t2d-shots 3 ux0:data/T2DNoFate/shot 24" "wait 26; press start 300; wait 9; press cross 300" --sync
+  "-t2d-heartbeat 5 -t2d-shots 3 shot 24" "wait 26; press start 300; wait 9; press cross 300" --sync
 ```
 
 ## Sharing the console
@@ -60,8 +60,8 @@ The heartbeat line ends with the atlas's resident pages, their megabytes, those 
 | Flag | Effect |
 | --- | --- |
 | `-t2d-heartbeat <s>` | Every s seconds a `T2D_HEARTBEAT` line: frames, fps, mean, p50, p90 and worst frame time, the managed heap, the free memory, and per frame SpriteBatch's sprites, runs (draws), runs that changed texture (`pageSwitches`) and off-screen draws. |
-| `-t2d-shot <s> <path>` | A screenshot s seconds after the start. |
-| `-t2d-shots <s> <prefix> [after]` | A screenshot every s seconds from `after` seconds on, `<prefix>-<seconds>.png`. On the PS Vita each stalls the game about 0.6 s. |
+| `-t2d-shot <s> <name>` | A screenshot s seconds after the start, `ux0:data/T2DNoFate/shots/<name>.png`. The name is letters, digits, `-` and `_`; the player refuses a path, so a flag can't overwrite a save. |
+| `-t2d-shots <s> <name> [after]` | A screenshot every s seconds from `after` seconds on, `shots/<name>-<seconds>.png`. On the PS Vita each stalls the game about 0.6 s. |
 | `-t2d-quit-after <s>` | Quit s seconds after the start. |
 | `-t2d-log-sync` | Write the log on the logging thread. |
 | `-t2d-stalls <ms>` | During a frame longer than ms (default 1000; 0 turns it off), a thread of the probe's writes a `T2D_STALL` line every 250 ms: the free memory and, in a `T2D_TRACE=1` build, the game methods the main thread entered last; then how long the frame took. |

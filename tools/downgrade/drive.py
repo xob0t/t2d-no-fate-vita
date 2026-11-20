@@ -1,12 +1,12 @@
 """One console session under the shared vita-device lock (the caller wraps it in lock.py run). From butcher-vita's
 tools/downgrade/drive.py (same author, MIT), for this port's title and folder.
 Sets the probe flags, launches, plays a scripted sequence of waits and button presses, then fetches the log and the
--t2d-shot(s) screenshots into work/runs/<tag>/ and quits the game.
+-t2d-shot(s) screenshots (ux0:data/T2DNoFate/shots/<name>[-<s>].png) into work/runs/<tag>/ and quits the game.
 
     uv run tools/downgrade/lock.py run vita-device "t2d: boot" --wait 1800 -- \\
         uv run tools/downgrade/drive.py <tag> "<flags>" "<steps>" [--sync]
 
-    drive.py boot1 "-t2d-heartbeat 5 -t2d-shots 10 ux0:data/T2DNoFate/shot 5" "wait 40" --sync
+    drive.py boot1 "-t2d-heartbeat 5 -t2d-shots 10 shot 5" "wait 40" --sync
 
 steps: ';'-separated: `wait <s>`, `press <button> [ms]` (pressed, then released), `until <regex> <timeout s>` (polls
 the log). There is no step that leaves a button held.
@@ -30,6 +30,7 @@ from common import ROOT, vita_host  # noqa: E402
 
 VITA = ['uv', 'run', str(ROOT / 'tools' / 'downgrade' / 'vita.py')]
 FOLDER = 'ux0:/data/T2DNoFate'
+SHOTS = FOLDER + '/shots'  # where the player saves screenshots (Probe.Shot), and only there
 
 
 class Failed(Exception):
@@ -58,34 +59,50 @@ def ftp():
     return f
 
 
-def fetch_shots(flags, out: Path):
-    """The screenshots the flags asked for, fetched into out and deleted from the console."""
+SHOT_NAME = re.compile(r'[A-Za-z0-9_-]{1,48}')
+
+
+def shot_names(flags):
+    """The -t2d-shot and -t2d-shots names in flags, as the player takes them (Probe.ShotName: letters, digits, '-'
+    and '_', a '.png' dropped): (single, series), each None when not asked for. A name the player would refuse (a
+    path, say) raises ValueError, before anything is launched."""
     words = flags.split()
-    prefixes = []
-    if '-t2d-shots' in words and words.index('-t2d-shots') + 2 < len(words):
-        prefixes.append(words[words.index('-t2d-shots') + 2])
-    if '-t2d-shot' in words and words.index('-t2d-shot') + 2 < len(words):
-        prefixes.append(words[words.index('-t2d-shot') + 2].removesuffix('.png'))
-    if not prefixes:
+    found = []
+    for flag in ('-t2d-shot', '-t2d-shots'):
+        if flag in words and words.index(flag) + 2 < len(words):
+            name = words[words.index(flag) + 2]
+            stem = name[:-4] if name.lower().endswith('.png') else name
+            if not SHOT_NAME.fullmatch(stem):
+                raise ValueError(f'{flag} {name}: a screenshot is a name (letters, digits, - and _), saved in {SHOTS}')
+            found.append(stem)
+        else:
+            found.append(None)
+    return found[0], found[1]
+
+
+def fetch_shots(flags, out: Path):
+    """The screenshots the flags asked for, fetched from SHOTS into out and deleted from the console: the -t2d-shot
+    name's file and the -t2d-shots name's <name>-<seconds>.png, nothing else."""
+    single, series = shot_names(flags)
+    if single is None and series is None:
         return
+    wanted = re.compile(
+        '|'.join(
+            ([re.escape(single) + r'\.png'] if single else []) + ([re.escape(series) + r'-\d+\.png'] if series else [])
+        )
+    )
     f = ftp()
     count = 0
     try:
-        for prefix in prefixes:
-            folder, stem = prefix.replace('ux0:data', 'ux0:/data').rsplit('/', 1)
-            if not folder.lower().startswith(FOLDER.lower()):
-                print(f'drive: shots outside {FOLDER} are not fetched: {prefix}', flush=True)
+        for leaf in [n.rsplit('/', 1)[-1] for n in f.nlst(SHOTS + '/')]:
+            if not wanted.fullmatch(leaf):
                 continue
-            names = [n.rsplit('/', 1)[-1] for n in f.nlst(folder + '/')]
-            for leaf in names:
-                if not leaf.startswith(stem) or not leaf.endswith('.png'):
-                    continue
-                part = out / (leaf + '.part')
-                with open(part, 'wb') as file:
-                    f.retrbinary(f'RETR {folder}/{leaf}', file.write)
-                part.replace(out / leaf)
-                f.delete(f'{folder}/{leaf}')
-                count += 1
+            part = out / (leaf + '.part')
+            with open(part, 'wb') as file:
+                f.retrbinary(f'RETR {SHOTS}/{leaf}', file.write)
+            part.replace(out / leaf)
+            f.delete(f'{SHOTS}/{leaf}')
+            count += 1
     finally:
         f.quit()
     print(f'fetched {count} shots into {out}', flush=True)
@@ -119,6 +136,10 @@ def cleanup(name, failures, action):
 
 def main():
     tag, flags, steps = sys.argv[1], sys.argv[2], sys.argv[3]
+    try:
+        shot_names(flags)
+    except ValueError as error:
+        sys.exit(f'drive: {error}; nothing was launched')
     out = ROOT / 'work' / 'runs' / tag
     out.mkdir(parents=True, exist_ok=True)
     for old in ('log.txt', 'log.stale.txt'):  # a tag run again: no log of the last session's left to read as this one's
@@ -205,4 +226,5 @@ def main():
         sys.exit(f'drive: {", ".join(failures + (["no log of its own"] if stale else []))} failed')
 
 
-main()
+if __name__ == '__main__':
+    main()
