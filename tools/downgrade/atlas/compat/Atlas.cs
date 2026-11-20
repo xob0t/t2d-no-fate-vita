@@ -397,6 +397,10 @@ namespace T2DCompat
                 aheadKey = null;
                 aheadIf = null;
                 fadeAhead = null;
+                // The fade that made this App is over: Transition.update enters the main menu with dir 0 and no fade
+                // in after any App but the attract, and HoldFade would not see the fade end.
+                fadeTo = -1;
+                holdSince = -1;
                 firstSet.Clear();
                 firstPending = true;
                 if (Ahead)
