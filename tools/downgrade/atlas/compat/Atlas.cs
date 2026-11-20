@@ -399,6 +399,10 @@ namespace T2DCompat
                 aheadKey = null;
                 aheadIf = null;
                 fadeAhead = null;
+                idleKey = null;
+                idleSavedScenes = null;
+                idleSavedKey = null;
+                idleHeldLogged = false;
                 // The fade that made this App is over: Transition.update enters the main menu with dir 0 and no fade
                 // in after any App but the attract, and HoldFade would not see the fade end.
                 fadeTo = -1;
@@ -760,19 +764,51 @@ namespace T2DCompat
         // Pages loading or waiting to, for SoundLoads, which starts no clip load meanwhile; Idle each flush they aren't
         // (Probe.Install joins the two).
         public static Action Idle;
-        public static bool Busy { get { return loaded && (asyncLoads.Count > 0 || bgQueue.Count > 0); } }
+        public static bool Busy { get { return loaded && (asyncLoads.Count > 0 || Queued > 0); } }
+
+        // The background loads that may start: the idle demo's pages that wait for video memory (idleHeld) don't count.
+        static int Queued { get { return Math.Max(0, bgQueue.Count - idleHeld); } }
 
         static void IssueBackground()
         {
+            idleHeld = 0;
             if (bgQueue.Count == 0 || Time.realtimeSinceStartup < bgStartAt) return;
-            while (bgQueue.Count > 0 && (PrefetchInFlight <= 0 || asyncLoads.Count < PrefetchInFlight))
+            bool holding = IdleHolds();
+            int i = 0;
+            while (i < bgQueue.Count && (PrefetchInFlight <= 0 || asyncLoads.Count < PrefetchInFlight))
             {
-                int p = bgQueue[0];
-                bgQueue.RemoveAt(0);
-                if (!wanted[p] || pages[p] != null || asyncLoads.ContainsKey(p)) continue;
-                Evict(PageBytes(p));
+                int p = bgQueue[i];
+                if (!wanted[p] || pages[p] != null || asyncLoads.ContainsKey(p))
+                {
+                    bgQueue.RemoveAt(i);
+                    continue;
+                }
+                // The idle demo's pages only into video memory while the menu shows: in main memory each costs its
+                // integration on the main thread, a 40 to 55 ms frame (fin-boot, fin-ach). The rest load in the
+                // fade into the demo, which holds for them.
+                if (holding && InScenes(p, aheadScenes) && !Evict(PageBytes(p), false))
+                {
+                    i++;
+                    idleHeld++;
+                    continue;
+                }
+                bgQueue.RemoveAt(i);
+                Evict(PageBytes(p), true);
                 LoadAsync(p);
             }
+            if (idleHeld > 0 && !idleHeldLogged && idleHeldLogs++ < 20)
+                Debug.Log("T2D atlas: ahead, " + idleKey + ": video memory full, its " + idleHeld + " pages left wait for its fade (" +
+                    (residentBytes / 1048576.0).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " MB of pages resident," + FreeLine() + ")");
+            if (idleHeld > 0) idleHeldLogged = true;
+        }
+
+        static int idleHeld, idleHeldLogs;
+        static bool idleHeldLogged;
+
+        // The idle demo's ahead load, before its fade.
+        static bool IdleHolds()
+        {
+            return idleKey != null && fadeTo != DemoApp && fadeAhead == idleKey;
         }
 
         // From SpriteBatch.Flush, once a frame, and again while it returns a page: the next page that is wanted and
@@ -986,9 +1022,11 @@ namespace T2DCompat
         static int spills;
         static long coverWarmed;    // bytes warmed under the cover in this flush (NextWarm)
 
-        // Unloads pages no current scene wants, least recently used first, until `need` more bytes fit. If they still
-        // don't, the page goes to main memory.
-        static void Evict(long need)
+        // Unloads pages no current scene wants, least recently used first, until `need` more bytes fit, and says whether
+        // they do. If they still don't, the page goes to main memory (logged when `spill`).
+        static void Evict(long need) { Evict(need, true); }
+
+        static bool Evict(long need, bool spill)
         {
             while (!Fits(need))
             {
@@ -998,14 +1036,15 @@ namespace T2DCompat
                         victim = p;
                 if (victim < 0)
                 {
-                    if (spills++ < 20)
+                    if (spill && spills++ < 20)
                         Debug.Log(string.Format(System.Globalization.CultureInfo.InvariantCulture,
                             "T2D atlas: video memory full in {0}: a {1:0.0} MB page goes to main memory ({2:0.0} MB of pages resident, {3:0.0} MB not drawn yet,{4})",
                             sceneLabel, need / 1048576.0, residentBytes / 1048576.0, pendingBytes / 1048576.0, FreeLine()));
-                    return;
+                    return false;
                 }
                 UnloadPage(victim);
             }
+            return true;
         }
 
         // ---- ballast -----------------------------------------------------------------------------
@@ -1049,7 +1088,7 @@ namespace T2DCompat
             }
             // Low outside a prefetch: pages that wait for a draw the scene may never make; the player's headroom first.
             // In a prefetch the ballast stays, or the pages still to come would take what it gave back.
-            bool prefetching = asyncLoads.Count > 0 || bgQueue.Count > 0 || warmList.Count > 0;
+            bool prefetching = asyncLoads.Count > 0 || Queued > 0 || warmList.Count > idleHeld;
             bool waiting = pendingBytes > 0 || prefetching;
             bool low = free >= 0 && free < CdramReserveBytes / 2 && !prefetching;
             if (waiting && !low)
@@ -1226,26 +1265,88 @@ namespace T2DCompat
         // The menu's idle ticks left (MainMenu.timeOut, 1200 from the last press, counted down at 60 a second while the
         // title or the top menu shows) below which the next demo's pages load ahead (0: not ahead, only in its fade).
         // The first demo, Sarah's in the Factory, froze its first frames 6.9 to 7.4 s with its pages loaded at their draws.
+        // MainMenu.update counts timeOut down only while Menu.numLayers is 0 (the top menu: options, achievements and the
+        // other submenus are layers) or MainMenu.showTitle; MainMenu.controlDown sets it back to TIMEOUT_MAX at any press
+        // outside a fade. The ahead load runs only while that count runs below IdleTicks; a press or a submenu ends it,
+        // and its pages go (fin-ach: they went on loading in the options menu, which ran at 40 to 55 fps).
         public static string IdleField = "MainMenu.timeOut";
+        public static string IdleLayersField = "com.bitmapbureau.terminator.ui.Menu.numLayers";
+        public static string IdleTitleField = "com.bitmapbureau.terminator.apps.MainMenu.showTitle";
         public static int IdleTicks = 900;
         static float idleCheckAt;
         static int idleLogs;
+        static string idleKey;              // the demo whose pages the idle menu loads ahead, or null
+        static int[] idleSavedScenes;       // aheadScenes and fadeAhead before it
+        static string idleSavedKey;
 
         static void IdleDemo(float now)
         {
-            if (IdleTicks <= 0 || !Ahead || fadeTo >= 0 || currentApp == null || now < idleCheckAt) return;
-            idleCheckAt = now + 0.5f;
-            int dot = IdleField.IndexOf('.');
-            if (currentApp.GetType().Name != IdleField.Substring(0, dot)) return;
-            System.Reflection.FieldInfo field = currentApp.GetType().GetField(IdleField.Substring(dot + 1),
-                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            if (field == null || field.FieldType != typeof(int))
+            if (IdleTicks <= 0 || !Ahead || currentApp == null || now < idleCheckAt) return;
+            if (fadeTo == DemoApp) return;
+            // Checked more often while the pages load, so that a press stops them within a few frames.
+            idleCheckAt = now + (idleKey != null ? 0.1f : 0.5f);
+            bool idle = fadeTo < 0 && MenuIdle(idleKey != null);
+            if (idleKey != null && !idle)
             {
-                if (idleLogs++ == 0) Debug.LogWarning("T2D atlas: no int field " + IdleField);
+                IdleCancel();
                 return;
             }
+            if (!idle || idleKey != null) return;
+            string key = NextDemoKey();
+            if (key == null || key == fadeAhead) return;
+            idleSavedScenes = aheadScenes;
+            idleSavedKey = fadeAhead;
+            FadeStarts(DemoApp);
+            if (fadeAhead == key) idleKey = key;
+        }
+
+        // Whether the menu counts down to the demo below IdleTicks, as MainMenu.update does; at 0 (`started`) the fade
+        // into the demo starts, and HoldFade sees it at the next Transition.update.
+        static bool MenuIdle(bool started)
+        {
+            const System.Reflection.BindingFlags any = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
+            int dot = IdleField.IndexOf('.');
+            Type appType = currentApp.GetType();
+            if (appType.Name != IdleField.Substring(0, dot)) return false;
+            System.Reflection.FieldInfo field = appType.GetField(IdleField.Substring(dot + 1), any | System.Reflection.BindingFlags.Instance);
+            System.Reflection.FieldInfo layers = StaticField(appType, IdleLayersField);
+            System.Reflection.FieldInfo title = StaticField(appType, IdleTitleField);
+            if (field == null || field.FieldType != typeof(int) || layers == null || layers.FieldType != typeof(int) ||
+                title == null || title.FieldType != typeof(bool))
+            {
+                if (idleLogs++ == 0) Debug.LogWarning("T2D atlas: no fields " + IdleField + ", " + IdleLayersField + ", " + IdleTitleField);
+                return false;
+            }
             int left = (int)field.GetValue(currentApp);
-            if (left > 0 && left < IdleTicks) FadeStarts(DemoApp);
+            bool counting = (int)layers.GetValue(null) == 0 || (bool)title.GetValue(null);
+            return counting && (left > 0 || (started && left == 0)) && left < IdleTicks;
+        }
+
+        static System.Reflection.FieldInfo StaticField(Type near, string name)
+        {
+            int dot = name.LastIndexOf('.');
+            Type type = near.Assembly.GetType(name.Substring(0, dot));
+            return type == null ? null : type.GetField(name.Substring(dot + 1),
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        }
+
+        // The player pressed or opened a submenu: the demo's pages go, loaded or not, and the ahead set is what it was
+        // (unless a fade into another App has taken it).
+        static void IdleCancel()
+        {
+            string key = idleKey;
+            idleKey = null;
+            idleHeld = 0;
+            idleHeldLogged = false;
+            if (fadeAhead == key)
+            {
+                aheadScenes = idleSavedScenes ?? new int[0];
+                fadeAhead = idleSavedKey;
+            }
+            idleSavedScenes = null;
+            idleSavedKey = null;
+            Debug.Log("T2D atlas: ahead, " + key + ": the menu is no longer idle, its pages go");
+            Switch("idle over");
         }
 
         static string NextDemoKey()
