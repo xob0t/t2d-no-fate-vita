@@ -115,7 +115,8 @@ def _missing(out: Path, raw: bool):
 
 def _frame_sizes(data: bytes):
     """frames.bytes's page sizes, after reading it to its end (repack.frames_bytes's format); ValueError when it
-    isn't whole."""
+    isn't whole, or a frame names a page it doesn't have or reaches past its page's edge (the atlas would draw from
+    a page that isn't there, or outside one)."""
     if data[:4] != b'T2DF':
         raise ValueError('not frames.bytes')
     _format, rows, pages = struct.unpack_from('<III', data, 4)
@@ -123,7 +124,14 @@ def _frame_sizes(data: bytes):
     pos = 16 + 4 * pages
     for _ in range(rows):
         (n,) = struct.unpack_from('<I', data, pos)
-        pos += 4 + 10 * n
+        pos += 4
+        for _ in range(n):
+            page, x, y, w, h = struct.unpack_from('<HHHHH', data, pos)
+            pos += 10
+            if page >= pages:
+                raise ValueError('a frame on page %d, past the %d frames.bytes has' % (page, pages))
+            if x + w > sizes[page][0] or y + h > sizes[page][1]:
+                raise ValueError('a frame past the edge of page %d' % page)
     if pos != len(data):
         raise ValueError('frames.bytes is %d bytes, its rows need %d' % (len(data), pos))
     return sizes
@@ -163,7 +171,8 @@ def _check_scenes(data: bytes, pages: int):
     for _ in range(keys):
         text()
         for _ in range(u16()):
-            u16()
+            if u16() >= scenes:
+                raise ValueError('a key names a scene past the table')
     for _ in range(u16()):
         text()
     page_list()
