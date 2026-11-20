@@ -144,21 +144,29 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     for old in ('log.txt', 'log.stale.txt'):  # a tag run again: no log of the last session's left to read as this one's
         (out / old).unlink(missing_ok=True)
-    try:
-        if '--sync' in sys.argv:
+    if '--sync' in sys.argv:
+        try:
             vita('sync')  # a failed sync would run the build before
-        vita('args', '--', *flags.split())
-        # The run before's whole log: a new run's differs. None on this console yet (a first run) is ''.
-        before = vita('log', '--missing-ok', quiet=True)
-    except Failed as error:
-        vita('args', '--', quiet=True, check=False)  # flags set before the failure aren't left for the next launch
-        sys.exit(f'drive: {error}; nothing was launched')
+        except Failed as error:
+            sys.exit(f'drive: {error}; nothing was launched')
     held = None
     # Set before the launch is asked for: a launch whose "Launched" reply was lost (a timeout) may still have
     # started the game, which the session's end then quits (only if it is the running app: vita.py quit).
     tried = False
     stale = False
     failures = []
+    # From the flags' upload on, whatever stops the session (a failure, Ctrl+C) clears flags no launch read: the
+    # upload may have landed even when its reply was lost. Before (Nov 2026) an interrupt between the upload and
+    # the session's try left them for the next launch.
+    try:
+        vita('args', '--', *flags.split())
+        # The run before's whole log: a new run's differs. None on this console yet (a first run) is ''.
+        before = vita('log', '--missing-ok', quiet=True)
+    except BaseException as error:
+        vita('args', '--', quiet=True, check=False)
+        if isinstance(error, Failed):
+            sys.exit(f'drive: {error}; nothing was launched')
+        raise
     try:
         tried = True
         if 'Launched' not in vita('launch', check=False):
