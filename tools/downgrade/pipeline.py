@@ -77,6 +77,7 @@ from common import (
     meta_of,
     mono_cecil,
     project_folder,
+    replace_path,
     require_complete,
     rewritten_folder,
     run,
@@ -818,6 +819,10 @@ def assemble(rip_dir: Path, project: Path, version: str, platform: str):
     excluded |= plugin_files
     log(f'Synchronizing {project}')
     record = project / SYNC_RECORD
+    # The record as the mirror's own files: no link on the way to it, nor it a link (written through, it would
+    # overwrite the link's target), and written whole (a temp file renamed over it; a rename replaces a link
+    # rather than writing through it).
+    refuse_links(record)
     try:
         known = json.loads(record.read_text(encoding='utf-8'))
     except (OSError, ValueError):
@@ -834,7 +839,11 @@ def assemble(rip_dir: Path, project: Path, version: str, platform: str):
                 step,
             )
     record.parent.mkdir(parents=True, exist_ok=True)
-    record.write_text(json.dumps(known, sort_keys=True), encoding='utf-8')
+    refuse_links(record)
+    temporary = record.with_name(record.name + '.part')
+    temporary.unlink(missing_ok=True)  # a link left there is removed, not written through
+    temporary.write_text(json.dumps(known, sort_keys=True), encoding='utf-8')
+    replace_path(temporary, record)
 
 
 # ---------------------------------------------------------------- build (the builder's helpers)
