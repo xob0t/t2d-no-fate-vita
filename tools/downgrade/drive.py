@@ -4,7 +4,7 @@ Sets the probe flags, launches, plays a scripted sequence of waits and button pr
 -t2d-shot(s) screenshots (ux0:data/T2DNoFate/shots/<name>[-<s>].png) into work/runs/<tag>/ and quits the game.
 
     uv run tools/downgrade/lock.py run vita-device "t2d: boot" --wait 1800 -- \\
-        uv run tools/downgrade/drive.py <tag> "<flags>" "<steps>" [--sync]
+        uv run tools/downgrade/drive.py <tag> "<flags>" "<steps>" [--sync] [--real-saves]
 
     drive.py boot1 "-t2d-heartbeat 5 -t2d-shots 10 shot 5" "wait 40" --sync
 
@@ -19,6 +19,9 @@ when the launch wasn't confirmed or when the launch wrote no log of its own.
 
 The session holds the console once for all its steps: inside lock.py run (any port's), or, run alone, it takes the
 vita-device lock itself (and stops if someone holds it) and hands it to its vita.py commands (T2D_HOLDER).
+
+Saves: a launch with flags plays on the scripted runs' own saves, ux0:data/T2DNoFate/test (compat/Saves.cs), so a
+test never writes over the player's. --real-saves (the flag -t2d-real-saves) plays on the player's saves instead.
 """
 
 import ftplib
@@ -139,12 +142,23 @@ def cleanup(name, failures, action):
         failures.append(name)
 
 
+REAL_SAVES = '-t2d-real-saves'  # the flag that runs a scripted launch on the player's own saves (compat/Saves.cs)
+
+
 def main():
     tag, flags, steps = sys.argv[1], sys.argv[2], sys.argv[3]
     try:
         shot_names(flags)
     except ValueError as error:
         sys.exit(f'drive: {error}; nothing was launched')
+    if '--real-saves' in sys.argv[4:] and REAL_SAVES not in flags.split():
+        flags = f'{flags} {REAL_SAVES}'
+    if REAL_SAVES in flags.split():
+        print(
+            "drive: WARNING this session plays on the player's own saves (ux0:data/T2DNoFate), not the scripted runs' "
+            '(ux0:data/T2DNoFate/test): whatever it reaches is saved over theirs. Back them up first.',
+            flush=True,
+        )
     # One session, one holder: every vita.py this session runs acts under the same hold of the console. Run alone
     # (not in lock.py run), each vita.py took the lock for its own command, so another job could take the console
     # between the flags' upload and the launch, or between a press and its release.

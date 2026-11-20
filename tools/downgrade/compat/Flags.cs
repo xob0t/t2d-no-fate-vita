@@ -20,6 +20,18 @@ namespace T2DCompat
 
         static string[] args;
         static string note;
+        static bool scripted;
+
+        // Whether this launch applied flags from args.txt: a scripted launch (drive.py, vita.py args), whose saves go
+        // to Saves.TestFolder. The player's own launch from the LiveArea has no args.txt.
+        public static bool Scripted
+        {
+            get
+            {
+                string[] unused = Args;
+                return scripted;
+            }
+        }
 
         // What happened to args.txt, for the log's header (PlayerLog), or null.
         public static string Note
@@ -59,8 +71,9 @@ namespace T2DCompat
                                 note = "args.txt not applied: it couldn't be renamed (" + e.GetType().Name + ": " + e.Message + ")";
                             }
                             string[] lines = claimed ? File.ReadAllLines(used) : new string[0];
-                            if (lines.Length > 0)
-                                all.AddRange(lines[0].Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries));
+                            string[] words = lines.Length > 0 ? lines[0].Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries) : new string[0];
+                            all.AddRange(words);
+                            scripted = words.Length > 0;
                         }
                     }
                     catch (Exception e)

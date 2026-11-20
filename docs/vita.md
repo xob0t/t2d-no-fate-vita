@@ -7,6 +7,12 @@ Prose here is one sentence per line.
 The app's title ID is `TNOF00001`.
 It keeps its files in `ux0:data/T2DNoFate`: the game's saves (`Terminator_SaveSettings.dat`, `Terminator_SaveStats.dat`), the probe's flags (`args.txt`, then `args.used.txt`), the player's log (`log.txt`, the two runs before in `log.prev.txt` and `log.prev2.txt`), and the probe's screenshots.
 
+A scripted launch, one that applies flags from `args.txt` (`drive.py`, `vita.py args`), keeps its saves apart, in `ux0:data/T2DNoFate/test` (`compat/Saves.cs`), chosen before the game reads its first save: a test that sets the story's progress (`-t2d-set ...storyBossReached=true`) and finishes a level saves there, never over the player's saves.
+The first time, and whenever the test folder lacks one of the two files, the launch copies it there from the player's; deleting `ux0:data/T2DNoFate/test` starts the tests over from the player's saves.
+Its flags, log and screenshots stay in `ux0:data/T2DNoFate`, and its log says which folder it saved to (`T2D_SAVES`).
+A test that truly needs the player's own saves passes `-t2d-real-saves` (`drive.py --real-saves`); `drive.py`, `vita.py args` and the log (`T2D_SAVES WARNING`) say so, and the saves should be backed up first.
+The player's own launch from the LiveArea reads no `args.txt` and plays on `ux0:data/T2DNoFate` as always; an empty `args.txt` (the flags cleared) counts as none.
+
 ## Console tools
 
 The console's address is `T2D_VITA_HOST` (or the variable an earlier port set: `BUTCHER_VITA_HOST`, `HUNT_VITA_HOST`, ...).
@@ -49,6 +55,7 @@ The safety rules, as on butcher-vita's:
 - Each step of `drive.py`'s end (releasing a button, reading and saving the log, the quit, clearing the flags, the screenshots) runs whatever the others did; a failed one makes `drive.py` exit non-zero. A console with no `log.txt` yet is a first run, not a failure (`vita.py log --missing-ok`).
 - A launch that wrote no log of its own: `drive.py` keeps the log it read as `log.stale.txt`, not `log.txt`, and exits with 1.
 - Only TNOF00001 and `ux0:data/T2DNoFate` are touched; `crashes` lists only this title's dumps.
+- A scripted launch saves to `ux0:data/T2DNoFate/test`, not over the player's saves, unless its flags say `-t2d-real-saves` ([above](#the-ps-vita)).
 - No mute flag exists, and none should be used on the console.
 
 ## The player's log and the probe
@@ -72,6 +79,7 @@ The heartbeat line ends with the atlas's resident pages, their megabytes, those 
 | `-t2d-peek <path>,...` | `T2D_PEEK` lines with static fields read by reflection (`Namespace.Type.field`, then `.field` or `[index]`, into arrays and Haxe Arrays), on the first frame and whenever a value changes. |
 | `-t2d-invoke <call>,...` | At 10 s (`-t2d-invoke-at <s>` for another time), calls by reflection (`<object or type path>::<method>[::<arg>...]`, an arg an int, `@<path>` or a string) and logs `T2D_INVOKE` with the result or the exception. A call `<path>=<value>` sets a field instead, static or of the object the path reaches (`...game.Sprites.boss.hp=0`), to an int, bool or double; a call written `+<s>:<call>` waits until s seconds, so one launch can act at several times. |
 | `-t2d-set <App>:<path>=<value>,...` | Sets a static field as the game enters that App, before its `start()` (`*` for the first frame). A path through a static object sets that object's field (`Game:...savedata.SaveStats.sti.storyBossReached=true`). Arcade mode with `MissionBriefing:com.bitmapbureau.terminator.game.Game.levelNumber=<n>` plays the arcade list's level n; `Game.infiniteHealth=true` keeps a scripted player alive. An int array is written `a|b|c`: `Game.levelIDs=11|13|12|0|4|1|2|3|5|6|7|8|9|14|15|10|16|17|18,...Game.mode=5` at the briefing turns arcade into the level select's list, all 19 levels in story order (`work/scratch/levels2.sh`, [build](build.md#levels)). For tests only. |
+| `-t2d-real-saves` | The launch plays on the player's own saves, not `ux0:data/T2DNoFate/test` (above). Back them up first. |
 | `-t2d-atlas-sync` | The briefing's prefetch loads pages with `Resources.Load`, not `LoadAsync` ([textures](textures.md#the-runtime-class)). |
 | `-t2d-input-log`, `-t2d-store-log` | The platform layer's (`compat/Pad.cs`, `Store.cs`). |
 

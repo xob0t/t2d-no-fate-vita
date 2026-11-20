@@ -522,7 +522,7 @@ namespace T2DCompat
             string path;
             try
             {
-                string folder = Saves.PersistentDataPath() + "/shots";
+                string folder = Saves.FilesFolder() + "/shots";
                 System.IO.Directory.CreateDirectory(folder);
                 path = folder + "/" + name + ".png";
             }

@@ -1047,6 +1047,13 @@ def dispatch(args):
         sys.stdout.flush()
     if args.command == 'args':
         line = show_args() if args.show else set_args(args.rest)
+        if line and not args.show:
+            real = '-t2d-real-saves' in line.split()
+            print(
+                "WARNING: the launch that reads these flags plays on the player's own saves (-t2d-real-saves)"
+                if real
+                else f"the launch that reads these flags keeps its saves in {REMOTE}/test, not the player's"
+            )
         print('args.txt: ' + (line or '(empty)'))
     if args.command == 'crashes' and args.dump:
         symbolize(args.dump, build, args.thread)
