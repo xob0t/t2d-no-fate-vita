@@ -123,7 +123,7 @@ def build_folder(platform, backend='mono', scenes=False, version=TARGET, unity=F
 # rebuilds it. The REWIND_REPOSITORY environment variable clones from elsewhere (a local clone of the fork,
 # to test a commit before it is pushed); the commit is still REWIND_COMMIT.
 REWIND_REPOSITORY = os.environ.get('REWIND_REPOSITORY') or 'https://github.com/xob0t/Rewind-IL2CPP-Decompiler'
-REWIND_COMMIT = 'ac9e2cef80cd816b3d6e7076c7de30fcf0a1d7c5'
+REWIND_COMMIT = '39afe895ec48dc68ee4119e7442b643dd8b5569f'
 REWIND = EXTERNAL / 'rewind'
 REWIND_EXE = REWIND / 'src' / 'Rewind.Cli' / 'bin' / 'Release' / 'net10.0' / 'rewind.exe'
 REWIND_STAMP = REWIND / '.t2d-build.txt'

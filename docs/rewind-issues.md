@@ -28,7 +28,7 @@ The fork's commits (until 2026-11-20 patches in `tools/rewind/patches`, applied 
 The repro checks were run on upstream main and on the patched build, both with the rebuilt 6000.0.60f1 library.
 
 - On upstream main only the controls and issue 1 pass (issue 1 through the library): 14 of 46 checks.
-- With the fork (checked 2026-11-20 at the fork's head, `86258fc`, the same as with patches 0001 to 0033): 36 of 46 checks pass; 1, 3, 7, 8, 9, 11, 16, 17, 18, 21, 29 and 30 in full, and 6 and 10 in part. Issue 34's check, added later, fails at `86258fc` and passes at `ac9e2ce` (37 of 47).
+- With the fork (checked 2026-11-20 at the fork's head, `86258fc`, the same as with patches 0001 to 0033): 36 of 46 checks pass; 1, 3, 7, 8, 9, 11, 16, 17, 18, 21, 29 and 30 in full, and 6 and 10 in part. Issue 34's check, added later, fails at `86258fc` and passes at `ac9e2ce` (37 of 47). At `39afe89` (change 37: the constructor call must come before every read of the object, by dominance, not by the order Rewind builds the blocks in) issue 34's checks also run the recovered method, and three controls join them (40 of 50).
 - 2, 13 and 19 fail their checks only on form: the values are right and nothing is marked, but a merged double or struct is still built from its bits.
 - 4, half of 6 and the local variant of the inlined constructors are open.
 - Fixed on the game by the library alone, with or without the patches: 14, the metadata-init part of 1, and three items of 20.
