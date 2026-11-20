@@ -349,11 +349,23 @@ partial class DowngradeAssemblies
             Code load = start == null ? Code.Nop : start.OpCode.Code;
             bool simple = load == Code.Ldloc || load == Code.Ldloc_S || load == Code.Ldloc_0 || load == Code.Ldloc_1 ||
                           load == Code.Ldloc_2 || load == Code.Ldloc_3 || load == Code.Ldsfld;
-            Code before = start == null || start.Previous == null ? Code.Nop : start.Previous.OpCode.Code;
-            bool empty = before == Code.Stloc || before == Code.Stloc_S || before == Code.Stloc_0 || before == Code.Stloc_1 ||
-                         before == Code.Stloc_2 || before == Code.Stloc_3 || before == Code.Nop || before == Code.Stsfld;
-            if (!simple || !empty) throw SpriteRule(rule, "Main.draw()'s instance is not loaded by one ldloc or ldsfld on an empty stack");
+            if (!simple) throw SpriteRule(rule, "Main.draw()'s instance is not loaded by one ldloc or ldsfld");
         }
+        // A try must start on an empty stack, on every path into it: the stack's depth there as the method's flow gives
+        // it (StackProducers follows every edge and stops where two disagree). Before (Nov 2026) the rule only looked at
+        // the instruction before the load (a stloc or stsfld), which leaves whatever was beneath its value.
+        Dictionary<Instruction, Instruction[]> stacks;
+        try
+        {
+            stacks = StackProducers(render, null);
+        }
+        catch (InvalidOperationException e)
+        {
+            throw SpriteRule(rule, "UnityMain.OnRenderObject's stack can't be followed: " + e.Message);
+        }
+        Instruction[] onEntry;
+        if (!stacks.TryGetValue(start, out onEntry) || onEntry.Length != 0)
+            throw SpriteRule(rule, "the stack is not empty where the try around Main.draw() would start");
         foreach (Instruction i in render.Body.Instructions)
             if (i.Operand == draws[0] || (i.Operand is Instruction[] && ((Instruction[])i.Operand).Contains(draws[0])))
                 throw SpriteRule(rule, "a branch goes to Main.draw()'s call itself");
@@ -439,6 +451,7 @@ partial class DowngradeAssemblies
             if (op.Name.StartsWith("stelem") && op != OpCodes.Stelem_R8 && !(op == OpCodes.Stelem_Any && (i.Operand as TypeReference) != null && ((TypeReference)i.Operand).FullName == "System.Double"))
                 throw changed("stores into an array other than its double[] (" + op.Name + ")");
         }
+        SpriteFreshWrites(saturate, changed);
         MethodDefinition apply = saturate.Body.Instructions.Select(i => i.Operand as MethodReference)
             .First(m => m != null && m.Name == "applyFilter").Resolve();
         if (apply == null || !apply.HasBody || apply.Body.Instructions.Any(i => i.Operand is MethodReference) ||
@@ -450,5 +463,117 @@ partial class DowngradeAssemblies
         if (get == null || !get.HasBody || !get.Body.Instructions.Where(i => i.OpCode != OpCodes.Nop).Select(i => i.OpCode)
                 .SequenceEqual(new[] { OpCodes.Ldarg_0, OpCodes.Ret }))
             throw SpriteRule(rule, "BitmapFilter.getFilter is not `return this;`");
+    }
+
+    // Every write in method lands in memory the method made itself: stelem into an array from newarr, stfld into an
+    // object from newobj or GetUninitializedObject (cast), or into a field address (ldflda) of one, or of a local
+    // (ldloca), and initobj on such an address. Followed through locals (each store into one must be such a value, and
+    // its address is never taken unless it is a value-type local) with the producers StackProducers finds on every
+    // path. Before (Nov 2026) only the store's opcode and field type were checked, so a store into the image's own
+    // objects, or a static one's, passed (Astra review #21).
+    static void SpriteFreshWrites(MethodDefinition method, Func<string, Exception> changed)
+    {
+        Dictionary<Instruction, Instruction[]> stacks;
+        try
+        {
+            stacks = StackProducers(method, null);
+        }
+        catch (InvalidOperationException e)
+        {
+            throw changed("has a stack that can't be followed (" + e.Message + ")");
+        }
+        MethodBody body = method.Body;
+        Func<Instruction, VariableDefinition> local = i => SpriteLocal(i, body);
+        // Locals that hold only fresh arrays or objects: all, then narrowed until every store into one is fresh.
+        var arrays = new HashSet<VariableDefinition>(body.Variables);
+        var objects = new HashSet<VariableDefinition>(body.Variables);
+        foreach (Instruction i in body.Instructions)
+            if (i.OpCode.Code == Code.Ldloca || i.OpCode.Code == Code.Ldloca_S)
+            {
+                arrays.Remove(local(i));
+                objects.Remove(local(i));
+            }
+        Func<Instruction, Instruction> top = at =>
+        {
+            Instruction[] stack;
+            return stacks.TryGetValue(at, out stack) && stack.Length > 0 ? stack[stack.Length - 1] : null;
+        };
+        Func<Instruction, int, Instruction> slot = (at, fromTop) =>
+        {
+            Instruction[] stack;
+            return stacks.TryGetValue(at, out stack) && stack.Length > fromTop ? stack[stack.Length - 1 - fromTop] : null;
+        };
+        Func<Instruction, bool> freshArray = p => p != null &&
+            (p.OpCode.Code == Code.Newarr || (SpriteIsLdloc(p) && arrays.Contains(local(p))));
+        Func<Instruction, bool> freshObject = null;
+        freshObject = p =>
+        {
+            if (p == null) return false;
+            if (p.OpCode.Code == Code.Newobj) return true;
+            if (SpriteIsLdloc(p)) return objects.Contains(local(p));
+            if (p.OpCode.Code == Code.Castclass) return freshObject(top(p));
+            var called = p.Operand as MethodReference;
+            return p.OpCode.Code == Code.Call && called != null && called.Name == "GetUninitializedObject" &&
+                   called.DeclaringType.FullName == "System.Runtime.Serialization.FormatterServices";
+        };
+        Func<Instruction, bool> freshAddress = null;
+        freshAddress = p =>
+        {
+            if (p == null) return false;
+            if (p.OpCode.Code == Code.Ldloca || p.OpCode.Code == Code.Ldloca_S) return local(p).VariableType.IsValueType;
+            if (p.OpCode.Code == Code.Ldflda) return freshObject(top(p)) || freshAddress(top(p));
+            return false;
+        };
+        for (bool narrowed = true; narrowed;)
+        {
+            narrowed = false;
+            foreach (Instruction i in body.Instructions)
+            {
+                if (!SpriteIsStloc(i)) continue;
+                VariableDefinition v = local(i);
+                Instruction value = top(i);
+                if (arrays.Contains(v) && !freshArray(value)) { arrays.Remove(v); narrowed = true; }
+                if (objects.Contains(v) && !freshObject(value)) { objects.Remove(v); narrowed = true; }
+            }
+        }
+        foreach (Instruction i in body.Instructions)
+        {
+            if (!stacks.ContainsKey(i)) continue;  // not reached
+            OpCode op = i.OpCode;
+            if (op.Name.StartsWith("stelem") && !freshArray(slot(i, 2)))
+                throw changed("stores into an array it didn't make (" + op.Name + " at " + i.Offset + ")");
+            if (op == OpCodes.Stfld && !freshObject(slot(i, 1)) && !freshAddress(slot(i, 1)))
+                throw changed("stores " + ((FieldReference)i.Operand).Name + " into an object it didn't make");
+            if (op == OpCodes.Initobj && !freshAddress(top(i)))
+                throw changed("clears memory it didn't make (initobj at " + i.Offset + ")");
+        }
+    }
+
+    static bool SpriteIsLdloc(Instruction i)
+    {
+        Code c = i.OpCode.Code;
+        return c == Code.Ldloc || c == Code.Ldloc_S || c == Code.Ldloc_0 || c == Code.Ldloc_1 || c == Code.Ldloc_2 || c == Code.Ldloc_3;
+    }
+
+    static bool SpriteIsStloc(Instruction i)
+    {
+        Code c = i.OpCode.Code;
+        return c == Code.Stloc || c == Code.Stloc_S || c == Code.Stloc_0 || c == Code.Stloc_1 || c == Code.Stloc_2 || c == Code.Stloc_3;
+    }
+
+    // The local an ldloc, ldloca or stloc names.
+    static VariableDefinition SpriteLocal(Instruction i, MethodBody body)
+    {
+        switch (i.OpCode.Code)
+        {
+            case Code.Ldloc_0: case Code.Stloc_0: return body.Variables[0];
+            case Code.Ldloc_1: case Code.Stloc_1: return body.Variables[1];
+            case Code.Ldloc_2: case Code.Stloc_2: return body.Variables[2];
+            case Code.Ldloc_3: case Code.Stloc_3: return body.Variables[3];
+            default:
+                var v = i.Operand as VariableDefinition;
+                if (v != null) return v;
+                return body.Variables[Convert.ToInt32(i.Operand)];
+        }
     }
 }

@@ -26,6 +26,7 @@ the code stage's tools, project's sync, package and the lock check are theirs; r
 """
 
 import argparse
+import contextlib
 import filecmp
 import hashlib
 import json
@@ -77,6 +78,7 @@ from common import (
     meta_of,
     mono_cecil,
     project_folder,
+    replace_path,
     require_complete,
     rewritten_folder,
     run,
@@ -818,6 +820,10 @@ def assemble(rip_dir: Path, project: Path, version: str, platform: str):
     excluded |= plugin_files
     log(f'Synchronizing {project}')
     record = project / SYNC_RECORD
+    # The record as the mirror's own files: no link on the way to it, nor it a link (written through, it would
+    # overwrite the link's target), and written whole (a temp file renamed over it; a rename replaces a link
+    # rather than writing through it).
+    refuse_links(record)
     try:
         known = json.loads(record.read_text(encoding='utf-8'))
     except (OSError, ValueError):
@@ -834,7 +840,11 @@ def assemble(rip_dir: Path, project: Path, version: str, platform: str):
                 step,
             )
     record.parent.mkdir(parents=True, exist_ok=True)
-    record.write_text(json.dumps(known, sort_keys=True), encoding='utf-8')
+    refuse_links(record)
+    temporary = record.with_name(record.name + '.part')
+    temporary.unlink(missing_ok=True)  # a link left there is removed, not written through
+    temporary.write_text(json.dumps(known, sort_keys=True), encoding='utf-8')
+    replace_path(temporary, record)
 
 
 # ---------------------------------------------------------------- build (the builder's helpers)
@@ -1077,10 +1087,13 @@ def writes_vita_build(stage):
     return stage in ('build', 'package')
 
 
-def check_lock(stage=None):
-    """Every stage writes in work/, builds/ or artifacts/, which other jobs share: one pipeline.py at a
-    time, under lock.py run (which sets T2D_LOCKS). Without it, stop while another run holds a build
-    lock, and warn otherwise. The PS Vita stages need vita-build."""
+@contextlib.contextmanager
+def stage_lock(stage=None, wait=0.0):
+    """Every stage writes in work/, builds/ or artifacts/, which other jobs share: one pipeline.py at a time. Under
+    lock.py run (T2D_LOCKS) or a lock.py take that T2D_HOLDER names, the caller's lock is used (the PS Vita stages
+    need vita-build); otherwise the stage takes vita-build itself for its whole run (which waits out pc-build too),
+    or stops when another job holds it. Before (Nov 2026) a direct pipeline.py only warned and went on unlocked:
+    two direct builds both wrote the build folder, and the first to end removed the other's .incomplete marker."""
     import lock
 
     command = 'uv run tools/downgrade/lock.py run vita-build "<you>: <purpose>" --wait 1800 -- '
@@ -1089,15 +1102,29 @@ def check_lock(stage=None):
     if here & set(lock.BUILD_LOCKS):
         if writes_vita_build(stage) and 'vita-build' not in here:
             sys.exit(f'{stage} writes the PS Vita build: run it under vita-build: {command}')
+        yield
         return
-    held = [name for name in lock.BUILD_LOCKS if lock.holder_of(name) and not lock.stale(name)]
-    holders = ', '.join(f'{name} ({lock.holder_of(name)})' for name in held)
-    if any(lock.process_of(name) for name in held):
-        sys.exit(f'Held by another run: {holders}. Wait for it: {command}')
-    if held:
-        log(f'WARNING: {holders} held; unless that is this job, run: {command}')
-    else:
-        log('Note: not run under lock.py run, so another job could start a pipeline at the same time')
+    if lock.ours('vita-build'):
+        yield
+        return
+    holder = f'pipeline.py {os.getpid()}: {stage}'
+    if lock.take('vita-build', holder, wait, process=True) != 0:
+        sys.exit(
+            'Held by another job (above). Wait for it with: '
+            f'{command}; a lock you took yourself with lock.py take: set T2D_HOLDER to its holder'
+        )
+    saved = {name: os.environ.get(name) for name in ('T2D_LOCK', 'T2D_LOCKS')}
+    os.environ['T2D_LOCK'] = 'vita-build'  # this process's checks (lock.held_here) and its children see it held
+    os.environ['T2D_LOCKS'] = ','.join(dict.fromkeys([*lock.held_here(), 'vita-build']))
+    try:
+        yield
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        lock.release('vita-build', holder)
 
 
 STAGES = ['recover', 'rip', 'code', 'project', 'build', 'package']
@@ -1116,7 +1143,11 @@ def main():
     args = parser.parse_args()
     platform, version = 'vita', TARGET
     build_switches(platform)  # stops on a value a switch doesn't take, before any stage starts
-    check_lock(args.stage)
+    with stage_lock(args.stage):
+        run_stage(args, platform, version)
+
+
+def run_stage(args, platform, version):
     if not (args.game / 'GameAssembly.dll').exists() or not (game_data(args.game) / METADATA).exists():
         sys.exit(f'{args.game} is not the IL2CPP build of the game (no GameAssembly.dll or {METADATA.as_posix()}).')
     rip_dir = WORK / f'rip-{version}'

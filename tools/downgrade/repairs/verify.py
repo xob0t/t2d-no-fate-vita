@@ -69,12 +69,43 @@ def fail(tool, args, run, tail=None):
     sys.exit(f'{tool} failed (exit code {run.returncode}) on {" ".join(args[:2])}:\n{tail}')
 
 
+def matches(key, name):
+    """Whether a Repairs method key ("Type::m(Int32)") is the method given: the same key when it has a signature,
+    else any overload of that name."""
+    return key == name if '(' in name else key.split('(')[0] == name
+
+
+def methods(exe, dll, name):
+    """The methods of dll that name names (matches), from `Repairs methods`."""
+    args = [exe, 'methods', dll, name.split('(')[0]]
+    run = subprocess.run(args, capture_output=True, text=True, check=False)
+    if run.returncode != 0:
+        fail('Repairs methods', args, run)
+    return [line for line in run.stdout.splitlines() if matches(line, name)]
+
+
 def markers(exe, dll, name):
     args = [exe, 'markers', dll, name.split('(')[0]]
     run = subprocess.run(args, capture_output=True, text=True, check=False)
     if run.returncode != 0:  # no markers read is not no markers
         fail('Repairs markers', args, run)
-    return [l for l in run.stdout.splitlines() if l.split('\t')[1:2] != ['-'] and l.split('\t')[0] == name]
+    # before (Nov 2026) the key had to equal the name as given, so a name without its signature counted no markers
+    return [l for l in run.stdout.splitlines() if l.split('	')[1:2] != ['-'] and matches(l.split('	')[0], name)]
+
+
+def compare(before, after):
+    """(kept, new) over ILVerify's errors per method key (an overload apart from the others): an error that moved
+    from one overload to another is new in the second. Before (Nov 2026) the overloads' errors were pooled."""
+    kept, new = [], []
+    for key in sorted(set(before) | set(after)):
+        left = list(before.get(key, []))
+        for e in after.get(key, []):
+            if e in left:
+                left.remove(e)
+                kept.append(e)
+            else:
+                new.append(f'{key}: {e}')
+    return kept, new
 
 
 def main():
@@ -92,20 +123,22 @@ def main():
     bad = 0
     for name in a.method:
         key = name.split('(')[0]
-        before = [e for k, v in eb.items() if k.startswith(key + '(') for e in v]
-        after = [e for k, v in ea.items() if k.startswith(key + '(') for e in v]
-        new = list(after)
-        kept = []
-        for e in before:
-            if e in new:
-                new.remove(e)
-                kept.append(e)
-        gone = len(before) - len(kept)
+        # A method neither assembly has (a misspelt name) has no errors and no markers: it must exist in both.
+        missing = [path for path in (a.before, a.after) if not methods(a.repairs, path, name)]
+        if missing:
+            bad += 1
+            print(f'FAIL {name}: no such method in {", ".join(missing)}')
+            continue
+        before = {k: v for k, v in eb.items() if k.startswith(key + '(')}
+        after = {k: v for k, v in ea.items() if k.startswith(key + '(')}
+        kept, new = compare(before, after)
+        count_before, count_after = sum(map(len, before.values())), sum(map(len, after.values()))
+        gone = count_before - len(kept)
         mb, ma = len(markers(a.repairs, a.before, name)), len(markers(a.repairs, a.after, name))
         status = 'ok' if ma == 0 and not new else 'FAIL'
         bad += status != 'ok'
         print('%-4s %s: markers %d -> %d; ILVerify errors %d -> %d (gone %d, kept %d, new %d)'
-              % (status, name, mb, ma, len(before), len(after), gone, len(kept), len(new)))
+              % (status, name, mb, ma, count_before, count_after, gone, len(kept), len(new)))
         for e in kept:
             print('       kept: ' + e[:150])
         for e in new:

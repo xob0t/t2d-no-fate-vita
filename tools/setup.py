@@ -171,6 +171,9 @@ class Setup:
         git = shutil.which('git')
         if not git:
             sys.exit('Rewind: Git is not on PATH; install it (winget install Git.Git) and run setup again')
+        problem = foreign_rewind(REWIND, EXTERNAL, ROOT)
+        if problem:
+            sys.exit(f'Rewind: {problem}; setup changes nothing there (remove it, or point it at a clone of its own)')
         if not (REWIND / '.git').exists():
             if REWIND.exists():
                 shutil.rmtree(REWIND)
@@ -446,6 +449,46 @@ class Setup:
 
 
 # ---------------------------------------------------------------- helpers
+
+
+def git_common_dir(folder):
+    """The resolved git common directory (the main .git folder) of the repository folder is in, or None."""
+    out = subprocess.run(
+        ['git', '-C', str(folder), 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if out.returncode or not out.stdout.strip():
+        return None
+    return os.path.normcase(os.path.realpath(out.stdout.strip()))
+
+
+def foreign_rewind(rewind: Path, external: Path, root: Path):
+    """Why the Rewind folder isn't setup's own, or None when it is. Setup points its clone's origin elsewhere,
+    checks out with --force and cleans with -fdx: through a link (a junction to the fork's own clone, say, or a
+    tools/external linked to some other folder) that would rewrite another checkout. Its own is: rewind itself no
+    link, its tools/external that of a checkout of this repository (a worktree's junction to the main checkout's is
+    fine), and when a clone, a clone of its own (.git a folder, not a worktree sharing another clone's config) whose
+    top level is rewind itself."""
+    real = Path(os.path.realpath(rewind))
+    real_external = Path(os.path.realpath(external))
+    same = lambda a, b: os.path.normcase(str(a)) == os.path.normcase(str(b))  # noqa: E731
+    if rewind.is_symlink() or rewind.is_junction() or not same(real, real_external / rewind.name):
+        return f'{rewind} is a link to {real}'
+    if not same(real_external, os.path.abspath(external)):
+        checkout = real_external.parent.parent
+        if real_external.parent.name != 'tools' or git_common_dir(checkout) != git_common_dir(root):
+            return f'{external} is a link to {real_external}, not the tools/external of a checkout of this repository'
+    if (rewind / '.git').exists():
+        if not (rewind / '.git').is_dir():
+            return f"{rewind} is a git worktree of another clone, whose settings setup's changes would rewrite"
+        top = subprocess.run(
+            ['git', '-C', str(rewind), 'rev-parse', '--show-toplevel'], capture_output=True, text=True, check=False
+        ).stdout.strip()
+        if not top or not same(Path(os.path.realpath(top)), real):
+            return f"{rewind}'s repository is {top or 'unreadable'}, not {rewind}"
+    return None
 
 
 def extract_zip(archive: Path, destination: Path):

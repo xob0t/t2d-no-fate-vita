@@ -110,32 +110,48 @@ def process_of(name):
     return pid_line(text_of(name))
 
 
+GONE, UNKNOWN = 'gone', 'unknown'  # process_start's answers besides a start time
+
+
 def process_start(pid):
-    """A running process's start time (a Windows FILETIME), or None when no process has that pid."""
-    kernel32 = ctypes.windll.kernel32
+    """A running process's start time (a Windows FILETIME); GONE when no process has that pid (or it has exited);
+    UNKNOWN when Windows doesn't say (access denied, a failed query): a live process can't be told from a dead one
+    then. Before (Nov 2026) every failure was None, which stale_text took for an ended owner, so a lock whose owner
+    this account couldn't query was removed under a live job."""
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
     kernel32.OpenProcess.restype = ctypes.c_void_p
+    kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
     kernel32.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     kernel32.GetProcessTimes.argtypes = [ctypes.c_void_p, *[ctypes.c_void_p] * 4]
     kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
     handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
     if not handle:
-        return None
+        # ERROR_INVALID_PARAMETER: no process has that pid. Anything else (ERROR_ACCESS_DENIED above all) is a
+        # process that exists, or may.
+        return GONE if ctypes.get_last_error() == 87 else UNKNOWN
     try:
         code, times = ctypes.c_ulong(), [ctypes.c_ulonglong() for _ in range(4)]
-        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)) or code.value != 259:  # STILL_ACTIVE
-            return None
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return UNKNOWN
+        if code.value != 259:  # not STILL_ACTIVE: it has exited (a handle elsewhere keeps its pid)
+            return GONE
         if not kernel32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
-            return None
+            return UNKNOWN
         return times[0].value
     finally:
         kernel32.CloseHandle(handle)
 
 
 def stale_text(text):
-    """Whether a lock's text names a run whose lock.py process has ended (killed before it could
-    release the lock). Its command ended with it (run's job)."""
+    """Whether a lock's text names a run whose lock.py process has ended (killed before it could release the
+    lock): no process has its pid, or the process with it started at another time (the pid was reused). Its
+    command ended with it (run's job). A process Windows won't describe (UNKNOWN) keeps the lock: an inconclusive
+    answer is never a reason to remove it."""
     holder = pid_line(text)
-    return holder is not None and process_start(holder[0]) != holder[1]
+    if holder is None:
+        return False
+    start = process_start(holder[0])
+    return start == GONE or (start != UNKNOWN and start != holder[1])
 
 
 def stale(name):

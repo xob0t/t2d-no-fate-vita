@@ -11,8 +11,10 @@ ROOT=$(cd "$(dirname "$0")/../../../.." && pwd)
 # The main checkout holds tools/external (a git worktree has none): the first entry of `git worktree list`.
 MAIN=${T2D_MAIN:-$(git -C "$ROOT" worktree list --porcelain | sed -n '1s/^worktree //p')}
 DOTNET=${DOTNET:-$MAIN/tools/external/dotnet10/dotnet.exe}
-# The Unity 2018.2.19f1 editor's Data folder, as huntdown-vita's setup --vita extracts it beside this repository.
-U2018=${U2018:-$MAIN/../huntdown-vita/tools/external/unity-2018.2.19f1/Editor/Data}
+# The Unity 2018.2.19f1 editor's Data folder, where this repository's setup puts it (pipeline.editor_data).
+U2018=${U2018:-$MAIN/tools/external/unity-2018.2.19f1/Editor/Data}
+[ -f "$U2018/Managed/UnityEngine/UnityEngine.CoreModule.dll" ] || { echo "compile.sh: no Unity 2018.2.19f1 editor at $U2018 (uv run tools/setup.py, or set U2018)" >&2; exit 1; }
+[ -f "$DOTNET" ] || { echo "compile.sh: no .NET 10 SDK at $DOTNET (uv run tools/setup.py, or set DOTNET)" >&2; exit 1; }
 CSC=$(ls -d "$(dirname "$DOTNET")"/sdk/*/Roslyn/bincore/csc.dll | sort | tail -1)
 AOT=$U2018/MonoBleedingEdge/lib/mono/unityaot
 ENGINE=$U2018/Managed/UnityEngine

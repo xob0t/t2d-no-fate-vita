@@ -110,6 +110,11 @@ partial class DowngradeAssemblies
     // AtlasDraws (R5) finds nothing once the sprite batch's R8 has taken both draw methods (docs/drawing.md).
     static readonly HashSet<string> OptionalPasses = new HashSet<string> { "MarkNativeCallbacks", "ReimplementedInterfaces", "ListRewindGaps", "TypeGapValues", "AtlasDraws", "SplitLongMethods" };
 
+    // Passes that check a body as the repair rules leave it (M1 pins Menu.moveCursor's hash after UntypedFields.cs
+    // retypes it): skipped when T2D_REPAIRS=0 leaves the repairs out, so that diagnostic build runs to its end rather
+    // than stopping at a hash it can't have; a normal build still checks the hash.
+    static readonly HashSet<string> RepairedBodyPasses = new HashSet<string> { "MenuCursorSearch" };
+
     static readonly Pass[] Passes =
     {
         new Pass("redirect", Scope.All, RedirectMembers),
@@ -431,6 +436,11 @@ partial class DowngradeAssemblies
         {
             if (pass.Scope == Scope.Game && !IsGameAssembly(module)) continue;
             if (pass.Switch != null && Environment.GetEnvironmentVariable(pass.Switch) != "1") continue;
+            if (RepairedBodyPasses.Contains(pass.Name) && Environment.GetEnvironmentVariable("T2D_REPAIRS") == "0")
+            {
+                Console.WriteLine("pass " + pass.Name + " skipped: T2D_REPAIRS=0, and it pins a body the repairs change");
+                continue;
+            }
             int sites = pass.Run(module);
             Count("pass " + pass.Name, sites);
             // The engine-wide passes find nothing to do in a game that has no such sites.

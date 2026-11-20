@@ -4,15 +4,23 @@
 # T2DCompat compiled by compile.sh (with the pipeline's other T2DCompat sources), runs the rule check against Rewind's assemblies. Run from the repository root:
 #   tools/downgrade/compat/check/build.sh <out dir> [<Rewind's assemblies dir>]
 # The defaults are the main checkout's work/platform, and the recovered assemblies of this checkout's pipeline
-# (work/recover/assemblies, pipeline.py recover), else the assessment's (the main checkout's work/rewind-steam).
+# (work/recover/assemblies, pipeline.py recover), else the main checkout's; with neither it stops (no assessment's
+# assemblies stand in for the pipeline's).
 set -e
 ROOT=$(cd "$(dirname "$0")/../../../.." && pwd)
 MAIN=${T2D_MAIN:-$(git -C "$ROOT" worktree list --porcelain | sed -n '1s/^worktree //p')}
 OUT=${1:-$MAIN/work/platform}
-REWIND=${2:-$ROOT/work/recover/assemblies}
-[ -f "$REWIND/Assembly-CSharp.dll" ] || REWIND=$MAIN/work/rewind-steam/out/assemblies
+if [ -n "$2" ]; then
+  REWIND=$2
+else
+  REWIND=$ROOT/work/recover/assemblies
+  [ -f "$REWIND/Assembly-CSharp.dll" ] || REWIND=$MAIN/work/recover/assemblies
+fi
+[ -f "$REWIND/Assembly-CSharp.dll" ] || { echo "build.sh: no Assembly-CSharp.dll in $REWIND (run pipeline.py recover, or pass the folder)" >&2; exit 1; }
+echo "build.sh: Rewind's assemblies from $REWIND"
 CECIL=${CECIL:-$MAIN/tools/external/mono.cecil-0.10.0-beta6/Mono.Cecil.dll}
 CSC=/c/Windows/Microsoft.NET/Framework64/v4.0.30319/csc.exe
+[ -f "$CECIL" ] || { echo "build.sh: no Mono.Cecil at $CECIL (uv run tools/setup.py)" >&2; exit 1; }
 w() { cygpath -w "$1"; }
 mkdir -p "$OUT/bin"
 cp "$CECIL" "$OUT/bin/Mono.Cecil.dll"

@@ -18,8 +18,8 @@ using UnityEngine.SceneManagement;
 //   -t2d-heartbeat <s>               every s seconds a T2D_HEARTBEAT line: frames, frame time (mean, p50, p90, worst),
 //                                    managed heap, free memory, and per frame the sprites SpriteBatch drew, its runs
 //                                    (draws), the runs that changed texture (page switches), and the off-screen draws
-//   -t2d-shot <s> <path>             a screenshot s seconds after the start
-//   -t2d-shots <s> <prefix> [after]  a screenshot every s seconds from after seconds on, <prefix>-<seconds>.png
+//   -t2d-shot <s> <name>             a screenshot s seconds after the start, shots/<name>.png
+//   -t2d-shots <s> <name> [after]    a screenshot every s seconds from after seconds on, shots/<name>-<seconds>.png
 //   -t2d-quit-after <s>              quit s seconds after the start
 //   -t2d-stalls <ms>                 a frame longer than ms (default 1000; 0: off) logs T2D_STALL lines from a thread
 //                                    of the probe's, every 250 ms while it lasts: the free memory and, in a T2D_TRACE=1
@@ -37,7 +37,9 @@ using UnityEngine.SceneManagement;
 //                                    it briefs; Game.infiniteHealth keeps a scripted player alive.
 //   -t2d-atlas-sync                  the atlas prefetches with Resources.Load, not LoadAsync (Atlas.PrefetchAsync)
 // A screenshot is the frame read back at its end and saved as a PNG (on the PS Vita 960x544, about 0.6 s of stall,
-// since ScreenCapture writes nothing there); use a path in ux0:data/T2DNoFate.
+// since ScreenCapture writes nothing there). It goes only to the folder shots in the save folder (Saves; on the PS Vita
+// ux0:data/T2DNoFate/shots), named by the flag with letters, digits, '-' and '_' (a ".png" is dropped): a flag can't
+// name a save or any other file. Any other name is refused with a T2D_PROBE line.
 // Part of T2DCompat; see Compat2018.cs.
 namespace T2DCompat
 {
@@ -78,9 +80,9 @@ namespace T2DCompat
             heartbeat = Flags.Number("-t2d-heartbeat", 1, 0f);
             quitAfter = Flags.Number("-t2d-quit-after", 1, -1f);
             shotAt = Flags.Number("-t2d-shot", 1, -1f);
-            shotPath = Flags.Word("-t2d-shot", 2);
+            shotPath = ShotName("-t2d-shot", Flags.Word("-t2d-shot", 2));
             shotsEvery = Flags.Number("-t2d-shots", 1, -1f);
-            shotsPrefix = Flags.Word("-t2d-shots", 2);
+            shotsPrefix = ShotName("-t2d-shots", Flags.Word("-t2d-shots", 2));
             shotsAfter = Flags.Number("-t2d-shots", 3, 0f);
             stallMs = (int)Flags.Number("-t2d-stalls", 1, 1000f);
             string peek = Flags.Value("-t2d-peek");
@@ -397,7 +399,7 @@ namespace T2DCompat
             if (shotsEvery > 0f && shotsPrefix != null && now >= shotsAfter && now - lastShots >= shotsEvery)
             {
                 lastShots = now;
-                Shot(shotsPrefix + "-" + ((int)now).ToString(Inv) + ".png");
+                Shot(shotsPrefix + "-" + ((int)now).ToString(Inv));
             }
         }
 
@@ -436,9 +438,36 @@ namespace T2DCompat
             lastBeat = now;
         }
 
-        static void Shot(string path)
+        // A flag's screenshot name without ".png": letters, digits, '-' and '_', at most 48; otherwise null (no shot).
+        static string ShotName(string flag, string name)
         {
-            if (probe != null) probe.StartCoroutine(SaveFrame(path));
+            if (name == null) return null;
+            string stem = name.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ? name.Substring(0, name.Length - 4) : name;
+            bool good = stem.Length > 0 && stem.Length <= 48;
+            foreach (char c in stem)
+                if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_')) good = false;
+            if (good) return stem;
+            Debug.Log("T2D_PROBE " + flag + " " + name + " refused: a screenshot is named with letters, digits, '-' and '_' only");
+            return null;
+        }
+
+        // name (checked by ShotName) as a file in the save folder's shots, the only place a screenshot goes.
+        static void Shot(string name)
+        {
+            if (probe == null) return;
+            string path;
+            try
+            {
+                string folder = Saves.PersistentDataPath() + "/shots";
+                System.IO.Directory.CreateDirectory(folder);
+                path = folder + "/" + name + ".png";
+            }
+            catch (Exception exception)
+            {
+                Debug.Log("T2D_PROBE screenshot " + name + " failed: " + exception.Message);
+                return;
+            }
+            probe.StartCoroutine(SaveFrame(path));
         }
 
         static IEnumerator SaveFrame(string path)

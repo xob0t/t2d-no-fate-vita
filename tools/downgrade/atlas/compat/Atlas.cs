@@ -244,8 +244,10 @@ namespace T2DCompat
             return t;
         }
 
+        // Once per load: a page Adopt took back as drawn (its texture was waiting for release) has no pending bytes.
         static void Drawn(int page)
         {
+            if (drawn[page]) return;
             drawn[page] = true;
             pendingBytes -= PageBytes(page);
             PrefetchDrawn(page);
@@ -800,6 +802,8 @@ namespace T2DCompat
                 if (!covered && pages[p] != null && !viaAsync[p]) continue;
                 if (pages[p] == null && (!covered || !CoverWaits || WaitFor(p) == null)) continue;
                 warmList.RemoveAt(i);
+                // The wait's Adopt may have taken back a texture already drawn (waiting for release): nothing to warm.
+                if (drawn[p]) { i--; continue; }
                 if (covered) coverWarmed += PageBytes(p);
                 Drawn(p);
                 lastUse[p] = ++useClock;
@@ -1295,10 +1299,30 @@ namespace T2DCompat
 
         // ---- the data ----------------------------------------------------------------------------
 
+        // The tables, once. loaded is set only once every table is read and every array made (before Nov 2026 it was set
+        // first, so a missing or bad table left later calls on null arrays); a failure is kept and thrown again.
+        static string loadFailure;
+
         static void Load()
         {
             if (loaded) return;
+            if (loadFailure != null) throw new InvalidOperationException(loadFailure);
+            try
+            {
+                ReadAll();
+            }
+            catch (Exception e)
+            {
+                loadFailure = "T2D atlas: the tables didn't load: " + e.Message;
+                throw;
+            }
             loaded = true;
+            Debug.Log("T2D atlas: " + realPages + " pages" + (pageW.Length > realPages ? " (" + (pageW.Length - realPages) + " tiles of the big ones)" : "") +
+                ", " + tex.Length + " images, " + sceneNames.Length + " scenes");
+        }
+
+        static void ReadAll()
+        {
             ReadFrames(Bytes("frames"));
             realPages = pageW.Length;
             ReadScenes(Bytes("scenes"));
@@ -1311,8 +1335,6 @@ namespace T2DCompat
             wanted = new bool[pageW.Length];
             eager = new bool[pageW.Length];
             missing = new bool[pageW.Length];
-            Debug.Log("T2D atlas: " + realPages + " pages" + (pageW.Length > realPages ? " (" + (pageW.Length - realPages) + " tiles of the big ones)" : "") +
-                ", " + tex.Length + " images, " + sceneNames.Length + " scenes");
         }
 
         // ---- tiles -------------------------------------------------------------------------------

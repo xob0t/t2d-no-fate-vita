@@ -111,13 +111,26 @@ def connect_commands(timeout=10):
         raise Unreachable(
             f"vitacompanion's command server does not answer at {VITA_HOST}:{pipeline.VITA_COMMANDS[1]} "
             f'({error}). This needs vitacompanion running on the console. Without it, install '
-            f"the VPK in VitaShell, update with VitaShell's FTP server and `vita.py sync`, and "
+            f"the VPK in VitaShell, update with VitaShell's FTP server and `vita.py sync` (with "
+            f'{NOT_RUNNING}=1, the game not running), and '
             f'start the game from the LiveArea.'
         ) from error
 
 
+class Incomplete(OSError):
+    """A command chain whose reply didn't end within its timeout: the chain may have run in part. output: what
+    came back."""
+
+    def __init__(self, chain, output, timeout):
+        super().__init__(f'vitacompanion: no complete reply to "{chain}" within {timeout} s (so far: {output!r})')
+        self.output = output
+
+
 def command(chain, timeout=10):
-    """Runs a vitacompanion command chain ("quit all; wait 2s; launch ...") and returns its output."""
+    """Runs a vitacompanion command chain ("quit all; wait 2s; launch ...") and returns its output. The command
+    server closes the connection when the chain has run (a press chain comes back in well under a second), so a
+    reply cut off by the timeout raises Incomplete: before (Nov 2026) it was returned as if whole, and `do` exited
+    0 on a press whose release may never have run."""
     with connect_commands() as connection:
         connection.sendall((chain + '\n').encode())
         connection.settimeout(timeout)
@@ -125,8 +138,8 @@ def command(chain, timeout=10):
         try:
             while chunk := connection.recv(4096):
                 output += chunk
-        except TimeoutError:
-            pass
+        except TimeoutError as error:
+            raise Incomplete(chain, output.decode(errors='replace').strip(), timeout) from error
     return output.decode(errors='replace').strip()
 
 
@@ -138,7 +151,10 @@ EXTENDED = ('install', 'perf', 'screenshot')
 def require(name):
     """Stops with a message if the console's vitacompanion lacks the command `name`. An empty answer
     to help (the connection closed early) can't tell: the command goes ahead, with a note."""
-    listed = command('help', timeout=4)
+    try:
+        listed = command('help', timeout=4)
+    except Incomplete as error:
+        listed = error.output  # the names that came back; an empty answer goes ahead below
     names = {line.split()[0] for line in listed.splitlines() if line.strip()}
     if not listed:
         log(f"vitacompanion's help came back empty: can't tell whether it has `{name}`; trying it")
@@ -374,14 +390,31 @@ def sync(build: Path, build_wait=BUILD_WAIT_SECONDS):
 
 def game_running():
     """Whether the game is the running app (perf's "app:" line), asked after wake: a game the display's
-    timeout paused shows as "app: none". None when the answer has no "app:" line (the released
-    vitacompanion has no perf); False when the command server doesn't answer (VitaShell's FTP alone)."""
+    timeout paused shows as "app: none". None when it can't be told: the answer has no "app:" line (the released
+    vitacompanion has no perf), or the command server doesn't answer, or answers in part. Before (Nov 2026) no
+    answer was False, so a quit "succeeded" and a sync replaced files under a game that may have been running."""
     wake()
     try:
         out = command('perf', timeout=5)
     except OSError:
-        return False
+        return None
     return pipeline.VITA_TITLE_ID in out if 'app:' in out else None
+
+
+QUIT_SECONDS = 10  # how long a quit waits for perf to show the game gone
+
+
+def stopped():
+    """After a quit: whether perf shows the game gone within QUIT_SECONDS (True), still running (False), or
+    can't tell (None)."""
+    deadline = time.time() + QUIT_SECONDS
+    while True:
+        running = game_running()
+        if running is False:
+            return True
+        if time.time() >= deadline:
+            return None if running is None else False
+        time.sleep(1)
 
 
 def other_checkouts():
@@ -785,18 +818,26 @@ def files(folder: str):
         walk(folder)
 
 
-def check_lock(name):
-    """Stop a changing command while the vita-device lock is someone else's (lock.ours: any run this
-    process is in, or T2D_HOLDER): a job whose lock take failed would otherwise quit another job's run
-    and overwrite its flags."""
-    lock.clear_stale('vita-device')
-    text = lock.holder_of('vita-device')
-    if text is None or lock.ours('vita-device'):
+@contextlib.contextmanager
+def device_lock(name):
+    """Hold the vita-device lock for the whole of a changing command. A run this process is in, or a take that
+    T2D_HOLDER names (lock.ours), is used as it is; a free lock is taken for the command and released after; one
+    someone else holds stops it: a job whose lock take failed would otherwise quit another job's run and overwrite
+    its flags. Before (Nov 2026) a free lock was only checked, so two direct vita.py commands (or one and a job
+    that took the lock meanwhile) could act on the console at once."""
+    if lock.ours('vita-device'):
+        yield
         return
-    sys.exit(
-        f'vita.py {name}: the console is held by "{text}" (vita-device lock). Run inside '
-        '`lock.py run vita-device ...`, or set T2D_HOLDER=<your holder name> after taking it.'
-    )
+    holder = f'vita.py {os.getpid()}: {name}'
+    if lock.take('vita-device', holder, 0, process=True) != 0:
+        sys.exit(
+            f'vita.py {name}: the console is held by "{lock.holder_of("vita-device")}" (vita-device lock). Run inside '
+            '`lock.py run vita-device ...`, or set T2D_HOLDER=<your holder name> after taking it.'
+        )
+    try:
+        yield
+    finally:
+        lock.release('vita-device', holder)
 
 
 def quit_all():
@@ -810,23 +851,48 @@ def quit_game():
     quit (vitacompanion's quit is `quit all`). quit is None when perf can't tell (the released
     vitacompanion has none, or the command server didn't answer): nothing is quit then; `vita.py do
     "quit all"` quits whatever runs. The app can change between the question and the quit, which no
-    vitacompanion command closes."""
+    vitacompanion command closes. A quit counts (True) only once perf shows the game gone; otherwise quit is
+    None too, and the `quit` command exits with 1."""
     running = game_running()
     if running is None:
         return None, f"quit: perf can't tell which app runs, so nothing was quit (do \"quit all\" quits any app)"
     if not running:
         return False, f'quit: {pipeline.VITA_TITLE_ID} is not the running app; nothing was quit'
-    return True, quit_all()
+    reply = quit_all()
+    gone = stopped()
+    if gone:
+        return True, reply
+    state = 'still runs' if gone is False else "may still run (perf can't tell)"
+    return None, f'quit: sent quit all ({reply or "no reply"}), but {pipeline.VITA_TITLE_ID} {state}'
+
+
+NOT_RUNNING = 'T2D_GAME_NOT_RUNNING'  # =1: the caller vouches the game isn't running (VitaShell's FTP alone)
 
 
 def quit_before_writing(name):
     """Files replaced under a running game crash it (27 Oct: a sync while the game ran, started by hand to
-    keep the console awake), so the game is quit first, also when perf can't tell (quit all then)."""
+    keep the console awake), so the game is quit first, also when perf can't tell (quit all then), and files
+    are written only once perf shows it gone. Without the command server (VitaShell's FTP alone) or perf nothing
+    can show that: the command stops, unless T2D_GAME_NOT_RUNNING=1 says the game isn't running."""
+    if os.environ.get(NOT_RUNNING) == '1':
+        print(f'{name}: {NOT_RUNNING}=1, so the game is taken as not running')
+        return
     running = game_running()
-    if running is not False:
-        state = 'the game is running' if running else "perf can't tell whether the game runs"
-        print(f'{name}: {state}; quitting it first')
+    if running is False:
+        return
+    state = 'the game is running' if running else "perf can't tell whether the game runs"
+    print(f'{name}: {state}; quitting it first')
+    try:
         print(quit_all())
+    except OSError as error:
+        sys.exit(f'{name}: the quit failed ({error}); nothing was written ({NOT_RUNNING}=1 if the game is not running)')
+    gone = stopped()
+    if not gone:
+        state = 'still runs' if gone is False else "may still run (perf can't tell)"
+        sys.exit(
+            f'{name}: the game {state} after quit all; nothing was written. Quit it, or set {NOT_RUNNING}=1 if it'
+            ' is not running'
+        )
 
 
 def launch_game():
@@ -859,7 +925,7 @@ def show_args():
 def main():
     try:
         run_command()
-    except Unreachable as error:
+    except (Unreachable, Incomplete) as error:
         sys.exit(str(error))
 
 
@@ -922,8 +988,11 @@ def run_command():
         parser.error('--show goes with args')
     if args.show and args.rest:
         parser.error('args --show changes nothing: give it no flags')
-    if args.command in CHANGING and not args.show:
-        check_lock(args.command)
+    with device_lock(args.command) if args.command in CHANGING and not args.show else contextlib.nullcontext():
+        dispatch(args)
+
+
+def dispatch(args):
     build = args.build or build_folder('vita')
 
     if args.command == 'quit':
@@ -947,7 +1016,10 @@ def run_command():
     if args.command == 'install':
         install(build, args.build_wait)
     if args.command == 'do':
-        print(command(' '.join(args.rest), timeout=30))
+        reply = command(' '.join(args.rest), timeout=30)
+        print(reply)
+        if not reply:  # each command answers (wait: Waited.): none at all is a chain that may not have run
+            sys.exit('do: no reply from vitacompanion; the chain may not have run')
     if args.command == 'shot':
         shot(Path(args.rest[0]) if args.rest else OUT / 'shot.png')
     if args.command == 'perf':

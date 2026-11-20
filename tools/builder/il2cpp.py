@@ -498,6 +498,23 @@ def digest(*parts):
     return h.hexdigest()
 
 
+def tools_fingerprint():
+    """The content of everything besides the project that decides the code module: UnityLinker, il2cpp and the
+    libraries il2cpp compiles (libil2cpp, its external libraries), the PS Vita plugin with its platform layer, Boehm
+    GC and pthread, the whitelists and native_link.xml the linker reads, MapFileParser, the SDK's compiler and linker
+    (host_tools/build/bin), and this file, which holds the linker's and il2cpp's options. Before (Nov 2026) the stamp
+    had only UnityLinker's and il2cpp's sizes: another plugin, whitelist, option or SDK reused a module they never
+    built. About 100 MB, hashed in about a second."""
+    trees = [IL2CPP_BUILD, LIBIL2CPP, IL2CPP_ROOT.parent / 'external', PSP2_IL2CPP, WHITELISTS, PSP2SNC.parent]
+    files = [IL2CPP_ROOT, MAP_FILE_PARSER, PLUGIN, PTHREAD_STUB, NATIVE_LINK, PTHREAD, Path(__file__)]
+    files += [p for tree in trees if tree.exists() for p in tree.rglob('*') if p.is_file()]
+    h = hashlib.sha256()
+    for f in sorted(set(files), key=lambda p: str(p).lower()):
+        h.update(str(f).encode() + bytes(1))
+        h.update(hashlib.sha256(f.read_bytes()).digest() if f.is_file() else b'missing')
+    return h.hexdigest()
+
+
 def build(out=paths.OUT, project=paths.PROJECT, count=None, force=False, work=BUILD):
     """Build the code module and copy what the code step writes into `out`. Returns a dict of timings."""
     times = {}
@@ -523,8 +540,7 @@ def build(out=paths.OUT, project=paths.PROJECT, count=None, force=False, work=BU
         *(xmls[n] for n in sorted(xmls)),
         *(p.read_bytes() for p in project_link_xmls(project)),
         appinfo,
-        UNITY_LINKER.stat().st_size,
-        IL2CPP.stat().st_size,
+        tools_fingerprint(),
     )
     staging = work / 'StagingArea'
     data, managed, native = staging / 'Data', staging / 'Data' / 'Managed', staging / 'Data' / 'Native'

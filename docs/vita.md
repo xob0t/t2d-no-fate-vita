@@ -25,7 +25,7 @@ uv run tools/downgrade/vita.py crashes --pull         # this title's newest cras
 
 ```powershell
 uv run tools/downgrade/lock.py run vita-device "t2d: boot" --wait 3000 -- uv run tools/downgrade/drive.py menu1 `
-  "-t2d-heartbeat 5 -t2d-shots 3 ux0:data/T2DNoFate/shot 24" "wait 26; press start 300; wait 9; press cross 300" --sync
+  "-t2d-heartbeat 5 -t2d-shots 3 shot 24" "wait 26; press start 300; wait 9; press cross 300" --sync
 ```
 
 ## Sharing the console
@@ -41,7 +41,9 @@ The safety rules, as on butcher-vita's:
 - Uploads go to `<name>.part` and are renamed; an interrupted file is sent again. Don't kill `vita.py` while it transfers: Ctrl+C lets the file finish.
 - Flags apply to one launch: the player renames `args.txt` to `args.used.txt` as it reads it (`compat/Flags.cs`), and `drive.py` clears flags a launch never read.
 - `drive.py` releases every button it presses, also when the session stops part way; it has no step that leaves one held.
-- `drive.py` stops when a sync, the flags or a press fails. At its end it quits the game after any launch it asked for, also one whose reply was lost. `vita.py quit` asks `perf` which app runs first and quits only TNOF00001 (vitacompanion's quit is `quit all`, which ends whatever app the console shows); when `perf` can't tell, it quits nothing and exits with 1. `sync` and `run` still quit whatever runs when `perf` can't tell, since files replaced under the running game crash it.
+- `drive.py` stops when a sync, the flags or a press fails. At its end it quits the game after any launch it asked for, also one whose reply was lost. `vita.py quit` asks `perf` which app runs first and quits only TNOF00001 (vitacompanion's quit is `quit all`, which ends whatever app the console shows); when `perf` can't tell, it quits nothing and exits with 1, and a quit counts only once `perf` shows the game gone (otherwise exit 1). `sync` and `run` still quit whatever runs when `perf` can't tell, since files replaced under the running game crash it, and write files only once `perf` shows the game gone; with no command server (VitaShell's FTP alone) or no `perf`, they stop unless `T2D_GAME_NOT_RUNNING=1` vouches that the game isn't running.
+- A vitacompanion reply cut off by its timeout is an error (`vita.py do` exits 1, also on no reply at all), so `drive.py` keeps a press's button as held and releases it.
+- `vita.py`'s changing commands take the `vita-device` lock themselves when it is free, for the whole command, and refuse when someone else holds it.
 - Each step of `drive.py`'s end (releasing a button, reading and saving the log, the quit, clearing the flags, the screenshots) runs whatever the others did; a failed one makes `drive.py` exit non-zero. A console with no `log.txt` yet is a first run, not a failure (`vita.py log --missing-ok`).
 - A launch that wrote no log of its own: `drive.py` keeps the log it read as `log.stale.txt`, not `log.txt`, and exits with 1.
 - Only TNOF00001 and `ux0:data/T2DNoFate` are touched; `crashes` lists only this title's dumps.
@@ -60,8 +62,8 @@ The heartbeat line ends with the atlas's resident pages, their megabytes, those 
 | Flag | Effect |
 | --- | --- |
 | `-t2d-heartbeat <s>` | Every s seconds a `T2D_HEARTBEAT` line: frames, fps, mean, p50, p90 and worst frame time, the managed heap, the free memory, and per frame SpriteBatch's sprites, runs (draws), runs that changed texture (`pageSwitches`) and off-screen draws. |
-| `-t2d-shot <s> <path>` | A screenshot s seconds after the start. |
-| `-t2d-shots <s> <prefix> [after]` | A screenshot every s seconds from `after` seconds on, `<prefix>-<seconds>.png`. On the PS Vita each stalls the game about 0.6 s. |
+| `-t2d-shot <s> <name>` | A screenshot s seconds after the start, `ux0:data/T2DNoFate/shots/<name>.png`. The name is letters, digits, `-` and `_`; the player refuses a path, so a flag can't overwrite a save. |
+| `-t2d-shots <s> <name> [after]` | A screenshot every s seconds from `after` seconds on, `shots/<name>-<seconds>.png`. On the PS Vita each stalls the game about 0.6 s. |
 | `-t2d-quit-after <s>` | Quit s seconds after the start. |
 | `-t2d-log-sync` | Write the log on the logging thread. |
 | `-t2d-stalls <ms>` | During a frame longer than ms (default 1000; 0 turns it off), a thread of the probe's writes a `T2D_STALL` line every 250 ms: the free memory and, in a `T2D_TRACE=1` build, the game methods the main thread entered last; then how long the frame took. |

@@ -653,7 +653,11 @@ namespace Repairs
             repair.MayRemove("__statics()", "__load8(", "__atomic_compare_exchange(");
             Instruction a = Marker.Call.Next;
             Instruction past = FlagTest(a);
-            if (past != null) return Replace(0, 3, il => il.Br(past));
+            if (past != null)
+            {
+                OnlyCardMark(a.Next.Next, past);
+                return Replace(0, 3, il => il.Br(past));
+            }
             // the flag kept in a local and tested after the store: `v = flag; <store>; if (v != 0) {...}`
             VariableDefinition v = a.OpCode.Name.StartsWith("stloc") ? Fingerprint.Local(a, Body) : null;
             IList<Instruction> all = Body.Instructions;
@@ -661,9 +665,143 @@ namespace Repairs
             if (uses.Count != 1 || !uses[0].OpCode.Name.StartsWith("ldloc") || (past = FlagTest(uses[0].Next)) == null
                 || all.IndexOf(uses[0]) < all.IndexOf(a) || all.IndexOf(uses[0]) - all.IndexOf(a) > 2 * Fingerprint.Window)
                 throw new RepairException(repair.Key + ": marker " + Marker.Index + " is not a write barrier's flag test");
+            OnlyCardMark(uses[0].Next.Next.Next, past);
             int test = all.IndexOf(uses[0]);
             Edit.ReplaceRange(Body, test, test + 3, new[] { Instruction.Create(OpCodes.Br, past) }, repair.Key);
             return Replace(0, 1, il => { });
+        }
+
+        // What the flag test's branch to past leaves unreachable must be a card mark and nothing else: it holds the
+        // card table's compare-exchange (the barrier's own marker), and no heap effect: no call but Rewind's markers,
+        // no store but to locals, no allocation, throw, return or leave. A test of some other global (an engine flag
+        // guarding game code) has the same shape, and before (Nov 2026) its guarded code went with the removal unchecked,
+        // only markers being looked at (Astra review #11).
+        void OnlyCardMark(Instruction branch, Instruction past)
+        {
+            HashSet<Instruction> now = Reachable(null, null), after = Reachable(branch, past);
+            List<Instruction> gone = Body.Instructions.Where(i => now.Contains(i) && !after.Contains(i)).ToList();
+            // The barrier's arm may end with a copy of the code at past (the compiler duplicated the tail after the
+            // store into both arms: SarahVan.update's `interactionText = -1`): the skipped path runs that same code at
+            // past, so the copy may go whatever it does.
+            int tail = SharedTail(gone, past);
+            bool cas = false;
+            foreach (Instruction i in gone.Take(tail))
+            {
+                if (i.OpCode == OpCodes.Ldstr && i.Next != null && Markers.IsMarkerCall(i.Next))
+                {
+                    if (((string)i.Operand).StartsWith("__atomic_compare_exchange(")) cas = true;
+                    continue;
+                }
+                if (Markers.IsMarkerCall(i) || NoHeapEffect(i)) continue;
+                throw new RepairException(repair.Key + ": marker " + Marker.Index + ": the code its flag test skips does more than mark a card (" +
+                                          i.OpCode.Name + (i.Operand is MemberReference ? " " + ((MemberReference)i.Operand).Name : "") + " at IL_" + i.Offset.ToString("x4") + ")");
+            }
+            if (!cas)
+                throw new RepairException(repair.Key + ": marker " + Marker.Index + ": the code its flag test skips has no card-table compare-exchange; not a write barrier");
+        }
+
+        // Where gone's shared tail starts (gone.Count when it has none): its longest suffix, contiguous in the body and
+        // ending in an unconditional branch, with no branch before that, that is instruction for instruction (nops
+        // aside) the code from past on.
+        int SharedTail(List<Instruction> gone, Instruction past)
+        {
+            IList<Instruction> all = Body.Instructions;
+            var ahead = new List<Instruction>();
+            for (Instruction i = past; i != null && ahead.Count < gone.Count + 1; i = i.Next)
+                if (i.OpCode != OpCodes.Nop) ahead.Add(i);
+            List<Instruction> own = gone.Where(i => i.OpCode != OpCodes.Nop).ToList();
+            int best = gone.Count;
+            for (int n = 1; n <= own.Count && n <= ahead.Count; n++)
+            {
+                List<Instruction> suffix = own.Skip(own.Count - n).ToList();
+                if (suffix[n - 1].OpCode.FlowControl != FlowControl.Branch) break;
+                bool same = true;
+                for (int k = 0; k < n && same; k++)
+                {
+                    Instruction x = suffix[k], y = ahead[k];
+                    same = Normal(x.OpCode) == Normal(y.OpCode) && SameOperand(x.Operand, y.Operand)
+                           && (k == n - 1 || x.OpCode.FlowControl == FlowControl.Next || x.OpCode.FlowControl == FlowControl.Call);
+                }
+                // contiguous: nothing between the suffix's first and last instruction but its own and nops
+                int from = all.IndexOf(suffix[0]), to = all.IndexOf(suffix[n - 1]);
+                if (same && all.Skip(from).Take(to - from + 1).All(i => i.OpCode == OpCodes.Nop || suffix.Contains(i)))
+                    best = gone.IndexOf(suffix[0]);
+            }
+            return best;
+        }
+
+        static Code Normal(OpCode op)
+        {
+            switch (op.Code)
+            {
+                case Code.Br_S: return Code.Br;
+                case Code.Leave_S: return Code.Leave;
+                case Code.Ldloc_S: return Code.Ldloc;
+                case Code.Stloc_S: return Code.Stloc;
+                case Code.Ldc_I4_S: return Code.Ldc_I4;
+                default: return op.Code;
+            }
+        }
+
+        static bool SameOperand(object x, object y)
+        {
+            if (x == null || y == null) return x == y;
+            if (x is MemberReference && y is MemberReference) return ((MemberReference)x).FullName == ((MemberReference)y).FullName;
+            return x.Equals(y) || x == y;
+        }
+
+        // Instructions reached from the entry and the handlers; with branch given, that branch goes only to past.
+        HashSet<Instruction> Reachable(Instruction branch, Instruction past)
+        {
+            var seen = new HashSet<Instruction>();
+            var work = new Stack<Instruction>();
+            work.Push(Body.Instructions[0]);
+            foreach (ExceptionHandler h in Body.ExceptionHandlers)
+            {
+                work.Push(h.HandlerStart);
+                if (h.FilterStart != null) work.Push(h.FilterStart);
+            }
+            while (work.Count > 0)
+            {
+                Instruction i = work.Pop();
+                if (i == null || !seen.Add(i)) continue;
+                if (i == branch)
+                {
+                    work.Push(past);
+                    continue;
+                }
+                foreach (Instruction t in Edit.Targets(i)) work.Push(t);
+                FlowControl f = i.OpCode.FlowControl;
+                if (f == FlowControl.Branch || f == FlowControl.Throw || f == FlowControl.Return) continue;
+                if (i.OpCode == OpCodes.Endfinally || i.OpCode == OpCodes.Endfilter) continue;
+                work.Push(i.Next);
+            }
+            return seen;
+        }
+
+        // Stack and local plumbing, arithmetic, reads and branches: nothing another thread or a later read of the heap
+        // could see.
+        static bool NoHeapEffect(Instruction i)
+        {
+            string n = i.OpCode.Name;
+            if (n.StartsWith("ldloc") || n.StartsWith("stloc") || n.StartsWith("ldc.") || n.StartsWith("ldarg") || n.StartsWith("conv.")) return true;
+            if (n.StartsWith("ldfld") || n.StartsWith("ldsfld") || n.StartsWith("ldelem") || n.StartsWith("ldind")) return true;
+            switch (i.OpCode.Code)
+            {
+                case Code.Nop: case Code.Dup: case Code.Pop: case Code.Ldnull: case Code.Ldstr:
+                case Code.Add: case Code.Sub: case Code.Mul: case Code.Div: case Code.Div_Un: case Code.Rem: case Code.Rem_Un:
+                case Code.And: case Code.Or: case Code.Xor: case Code.Shl: case Code.Shr: case Code.Shr_Un: case Code.Not: case Code.Neg:
+                case Code.Ceq: case Code.Cgt: case Code.Cgt_Un: case Code.Clt: case Code.Clt_Un:
+                case Code.Br: case Code.Br_S: case Code.Brtrue: case Code.Brtrue_S: case Code.Brfalse: case Code.Brfalse_S:
+                case Code.Beq: case Code.Beq_S: case Code.Bne_Un: case Code.Bne_Un_S: case Code.Bge: case Code.Bge_S:
+                case Code.Bge_Un: case Code.Bge_Un_S: case Code.Bgt: case Code.Bgt_S: case Code.Bgt_Un: case Code.Bgt_Un_S:
+                case Code.Ble: case Code.Ble_S: case Code.Ble_Un: case Code.Ble_Un_S: case Code.Blt: case Code.Blt_S:
+                case Code.Blt_Un: case Code.Blt_Un_S: case Code.Ldflda: case Code.Ldsflda: case Code.Ldloca: case Code.Ldloca_S:
+                case Code.Ldarga: case Code.Ldarga_S: case Code.Ldelema: case Code.Ldlen: case Code.Ldtoken:
+                    return true;
+                default:
+                    return false;
+            }
         }
 
         // `ldc.i4.0; ceq; brtrue past` from ins on: past, or null.
