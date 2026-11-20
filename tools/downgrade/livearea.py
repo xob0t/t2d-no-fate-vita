@@ -1,4 +1,4 @@
-"""PS Vita LiveArea artwork, composed from Terminator 2D: NO FATE's Steam store art and, for the bubble, the
+"""PS Vita LiveArea artwork, composed from Terminator 2D: NO FATE's Steam store art (laid out like Huntdown's port) and, for the bubble, the
 game's own high score sprite. From butcher-vita's (MIT, same author).
 
     uv run tools/downgrade/livearea.py [--force]
@@ -9,9 +9,11 @@ work/livearea/store/ and read from there afterwards. Writes to work/livearea/:
   icon0.png     128x128   bubble: the endoskeleton of the high score screen, read from your copy of the game
                           (the recovered Assembly-CSharp's frame table, the ripped texture packs); before the
                           recover and rip stages have run, Sarah Connor from the vertical key art
-  bg0.png       840x500   LiveArea background: the library hero art's middle
-  gate.png      280x158   LiveArea start gate: the store header with its logo
-  pic0.png      960x544   shown while the app starts: the store header with its logo
+  bg0.png       840x500   LiveArea background: the library hero art's middle (the T-1000, Sarah Connor and the
+                          endoskeleton), from its 3840x1240 version
+  gate.png      280x158   LiveArea start gate: the game's logo alone (logo_2x.png) with a soft dark shadow, on
+                          transparency, so the background shows around it (as in Huntdown's port)
+  pic0.png      960x544   shown while the app starts: the hero art with the logo along the bottom, over a dark fade
 
 The LiveArea images and pic0 are 8-bit indexed: the installer rejects a truecolor pic0 (promote
 error 0x8010113D), and icon0 must not have an alpha channel (The Drifter's port found both). The
@@ -29,7 +31,7 @@ import sys
 
 import progress
 from common import STEAM_APP_ID, TARGET, WORK, log
-from PIL import Image
+from PIL import Image, ImageFilter
 
 OUT = WORK / 'livearea'
 STORE = OUT / 'store'
@@ -40,16 +42,18 @@ CDN = f'https://cdn.akamai.steamstatic.com/steam/apps/{STEAM_APP_ID}/'
 # Cached name: (URL, SHA-256 of the file the crops below were made for). A changed file is only
 # reported: Valve can replace store art at the same URL.
 SOURCES = {
-    # The store page's header, 460x215, with the logo (the game has no 616x353 capsule).
-    'capsule.jpg': (CDN + 'header.jpg', '2791430d33c088ca3bcaff95102e3aaf2d28745c2077fee33fc2f14e23c5155e'),
-    # Vertical key art, 600x900: the endoskeleton's head behind Sarah Connor, the logo below.
+    # Vertical key art, 600x900: the endoskeleton's head behind Sarah Connor, the logo below (the bubble's fallback).
     'library.jpg': (CDN + 'library_600x900_2x.jpg', '2c248cddef37deda386b948eff4a2c1c14559e8e337f35e2a2f38a694efb63c2'),
-    # Library hero art, 1920x620, without the logo: the T-1000, Sarah Connor and the endoskeleton in the middle.
-    'hero.jpg': (CDN + 'library_hero.jpg', 'f0b9c38e4860880f8d12b2b03be2bcf4b4357ed135e8ddc5efcbb6109d74cb48'),
+    # Library hero art, 3840x1240, without the logo: the T-1000, Sarah Connor and the endoskeleton in the middle.
+    'hero_2x.jpg': (CDN + 'library_hero_2x.jpg', 'def5b14a979629a74fe29711a2c792ca488fde2ff25c109ff4b065b98fb88891'),
+    # The library logo, 1280x720, white with a red shadow on transparency.
+    'logo_2x.png': (CDN + 'logo_2x.png', '5ec22a38c0dfe2269d4a09899b1bf7deac27375803b207ffd7e934000075234d'),
 }
 ICON_CROP = (195, 225, 435, 465)  # Sarah Connor, sunglasses and rifle, in library.jpg: reads at bubble size
-HERO_CROP = (560, 0, 1602, 620)  # the hero art's middle, at bg0's 840:500
-CAPSULE_CROP = (0, 0, 379, 215)  # the header's left part, with the whole logo, at pic0's 960:544
+HERO_CENTRE = 1940  # the x the crops of hero_2x.jpg centre on: the three figures, a little left of the image's middle
+GATE_LOGO_WIDTH = 256  # of the gate's 280
+PIC_LOGO_WIDTH = 620  # of pic0's 960
+PIC_FADE = 200  # the dark band under pic0's logo, fading in from its top
 
 
 def fetch():
@@ -85,6 +89,58 @@ def cover(image: Image.Image, size, box=None):
     scaled = image.resize((round(image.width * scale), round(image.height * scale)), Image.LANCZOS)
     left, top = (scaled.width - width) // 2, (scaled.height - height) // 2
     return scaled.crop((left, top, left + width, top + height))
+
+
+def hero_crop(hero: Image.Image, size):
+    """hero_2x.jpg's full height at size's aspect, centred on HERO_CENTRE, scaled to size."""
+    half = round(hero.height * size[0] / size[1]) // 2
+    return cover(hero, size, (HERO_CENTRE - half, 0, HERO_CENTRE + half, hero.height))
+
+
+def shadowed(logo: Image.Image, width, blur):
+    """The logo (cut to what isn't transparent) at width, over a soft black shadow of itself, with room for it."""
+    logo = logo.crop(logo.getbbox())
+    logo = logo.resize((width, round(logo.height * width / logo.width)), Image.LANCZOS)
+    pad = blur * 3
+    out = Image.new('RGBA', (logo.width + 2 * pad, logo.height + 2 * pad), (0, 0, 0, 0))
+    shadow = Image.new('RGBA', logo.size, (0, 0, 0, 255))
+    shadow.putalpha(logo.getchannel('A'))
+    out.alpha_composite(shadow, (pad, pad))
+    out = out.filter(ImageFilter.GaussianBlur(blur))
+    out.putalpha(out.getchannel('A').point(lambda a: min(255, a * 3)))
+    out.alpha_composite(logo, (pad, pad))
+    return out
+
+
+def logo_gate(logo: Image.Image, size):
+    """The shadowed logo centred on a transparent image of size, 8-bit indexed with its transparent pixels one
+    palette entry (tRNS)."""
+    mark = shadowed(logo, GATE_LOGO_WIDTH, 3)
+    out = Image.new('RGBA', size, (0, 0, 0, 0))
+    out.alpha_composite(mark, ((size[0] - mark.width) // 2, (size[1] - mark.height) // 2))
+    # Edges blended against black (the shadow's colour), then cut at half coverage: an indexed image has one
+    # transparent entry.
+    rgb = Image.new('RGB', size, (0, 0, 0))
+    rgb.paste(out, mask=out.getchannel('A'))
+    image = rgb.quantize(PALETTE_COLORS - 1, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
+    clear = PALETTE_COLORS - 1
+    palette = image.getpalette()[:3 * clear] + [0, 0, 0]
+    alpha = out.getchannel('A').point(lambda a: 255 if a >= 128 else 0)
+    image.paste(clear, mask=alpha.point(lambda a: 255 - a))
+    image.putpalette(palette)
+    image.info['transparency'] = clear
+    return image
+
+
+def splash(hero: Image.Image, logo: Image.Image, size):
+    """pic0: the hero art, a dark fade along the bottom, the logo over it."""
+    image = hero_crop(hero, size).convert('RGBA')
+    band = Image.new('RGBA', (size[0], PIC_FADE), (8, 6, 14, 255))
+    band.putalpha(Image.linear_gradient('L').resize((size[0], PIC_FADE)).point(lambda v: int(v * 0.85)))
+    image.alpha_composite(band, (0, size[1] - PIC_FADE))
+    mark = shadowed(logo, PIC_LOGO_WIDTH, 5)
+    image.alpha_composite(mark, ((size[0] - mark.width) // 2, size[1] - mark.height - 10))
+    return image
 
 
 def indexed(image: Image.Image):
@@ -141,14 +197,14 @@ def game_bubble():
 
 
 def compose(sources, bubble=None):
-    capsule = Image.open(sources['capsule.jpg']).convert('RGB')
     library = Image.open(sources['library.jpg']).convert('RGB')
-    hero = Image.open(sources['hero.jpg']).convert('RGB')
+    hero = Image.open(sources['hero_2x.jpg']).convert('RGB')
+    logo = Image.open(sources['logo_2x.png']).convert('RGBA')
     return {
         'icon0.png': indexed(bubble if bubble is not None else cover(library, (128, 128), ICON_CROP)),
-        'bg0.png': indexed(cover(hero, (840, 500), HERO_CROP)),
-        'gate.png': indexed(cover(capsule, (280, 158), CAPSULE_CROP)),
-        'pic0.png': indexed(cover(capsule, (960, 544), CAPSULE_CROP)),
+        'bg0.png': indexed(hero_crop(hero, (840, 500))),
+        'gate.png': logo_gate(logo, (280, 158)),
+        'pic0.png': indexed(splash(hero, logo, (960, 544))),
     }
 
 
