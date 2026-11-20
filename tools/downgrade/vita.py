@@ -393,9 +393,9 @@ def write_manifest(files: dict):
     MANIFEST.write_text(json.dumps(files, indent=0))
 
 
-def console_files(connection, root=APP):
-    """{path under root: (size, modify)} of every file the console lists under root (MLSD), but the record and
-    upload parts."""
+def console_files(connection):
+    """{path under the app's folder: (size, modify)} of every file the console lists there (MLSD), but the record
+    and upload parts."""
     found = {}
 
     def walk(directory, prefix):
@@ -408,7 +408,7 @@ def console_files(connection, root=APP):
             elif not name.endswith(PART) and f'{directory}/{name}' != CONSOLE_RECORD:
                 found[prefix + name] = (facts.get('size', ''), facts.get('modify', ''))
 
-    walk(root, '')
+    walk(APP, '')
     return found
 
 
