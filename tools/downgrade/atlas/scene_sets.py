@@ -24,7 +24,8 @@ LEVEL_APPS = ['Game']
 
 # Draws the static analysis can't follow (an image id from arithmetic or a table), found on the console from the
 # atlas's miss log with the image of each miss: image -> the scenes that draw it ('levels': every level scene and the
-# controls tutorial). Each was a 190 to 250 ms frame in play, the page's synchronous load and first draw.
+# controls tutorial; 'all': every scene). Each was a 190 to 250 ms frame in play, the page's synchronous load and
+# first draw.
 EXTRA_IMAGES = {
     # A player bullet's hit (PlayerProjectile -> GameObject.addHitSpark); missed in every level where Sarah shoots.
     'IMAGE_BULLET_HIT_SPARK': 'levels',
@@ -37,6 +38,13 @@ EXTRA_IMAGES = {
 EXTRA_IMAGES.update({'IMAGE_FUTURE_BIKE_' + part: ['L00/16 Future War 1'] for part in ('ENGINE', 'EXHAUST', 'VISOR', 'DEBRIS')})
 # A crate's debris pieces, picked by number: the analysis finds 0 and 4 only.
 EXTRA_IMAGES.update({'IMAGE_DESERT_CRATE_DEBRIS_%d' % i: ['L11 Desert Town'] for i in range(9)})
+# The title fade (Transition.draw, style 1: any App's way back to the main menu) draws the main menu's logos through
+# MainMenu.drawLogo, which the analysis stops at (a hub); and the images no scene reaches shared one page that nearly
+# every level, menu and cutscene loaded at a draw (p083 of the Steam build's repack, beside the logos' p076: a 200 ms
+# frame each, 70 misses in the runs of Nov 2026). Small images, so every scene has them.
+EXTRA_IMAGES.update({n: 'all' for n in ('IMAGE_NO_FATE_LOGO', 'IMAGE_TERMINATOR_T2D_LOGO')})
+EXTRA_IMAGES.update({n: 'all' for n in ('IMAGE_DOT', 'IMAGE_DOT_LARGE', 'IMAGE_HITBOX', 'IMAGE_MAP_INDICATORS',
+                                         'IMAGE_SMALL_BLACK_RECT', 'IMAGE_SOLID_TILES')})
 
 
 def level_ids(name):
@@ -79,7 +87,7 @@ def main():
     for n, where in EXTRA_IMAGES.items():
         if n not in consts:
             continue  # a release without that image
-        ks = levels if where == 'levels' else [index[w] for w in where]
+        ks = levels if where == 'levels' else list(range(len(out_scenes))) if where == 'all' else [index[w] for w in where]
         use[n] = sorted(set(use.get(n, [])) | set(ks))
     every = [n for n, v in use.items() if len(v) == len(scenes)]
     data = {

@@ -77,10 +77,11 @@ namespace T2DCompat
         // and the apps between them and the level that keep what was prefetched (story mode's controls tutorial).
         public static readonly string[] PrefetchApps = { "MissionBriefing" };
         public static readonly string[] PrefetchKeep = { "LevelControls" };
-        // Scenes whose pages load at their first draw, not at the Enter: the four attract demos are one scene of 33
-        // pages, 190 MB (the usage analysis merges them), and loading them all froze the demo's first frames for 17 to
-        // 19 s and took CDRAM to 0.5 MB and main memory to 55 MB. Each demo draws a part of them.
-        public static readonly string[] LazyScenes = { "Demo / attract gameplay" };
+        // Scenes whose pages load at their first draw, not at the Enter. The four attract demos were one scene of 33
+        // pages, 190 MB, when the usage analysis merged them, and loading them all froze the demo's first frames for 17
+        // to 19 s; now each demo's map is a scene of its own (build_scenes.py's DEMOS), which the menu loads ahead
+        // (IdleTicks), and none is lazy.
+        public static readonly string[] LazyScenes = { };
         // Prefetch with Resources.LoadAsync (the probe's -t2d-atlas-sync turns it off). The loading thread then reads
         // the texels, and the first draw only uploads them: Future War 1's 19 pages took the briefing 7.8 s with no frame
         // over 0.4 s, against a 6.7 s freeze with Resources.Load.
@@ -395,6 +396,7 @@ namespace T2DCompat
                 aheadScenes = new int[0];
                 aheadKey = null;
                 aheadIf = null;
+                fadeAhead = null;
                 firstSet.Clear();
                 firstPending = true;
                 if (Ahead)
@@ -674,10 +676,12 @@ namespace T2DCompat
                 if ((aheadIf == null || AheadHolds(aheadIf)) && keys.TryGetValue(key, out scenes))
                 {
                     aheadScenes = scenes;
+                    fadeAhead = key;
                     Switch("ahead");
                 }
             }
             if (firstPending) PromoteFirst();
+            IdleDemo(now);
             IssueBackground();
             if (!Busy && Idle != null) Idle();
         }
@@ -1094,6 +1098,196 @@ namespace T2DCompat
         static long PageBytes(int page) { return (long)pageW[page] * pageH[page] * 2; }
 
         static string PageName(int page) { return page >= realPages && realPages > 0 ? tileNames[page - realPages] : "p" + page.ToString("000"); }
+
+        // ---- the fade (R6) -----------------------------------------------------------------------
+        //
+        // Transition.update starts with HoldFade(dir, progress, speed, nextApp) and does nothing in a frame where it
+        // returns true. A fade out runs Transition.update once a frame until its progress passes 1, the screen covered;
+        // that update makes the next App. HoldFade keeps the fade at the covered screen while the next App's pages
+        // still load, so that their texels are read by the loading thread, the game running on at 60 fps under the
+        // cover, rather than at the next App's first draws, a freeze: a briefing skipped 4 to 6 s in left Cyberdyne
+        // Factory's first frames 4 to 6 s (runs skipA to skipC). When the pages are ready it changes nothing.
+        // At the fade's start, the next App's pages start loading ahead, so the fade's own frames cover some of the load.
+
+        // "<Transition app id>:<App class>", from Transition.getApp: the Apps whose pages a fade into them loads first.
+        public static readonly string[] FadeApps = { "4:MainMenu", "8:LevelSelect", "15:MissionBriefing", "16:ContinueScreen",
+            "19:Credits", "22:MusicPlayer", "23:HighscoreTable", "25:InfiniteModeMenu", "26:BossRushMenu", "33:LevelControls",
+            "35:Database", "37:Attract" };
+        // Transition.CLASS_GAME: the level, whose pages are the briefing's prefetch.
+        public static int FadeGameApp = 5;
+        public static bool HoldFades = true;
+        // The longest a fade waits; then the App starts with what is there.
+        public static int HoldMaxMs = 10000;
+
+        static int fadeTo = -1;         // the App the fade going on goes to; -1 outside a fade out
+        static string fadeAhead;        // the key of the scenes aheadScenes holds ("app:<Class>", "map:<id>")
+        static float holdSince = -1;
+        static bool holdGaveUp;
+        static int holdLogs;
+
+        public static bool HoldFade(int dir, double progress, double speed, int nextApp)
+        {
+            if (!loaded || !HoldFades) return false;
+            if (dir != 1)
+            {
+                fadeTo = -1;
+                holdGaveUp = false;
+                return EndHold();
+            }
+            if (fadeTo != nextApp)
+            {
+                fadeTo = nextApp;
+                holdGaveUp = false;
+                FadeStarts(nextApp);
+            }
+            // Transition.update ends the fade once progress passes 1, as it computes it.
+            if (!(1.0 < (double)dir * speed + progress) || holdGaveUp) return false;
+            long bytes;
+            int left = NotReady(nextApp, out bytes);
+            if (left == 0) return EndHold();
+            float now = Time.realtimeSinceStartup;
+            if (holdSince < 0)
+            {
+                holdSince = now;
+                if (holdLogs++ < 50)
+                    Debug.Log(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                        "T2D atlas: the fade into {0} waits for {1} pages, {2:0.0} MB, in {3}", FadeKey(nextApp) ?? "app " + nextApp, left,
+                        bytes / 1048576.0, sceneLabel));
+            }
+            if ((now - holdSince) * 1000f < HoldMaxMs) return true;
+            Debug.LogWarning("T2D atlas: the fade gave up waiting after " + Ms(holdSince) + ", " + left + " pages left");
+            holdGaveUp = true;
+            return EndHold();
+        }
+
+        static bool EndHold()
+        {
+            if (holdSince >= 0 && holdLogs < 100)
+            {
+                holdLogs++;
+                Debug.Log("T2D atlas: the fade waited " + Ms(holdSince));
+            }
+            holdSince = -1;
+            return false;
+        }
+
+        // The scenes' key of the App a fade goes to: "app:<Class>" for one of FadeApps, the next demo's map for DemoApp.
+        static string FadeKey(int app)
+        {
+            if (app == DemoApp) return NextDemoKey();
+            string prefix = app.ToString(System.Globalization.CultureInfo.InvariantCulture) + ":";
+            foreach (string pair in FadeApps)
+                if (pair.StartsWith(prefix, StringComparison.Ordinal)) return "app:" + pair.Substring(prefix.Length);
+            return null;
+        }
+
+        // A fade out into an App of FadeApps or the demo: its pages join the wanted ones and go to the front of the
+        // background loads, without a Switch, which would drop the pages the App that shows still draws (a miss's).
+        static void FadeStarts(int app)
+        {
+            string key = FadeKey(app);
+            int[] scenes;
+            if (key == null || !Ahead || key == "app:" + appKey || key == fadeAhead || !keys.TryGetValue(key, out scenes)) return;
+            aheadKey = null;    // a pending ahead load for another App would take this one's place
+            aheadScenes = scenes;
+            fadeAhead = key;
+            var add = new List<int>();
+            foreach (int s in scenes)
+                foreach (int p in scenePages[s])
+                {
+                    wanted[p] = eager[p] = true;
+                    if (pages[p] != null && drawn[p]) continue;
+                    if (!warmList.Contains(p)) warmList.Add(p);
+                    if (pages[p] != null || asyncLoads.ContainsKey(p) || missing[p]) continue;
+                    bgQueue.Remove(p);
+                    if (!add.Contains(p)) add.Add(p);
+                }
+            add.Sort(BySize);
+            bgQueue.InsertRange(0, add);
+            warmList.Sort(BySize);
+            bgStartAt = Mathf.Min(bgStartAt, Time.realtimeSinceStartup);
+            Debug.Log("T2D atlas: " + (fadeTo == app ? "the fade into " : "ahead, ") + key + ": " + add.Count + " of its pages load first, in " + sceneLabel);
+        }
+
+        // Transition.CLASS_DEMO: the menu's idle timeout fades into the attract demo (Game.mode 8), whose Demo script
+        // picks the next of four maps in its constructor from Demo.demoCharacter: "<demoCharacter now>:<the map it
+        // plays next>" (6 -> 4, John, map 9; 4 -> 1, Sarah, map 10; 1 -> 0, T-800, map 12; any other -> 6, T-1000, map 11).
+        public static int DemoApp = 40;
+        public static string DemoCharacterField = "com.bitmapbureau.terminator.scripts.Demo.demoCharacter";
+        public static readonly string[] NextDemoMaps = { "6:9", "4:10", "1:12", "*:11" };
+        // The menu's idle ticks left (MainMenu.timeOut, 1200 from the last press, counted down at 60 a second while the
+        // title or the top menu shows) below which the next demo's pages load ahead (0: not ahead, only in its fade).
+        // The first demo, Sarah's in the Factory, froze its first frames 6.9 to 7.4 s with its pages loaded at their draws.
+        public static string IdleField = "MainMenu.timeOut";
+        public static int IdleTicks = 900;
+        static float idleCheckAt;
+        static int idleLogs;
+
+        static void IdleDemo(float now)
+        {
+            if (IdleTicks <= 0 || !Ahead || fadeTo >= 0 || currentApp == null || now < idleCheckAt) return;
+            idleCheckAt = now + 0.5f;
+            int dot = IdleField.IndexOf('.');
+            if (currentApp.GetType().Name != IdleField.Substring(0, dot)) return;
+            System.Reflection.FieldInfo field = currentApp.GetType().GetField(IdleField.Substring(dot + 1),
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            if (field == null || field.FieldType != typeof(int))
+            {
+                if (idleLogs++ == 0) Debug.LogWarning("T2D atlas: no int field " + IdleField);
+                return;
+            }
+            int left = (int)field.GetValue(currentApp);
+            if (left > 0 && left < IdleTicks) FadeStarts(DemoApp);
+        }
+
+        static string NextDemoKey()
+        {
+            if (currentApp == null) return null;
+            int dot = DemoCharacterField.LastIndexOf('.');
+            Type type = currentApp.GetType().Assembly.GetType(DemoCharacterField.Substring(0, dot));
+            System.Reflection.FieldInfo field = type == null ? null : type.GetField(DemoCharacterField.Substring(dot + 1),
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            if (field == null || field.FieldType != typeof(int))
+            {
+                if (idleLogs++ == 0) Debug.LogWarning("T2D atlas: no static int field " + DemoCharacterField);
+                return null;
+            }
+            string now = ((int)field.GetValue(null)).ToString(System.Globalization.CultureInfo.InvariantCulture) + ":";
+            foreach (string pair in NextDemoMaps)
+                if (pair.StartsWith(now, StringComparison.Ordinal) || pair.StartsWith("*:", StringComparison.Ordinal))
+                    return "map:" + pair.Substring(pair.IndexOf(':') + 1);
+            return null;
+        }
+
+        // The pages of the fade's next App not ready yet, those that are on their way: the prefetch's for the level,
+        // the ahead set for an App of FadeApps. A page that isn't loading (one Resources.Load gave, or missing) counts
+        // as ready, and so does one over WarmBigBytes, warmed only under the cover.
+        static int NotReady(int app, out long bytes)
+        {
+            bytes = 0;
+            int n = 0;
+            if (app == FadeGameApp)
+            {
+                if (prefetchKey == null) return 0;
+                foreach (int p in prefetchLeft) Count(p, ref n, ref bytes);
+                return n;
+            }
+            string key = FadeKey(app);
+            if (key == null || key != fadeAhead) return 0;
+            foreach (int s in aheadScenes)
+                foreach (int p in scenePages[s]) Count(p, ref n, ref bytes);
+            return n;
+        }
+
+        static void Count(int p, ref int n, ref long bytes)
+        {
+            if (!wanted[p] || (pages[p] != null && drawn[p])) return;
+            if (WarmBigBytes > 0 && PageBytes(p) > WarmBigBytes) return;
+            bool coming = asyncLoads.ContainsKey(p) || bgQueue.Contains(p) || (pages[p] != null && viaAsync[p]);
+            if (!coming) return;
+            n++;
+            bytes += PageBytes(p);
+        }
 
         // ---- the data ----------------------------------------------------------------------------
 

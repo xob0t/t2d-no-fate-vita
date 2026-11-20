@@ -247,6 +247,9 @@ partial class DowngradeAssemblies
     //     ldarg.0; ldarg.1; call Atlas.EnterMap(int, int)
     //   Game.loadScriptByLevelID(int level), at its start:
     //     ldarg.0; call Atlas.EnterLevel(int)        acts only while the App is Game (menus call it for previews)
+    //   Transition.update(), at its start:
+    //     ldsfld dir; ldsfld progress; ldsfld speed; ldsfld nextApp; call Atlas.HoldFade(int, double, double, int);
+    //     brfalse <the first instruction>; ret       the fade waits, covered, for the next App's pages
     static int AtlasSceneHooks(ModuleDefinition module)
     {
         TypeDefinition transition = GameType(module, "com.bitmapbureau.terminator.Transition");
@@ -289,6 +292,23 @@ partial class DowngradeAssemblies
             Instruction.Create(OpCodes.Ldarg_0),
             Instruction.Create(OpCodes.Call, CompatMethod(module, "Atlas", "EnterLevel")),
         }.Concat(AtlasForgetTexture(module, bitmapData)).ToArray());
-        return apps + 2;
+
+        MethodDefinition update = AtlasMethod(transition, "update", 0);
+        FieldDefinition dir = AtlasField(transition, "dir"), progress = AtlasField(transition, "progress");
+        FieldDefinition speed = AtlasField(transition, "speed"), next = AtlasField(transition, "nextApp");
+        if (!update.IsStatic || update.ReturnType.FullName != "System.Void" ||
+            !dir.IsStatic || dir.FieldType.FullName != "System.Int32" || !next.IsStatic || next.FieldType.FullName != "System.Int32" ||
+            !progress.IsStatic || progress.FieldType.FullName != "System.Double" || !speed.IsStatic || speed.FieldType.FullName != "System.Double")
+            throw new InvalidOperationException("atlas rule R6: Transition.update or its dir, progress, speed, nextApp changed shape");
+        Instruction first = update.Body.Instructions[0];
+        Prepend(update,
+            Instruction.Create(OpCodes.Ldsfld, dir),
+            Instruction.Create(OpCodes.Ldsfld, progress),
+            Instruction.Create(OpCodes.Ldsfld, speed),
+            Instruction.Create(OpCodes.Ldsfld, next),
+            Instruction.Create(OpCodes.Call, CompatMethod(module, "Atlas", "HoldFade")),
+            Instruction.Create(OpCodes.Brfalse, first),
+            Instruction.Create(OpCodes.Ret));
+        return apps + 3;
     }
 }

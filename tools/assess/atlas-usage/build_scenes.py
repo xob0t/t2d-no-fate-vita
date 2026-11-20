@@ -31,7 +31,20 @@ LEVELS = [
     ('L48 Infinite mode', ['InfiniteMode'], ['T2_INFINITE_0']),
     ('Tanker Chase', ['TankerChase'], []),
     ('Controls tutorial', ['ControlsExplanation', 'LevelControls'], ['T2_CONTROLS_ROOM']),
-    ('Demo / attract gameplay', ['Demo'], ['T2_DEMO_JOHN', 'T2_DEMO_SARAH', 'T2_DEMO_T1000', 'T2_DEMO_T800']),
+]
+# The attract demos: one Demo script plays four maps in turn (Demo.demoCharacter), each with its own player class and
+# its own images in Demo.setupScene's switch. A demo scene per map: Demo's closure without the other demos' player
+# classes, and without the images of the other demos' cases.
+DEMOS = [
+    # (scene, player class, map, the images of its case in Demo.setupScene)
+    ('Demo map 9 John', 'John', 'T2_DEMO_JOHN', ['IMAGE_FUTURE_WAR_1_A', 'IMAGE_PORTRAIT_JOHN']),
+    ('Demo map 10 Sarah', 'Sarah', 'T2_DEMO_SARAH', ['IMAGE_CYBERDYNEFACTORY_BG_A', 'IMAGE_CYBERDYNEFACTORY_BG_B',
+                                                      'IMAGE_CYBERDYNEFACTORY_FG_A', 'IMAGE_CYBERDYNEFACTORY_LAYER0',
+                                                      'IMAGE_PORTRAIT_SARAH']),
+    ('Demo map 11 T1000', 'T1000Demo', 'T2_DEMO_T1000', ['IMAGE_MENTAL_HOSPITAL_BG', 'IMAGE_MENTAL_HOSPITAL_FOREGROUND',
+                                                          'IMAGE_PORTRAIT_T1000']),
+    ('Demo map 12 T800', 'T800Minigun', 'T2_DEMO_T800', ['IMAGE_CYBERDYNE_HQ_BG', 'IMAGE_CYBERDYNE_HQ_FRONT',
+                                                          'IMAGE_PORTRAIT_T800']),
 ]
 BASES = {'Script', 'Cutscene', 'CompoundScene', 'App'}
 HUBS = {'Game', 'Sprites', 'Transition', 'Main', 'MainMenu', 'Database', 'GameMap', 'AssetsEmbed', 'Assets',
@@ -78,11 +91,11 @@ def main():
             out.update(sprite_img.get(s, []))
         return out
 
-    def closure(roots):
+    def closure(roots, stop=()):
         seen, stack = set(), [r for r in roots if r in C]
         while stack:
             c = stack.pop()
-            if c in seen:
+            if c in seen or c in stop:
                 continue
             seen.add(c)
             if c in HUBS:
@@ -106,8 +119,8 @@ def main():
             return suf == a.lang
         return True
 
-    def scene_images(roots, map_names, gameplay):
-        cl = closure(list(roots) + (GAMEPLAY_GLOBAL if gameplay else []) + ALL_GLOBAL)
+    def scene_images(roots, map_names, gameplay, stop=(), drop=()):
+        cl = closure(list(roots) + (GAMEPLAY_GLOBAL if gameplay else []) + ALL_GLOBAL, stop)
         ims = set()
         for c in cl:
             ims |= class_images(c, roots)
@@ -122,18 +135,22 @@ def main():
                     ims.update(sprite_img.get(s, []))
         for c in closure(sorted(objclasses)) - cl:
             ims |= class_images(c)
-        ims = {i for i in ims if font_ok(images[i])}
+        ims = {i for i in ims if font_ok(images[i]) and images[i]['name'] not in drop}
         return ims, cl
 
     scenes = []
     for name, roots, mps in LEVELS:
-        scenes.append((name, 'level', roots, mps, True))
+        scenes.append((name, 'level', roots, mps, True, (), ()))
+    for name, player, mp, own in DEMOS:
+        others = [d for d in DEMOS if d[1] != player]
+        scenes.append((name, 'level', ['Demo', player], [mp], True, {d[1] for d in others},
+                       {i for d in others for i in d[3]} - set(own)))
     for c in sorted(C):
         f = C[c]['file'].split('/')[-2]
         if f == 'cutscenes' and c not in BASES:
-            scenes.append(('cutscene ' + c, 'cutscene', [c], [], False))
+            scenes.append(('cutscene ' + c, 'cutscene', [c], [], False, (), ()))
         if f == 'apps' and c not in BASES and c != 'LevelControls':
-            scenes.append(('menu ' + c, 'menu', [c], [], False))
+            scenes.append(('menu ' + c, 'menu', [c], [], False, (), ()))
 
     # rect bookkeeping
     def rects_of(ims):
@@ -144,8 +161,8 @@ def main():
         return rs
 
     out = []
-    for name, kind, roots, mps, gameplay in scenes:
-        ims, cl = scene_images(roots, mps, gameplay)
+    for name, kind, roots, mps, gameplay, stop, drop in scenes:
+        ims, cl = scene_images(roots, mps, gameplay, stop, drop)
         rs = rects_of(ims)
         packs = sorted({r[0] for r in rs})
         per_pack_area = collections.Counter()
