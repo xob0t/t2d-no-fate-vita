@@ -30,6 +30,7 @@ import preload as preloadlib
 import scene as scenelib
 import scripts as scriptlib
 import shader_object
+import textures
 import typehash
 from layout import Layout
 from paths import progress
@@ -268,7 +269,7 @@ def write_all(build, only=frozenset(), compare_files=False):
         files.advance()
 
     total = len(levels) + len(shared) + len(rest) + len(wanted)
-    with progress.display(), progress.step('Data files', total=total) as files:
+    with progress.display(), progress.step('Data files', total=total, timed=True) as files:
         for i in levels:
             files.note(f'level{i}')
             start = time.time()
@@ -300,6 +301,11 @@ def write_all(build, only=frozenset(), compare_files=False):
             files.advance()
         if not only or 'StreamingAssets' in only:
             copy_streaming_files(build)
+    use = textures.CACHE_USE
+    if use['cache'] or use['encoded']:
+        progress.console.print(
+            f'Textures: {use["cache"]} of {use["cache"] + use["encoded"]} from the cache, {use["encoded"]} encoded'
+        )
 
 
 def compare_bundle(path, inside, reference=paths.REFERENCE_MEDIA):

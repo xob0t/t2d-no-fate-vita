@@ -27,25 +27,20 @@ def make(out):
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(f'make.py started {time.strftime("%Y-%m-%d %H:%M:%S")}', encoding='utf-8')
     with progress.display():
-        with progress.step('Preparing the build folder'):
+        with progress.step('Preparing the build folder', timed=True):
             paths.builtin_shaders()
             package.vita_folder(out)
-        with progress.step('Reading the project'):  # its asset index: about 3 minutes the first time
+        with progress.step('Reading the project', timed=True):  # its asset index: about 3 minutes the first time
             build = data.Build(out, platform='vita')
         data.write_all(build)
-        with progress.step('Code module'):
-            times = il2cpp.build(out)
+        with progress.step('Code module', timed=True):
+            il2cpp.build(out)  # its steps leave their times, or a line saying it reused the module
         pipeline = downgrade_pipeline()
-        with progress.step('Making the player data reproducible'):
+        with progress.step('Making the player data reproducible', timed=True):
             pipeline.reproducible_player_data(out / 'Media')
         pipeline.native_plugins(out)
         pipeline.boot_config(out)
     marker.unlink()  # whole: package and the console tools take it now
-    if times['reused']:
-        progress.console.print('Code module: reused, its inputs have not changed')
-    else:
-        steps = ', '.join(f'{k} {times[k]:.0f} s' for k in ('unitylinker', 'il2cpp'))
-        progress.console.print(f'Code module: {steps}')
     progress.done(f'Built {out} in {time.time() - start:.0f} s')
 
 
