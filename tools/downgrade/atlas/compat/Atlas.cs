@@ -113,6 +113,11 @@ namespace T2DCompat
         // page drawn before its LoadAsync finishes has its texels read at the draw (about 100 ms a MB), so waiting
         // for the scene's pages there made the controls tutorial's first frames 1.3 s.
         public static bool CoverWaits = false;
+        // A Switch queues the scenes' own pages first among the background loads, PrefetchInFlight at a time, and Get
+        // waits for those it draws (true); or it starts them all at once (false). Waiting for one request completes
+        // every request started before it, and their texels were then read in one frame: a briefing skipped after
+        // 4 s left the Factory's 26 pages to its level's second frame, 5.8 s.
+        public static bool SwitchQueues = true;
         // A page a miss loaded this many times stays loaded like a sticky page (0: never), at most StickyMissMax of
         // them. The scene data lacks two pages that nearly every level, menu and cutscene draws (p076, p083 in Steam's
         // build 24040403): each scene loaded them again at its first draw, a 200 ms frame, the continue screen's
@@ -511,6 +516,7 @@ namespace T2DCompat
             bool async = PrefetchAsync;
             // The scenes' own pages now; the prefetch's and the next App's in the background, smallest first.
             var later = new List<int>();
+            var ownQueue = new List<int>();
             for (int p = 0; p < pages.Length; p++)
                 if (eager[p] && pages[p] == null && !asyncLoads.ContainsKey(p) && !bgQueue.Contains(p))
                 {
@@ -520,21 +526,31 @@ namespace T2DCompat
                     // one 0.7 to 2 s frame; Resources.Load costs nothing until a page is drawn.
                     else if (async && AsyncSwitch && switches > 0)
                     {
-                        Evict(PageBytes(p));
-                        LoadAsync(p);
+                        if (SwitchQueues) ownQueue.Add(p);
+                        else
+                        {
+                            Evict(PageBytes(p));
+                            LoadAsync(p);
+                        }
                     }
                     else LoadPage(p);
                     added++;
                 }
-            // A level's Enter: what the briefing hadn't started yet starts now.
+            // A level's Enter: what the briefing hadn't started yet starts now, first in the queue (SwitchQueues).
             for (int i = bgQueue.Count - 1; i >= 0; i--)
                 if (InScenes(bgQueue[i], levelScenes) || InScenes(bgQueue[i], appScenes))
                 {
                     int p = bgQueue[i];
                     bgQueue.RemoveAt(i);
-                    Evict(PageBytes(p));
-                    LoadAsync(p);
+                    if (SwitchQueues) ownQueue.Add(p);
+                    else
+                    {
+                        Evict(PageBytes(p));
+                        LoadAsync(p);
+                    }
                 }
+            ownQueue.Sort(BySize);
+            bgQueue.InsertRange(0, ownQueue);
             later.Sort(BySize);
             // The next App's pages before a prefetch's still waiting: that App comes first (the controls tutorial
             // before its level).
@@ -547,6 +563,7 @@ namespace T2DCompat
             else bgQueue.AddRange(later);
             background = later.Count;
             if (later.Count > 0) bgStartAt = Time.realtimeSinceStartup + (PrefetchInFlight > 0 ? PrefetchDelayMs / 1000f : 0f);
+            if (ownQueue.Count > 0) bgStartAt = Time.realtimeSinceStartup;
             RebuildWarm();
             switches++;
             Note("switch " + key + " " + Ms(start));
