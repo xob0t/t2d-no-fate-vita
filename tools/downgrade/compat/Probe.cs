@@ -30,10 +30,12 @@ using UnityEngine.SceneManagement;
 //                                    frame and whenever a value changes
 //   -t2d-invoke <call>[,<call>...]   at the second heartbeat (or 10 s), calls by reflection and logs T2D_INVOKE lines with
 //                                    the result or the exception: <path to an object or a type>::<method>[::<arg>...],
-//                                    each arg an int, @<peek path>, or a string
+//                                    each arg an int, @<peek path>, or a string; or <path>=<value>, a field (static, or
+//                                    of the object the path reaches) set to an int, bool or double
 //   -t2d-set <App>:<path>=<v>[,...]  a static field set by reflection when the game enters that App (before its
 //                                    start()), or at the first frame for App *: Namespace.Type.field, an int, bool,
-//                                    double or int[] (values joined with |). For tests: Game.levelNumber when a MissionBriefing starts picks the level
+//                                    double or int[] (values joined with |); a path through a static object
+//                                    (Type.field.field) sets that object's field (not int[]). For tests: Game.levelNumber when a MissionBriefing starts picks the level
 //                                    it briefs; Game.infiniteHealth keeps a scripted player alive.
 //   -t2d-atlas-sync                  the atlas prefetches with Resources.Load, not LoadAsync (Atlas.PrefetchAsync)
 // A screenshot is the frame read back at its end and saved as a PNG (on the PS Vita 960x544, about 0.6 s of stall,
@@ -233,6 +235,11 @@ namespace T2DCompat
                 {
                     int dot = path.LastIndexOf('.');
                     Type type = FindType(path.Substring(0, dot));
+                    if (type == null)
+                    {
+                        Debug.Log("T2D_SET " + path + " = " + Assign(path, text) + " entering " + app);
+                        continue;
+                    }
                     FieldInfo field = type == null ? null : type.GetField(path.Substring(dot + 1), BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
                     if (field == null) throw new ArgumentException("no static field " + path);
                     object value = field.FieldType == typeof(bool) ? (object)bool.Parse(text)
@@ -252,15 +259,34 @@ namespace T2DCompat
         static string[] invokes;
         static double invokeAt = 10.0;
 
+        // A call written +<s>:<call> waits until s seconds; the others run at -t2d-invoke-at's time.
         static void Invoke()
         {
-            string[] calls = invokes;
-            invokes = null;
-            foreach (string call in calls)
+            var due = new List<string>();
+            var later = new List<string>();
+            foreach (string entry in invokes)
+            {
+                int colon = entry.IndexOf(':');
+                double at;
+                if (entry.StartsWith("+") && colon > 1 && double.TryParse(entry.Substring(1, colon - 1), NumberStyles.Float, Inv, out at))
+                {
+                    if (PlayerLog.Seconds >= at) due.Add(entry.Substring(colon + 1));
+                    else later.Add(entry);
+                }
+                else due.Add(entry);
+            }
+            invokes = later.Count > 0 ? later.ToArray() : null;
+            foreach (string call in due)
             {
                 string result;
                 try
                 {
+                    int equals = call.IndexOf('=');
+                    if (equals > 0 && call.IndexOf("::", StringComparison.Ordinal) < 0)
+                    {
+                        Debug.Log("T2D_INVOKE " + call + " = " + Assign(call.Substring(0, equals), call.Substring(equals + 1)));
+                        continue;
+                    }
                     string[] parts = call.Split(new[] { "::" }, StringSplitOptions.None);
                     Type type = FindType(parts[0]);
                     object target = type == null ? Resolve(parts[0]) : null;
@@ -287,6 +313,24 @@ namespace T2DCompat
                 }
                 Debug.Log("T2D_INVOKE " + call + " = " + result);
             }
+        }
+
+        // <path>=<value>: a field set by reflection, a static one or one of the object the path before it reaches
+        // (Namespace.Type.field.field), an int, bool or double. For tests: a boss's hp, say.
+        static string Assign(string path, string text)
+        {
+            int dot = path.LastIndexOf('.');
+            string name = path.Substring(dot + 1), owner = path.Substring(0, dot);
+            Type type = FindType(owner);
+            object target = type == null ? Resolve(owner) : null;
+            if (type == null && target == null) return "threw ArgumentException: " + owner + " is null";
+            FieldInfo field = (type ?? target.GetType()).GetField(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance);
+            if (field == null) return "threw ArgumentException: no field " + name;
+            object value = field.FieldType == typeof(bool) ? (object)bool.Parse(text)
+                : field.FieldType == typeof(double) ? (object)double.Parse(text, Inv)
+                : (object)int.Parse(text, Inv);
+            field.SetValue(field.IsStatic ? null : target, value);
+            return Describe(field.GetValue(field.IsStatic ? null : target));
         }
 
         static readonly Dictionary<string, Type> types = new Dictionary<string, Type>();
