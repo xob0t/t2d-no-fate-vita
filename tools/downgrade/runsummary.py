@@ -59,7 +59,10 @@ def main(argv):
     rep = {k: n for k, n in seen.items() if n > 2}
     for k, n in rep.items():
         print(f"         x{n} {k}")
-    sel = [b for b in beats if (start is None or b["t"] > start + 5) and (end is None or b["t"] <= end)]
+    # A beat covers the frames since the beat before, so it lies in the window when the beat before came at or
+    # after the start (whatever the heartbeat's period).
+    sel = [b for i, b in enumerate(beats)
+           if (start is None or (i > 0 and beats[i - 1]["t"] >= start)) and (end is None or b["t"] <= end)]
     if not sel:
         print("no heartbeats in the window")
         return
