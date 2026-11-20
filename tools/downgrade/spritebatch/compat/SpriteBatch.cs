@@ -479,20 +479,31 @@ namespace T2DCompat
                         }
                         else
                         {
-                            mesh.Clear(true);
-                            mesh.vertices = segment.Vertices;
-                            mesh.uv = segment.Uvs;
-                            mesh.subMeshCount = r - first;
-                            for (int k = first; k < r; k++)
+                            // SameLayout recorded the new layout: forgotten again unless the indices are all written,
+                            // or the next frame with this layout would keep a mesh whose upload stopped part way.
+                            bool written = false;
+                            try
                             {
-                                indices.Clear();
-                                int end = (runs[k].First + runs[k].Quads) * 4;
-                                for (int v = runs[k].First * 4; v < end; v += 4)
+                                mesh.Clear(true);
+                                mesh.vertices = segment.Vertices;
+                                mesh.uv = segment.Uvs;
+                                mesh.subMeshCount = r - first;
+                                for (int k = first; k < r; k++)
                                 {
-                                    indices.Add(v); indices.Add(v + 1); indices.Add(v + 2);
-                                    indices.Add(v + 2); indices.Add(v + 1); indices.Add(v + 3);
+                                    indices.Clear();
+                                    int end = (runs[k].First + runs[k].Quads) * 4;
+                                    for (int v = runs[k].First * 4; v < end; v += 4)
+                                    {
+                                        indices.Add(v); indices.Add(v + 1); indices.Add(v + 2);
+                                        indices.Add(v + 2); indices.Add(v + 1); indices.Add(v + 3);
+                                    }
+                                    mesh.SetTriangles(indices, k - first, false);
                                 }
-                                mesh.SetTriangles(indices, k - first, false);
+                                written = true;
+                            }
+                            finally
+                            {
+                                if (!written) layouts[parity][s].Clear();
                             }
                         }
                         mesh.bounds = everywhere;
