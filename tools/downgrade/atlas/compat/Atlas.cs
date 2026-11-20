@@ -95,7 +95,24 @@ namespace T2DCompat
         // The switches below are bools and ints so that the probe's -t2d-set can turn each off for a comparison run.
         // Apps always followed by the same App, "<from>><to>": the next one's pages load and warm while the first shows.
         public static readonly string[] AheadApps = { "BBSplash>ReefLogo", "ReefLogo>Attract", "Attract>MainMenu", "MainMenu>MissionBriefing" };
+        // Apps followed by another only sometimes, "<from>><to>?<bool field of the from-App>&<Namespace.Type.static bool>":
+        // the next one's pages load ahead when both are true at AheadDelayMs. A story-mode briefing goes on to the
+        // controls tutorial when Game.showTutorials is on and its level shows it (MissionBriefing.start sets
+        // forceControlsExplanation, after the Enter); the tutorial's Enter loaded its 10 pages and warmed them under the
+        // cover, a 1.0 to 1.6 s frame on every story level.
+        public static readonly string[] AheadIfApps = { "MissionBriefing>LevelControls?forceControlsExplanation&com.bitmapbureau.terminator.game.Game.showTutorials" };
         public static bool Ahead = true;
+        // Apps between a level and its restart that keep the level's pages: the continue screen after a death. It
+        // unloaded them, and the restart loaded the level's whole scene again, its first frames 1.5 to 6 s.
+        public static readonly string[] LevelKeep = { "ContinueScreen" };
+        // "<App>.<BitmapData field>": the pages of that image go first in the App's background loads. The briefing
+        // draws its level's portrait (a page of the level's scene) once its screen has turned on, about 3 s in, and
+        // waiting for that page there took 350 to 430 ms when the prefetch hadn't reached it.
+        public static readonly string[] FirstPages = { "MissionBriefing.previewImage" };
+        // Under the cover, wait for a page still loading to warm it (true), or warm only those loaded (false). A
+        // page drawn before its LoadAsync finishes has its texels read at the draw (about 100 ms a MB), so waiting
+        // for the scene's pages there made the controls tutorial's first frames 1.3 s.
+        public static bool CoverWaits = false;
         public static int AheadDelayMs = 1000;
         // A Switch loads the scenes' pages with Resources.LoadAsync too (Get waits for one still loading), not Resources.Load.
         public static bool AsyncSwitch = true;
@@ -141,6 +158,9 @@ namespace T2DCompat
         static string nextLevel;    // the level a menu or a briefing named last, outside a level
         static int[] aheadScenes = new int[0];
         static string aheadKey;     // the next App's key, until AheadDelayMs is up
+        static string aheadIf;      // its condition (AheadIfApps), or null
+        static object currentApp;   // the App EnterApp had last
+        static bool levelAppEntered; // the level App was entered and no Switch came since: its app scenes went
         static float aheadAt;
         static string prefetchKey;
         static float prefetchStart, warmNextAt, warmStartAt, coverUntil;
@@ -307,6 +327,7 @@ namespace T2DCompat
         public static void EnterApp(object app)
         {
             if (app == null) return;
+            currentApp = app;
             if (AppEntered != null) AppEntered(app.GetType().Name);
             Enter("app:" + app.GetType().Name);
         }
@@ -362,17 +383,33 @@ namespace T2DCompat
                 coverUntil = Time.realtimeSinceStartup + CoverMs / 1000f;
                 aheadScenes = new int[0];
                 aheadKey = null;
+                aheadIf = null;
+                firstSet.Clear();
+                firstPending = true;
                 if (Ahead)
+                {
                     foreach (string pair in AheadApps)
                         if (pair.StartsWith(name + ">", StringComparison.Ordinal))
                         {
                             aheadKey = "app:" + pair.Substring(name.Length + 1);
                             aheadAt = Time.realtimeSinceStartup + AheadDelayMs / 1000f;
                         }
+                    foreach (string pair in AheadIfApps)
+                        if (aheadKey == null && pair.StartsWith(name + ">", StringComparison.Ordinal))
+                        {
+                            int q = pair.IndexOf('?');
+                            aheadKey = "app:" + pair.Substring(name.Length + 1, q - name.Length - 1);
+                            aheadIf = pair.Substring(q + 1);
+                            aheadAt = Time.realtimeSinceStartup + AheadDelayMs / 1000f;
+                        }
+                }
                 if (levelApps.Contains(name))
                 {
-                    // Game: the level hooks that follow pick the pages; keep what is resident until then.
+                    // Game: the level hooks that follow pick the pages; keep what is resident until then, and let the
+                    // first of them switch even to the same level (a restart from the continue screen), so that the
+                    // last App's pages go.
                     appScenes = new int[0];
+                    levelAppEntered = true;
                     return;
                 }
                 if (!known)
@@ -381,7 +418,7 @@ namespace T2DCompat
                     return;
                 }
                 appScenes = scenes;
-                levelScenes = new int[0];
+                if (Array.IndexOf(LevelKeep, name) < 0) levelScenes = new int[0];
                 int[] level;
                 if (Array.IndexOf(PrefetchApps, name) >= 0 && named != null && keys.TryGetValue(named, out level))
                 {
@@ -419,7 +456,7 @@ namespace T2DCompat
                 // The level's start, still under the transition's fade: what the briefing left waits no longer.
                 coverUntil = Time.realtimeSinceStartup + CoverMs / 1000f;
             }
-            if (SameScenes(scenes, levelScenes) && !prefetched) return;
+            if (SameScenes(scenes, levelScenes) && !prefetched && !levelAppEntered) return;
             levelScenes = scenes;
             Switch(key);
         }
@@ -434,6 +471,7 @@ namespace T2DCompat
         static void Switch(string key)
         {
             float start = Time.realtimeSinceStartup;
+            levelAppEntered = false;
             for (int i = 0; i < wanted.Length; i++) wanted[i] = eager[i] = false;
             var label = new StringBuilder();
             foreach (int[] set in new[] { appScenes, levelScenes, prefetchScenes, aheadScenes })
@@ -492,7 +530,15 @@ namespace T2DCompat
                     LoadAsync(p);
                 }
             later.Sort(BySize);
-            bgQueue.AddRange(later);
+            // The next App's pages before a prefetch's still waiting: that App comes first (the controls tutorial
+            // before its level).
+            if (key == "ahead")
+            {
+                int at = 0;
+                while (at < bgQueue.Count && firstSet.Contains(bgQueue[at])) at++;
+                bgQueue.InsertRange(at, later);
+            }
+            else bgQueue.AddRange(later);
             background = later.Count;
             if (later.Count > 0) bgStartAt = Time.realtimeSinceStartup + (PrefetchInFlight > 0 ? PrefetchDelayMs / 1000f : 0f);
             RebuildWarm();
@@ -602,15 +648,81 @@ namespace T2DCompat
                 int[] scenes;
                 string key = aheadKey;
                 aheadKey = null;
-                if (keys.TryGetValue(key, out scenes))
+                if ((aheadIf == null || AheadHolds(aheadIf)) && keys.TryGetValue(key, out scenes))
                 {
                     aheadScenes = scenes;
                     Switch("ahead");
                 }
             }
+            if (firstPending) PromoteFirst();
             IssueBackground();
             if (!Busy && Idle != null) Idle();
         }
+
+        // An AheadIfApps condition, "<bool field of the current App>&<Namespace.Type.static bool>", read by reflection:
+        // T2DCompat can't name the game's types. A field that isn't there counts as false, once logged.
+        static bool AheadHolds(string condition)
+        {
+            if (currentApp == null) return false;
+            const System.Reflection.BindingFlags any = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
+            string[] parts = condition.Split('&');
+            Type appType = currentApp.GetType();
+            System.Reflection.FieldInfo own = appType.GetField(parts[0], any | System.Reflection.BindingFlags.Instance);
+            int dot = parts[1].LastIndexOf('.');
+            Type type = appType.Assembly.GetType(parts[1].Substring(0, dot));
+            System.Reflection.FieldInfo stat = type == null ? null : type.GetField(parts[1].Substring(dot + 1), any | System.Reflection.BindingFlags.Static);
+            if (own == null || stat == null || own.FieldType != typeof(bool) || stat.FieldType != typeof(bool))
+            {
+                if (aheadIfLogs++ == 0) Debug.LogWarning("T2D atlas: no bool fields for the ahead condition " + condition);
+                return false;
+            }
+            bool holds = (bool)own.GetValue(currentApp) && (bool)stat.GetValue(null);
+            Debug.Log("T2D atlas: ahead condition " + condition + ": " + holds);
+            return holds;
+        }
+
+        static int aheadIfLogs;
+
+        // The first flush after an App's start(): the pages of its FirstPages image go to the front of the background
+        // loads, which are smallest first otherwise. BitmapData.texpack_tex is the image's page per frame (R1's table).
+        static void PromoteFirst()
+        {
+            firstPending = false;
+            if (currentApp == null) return;
+            const System.Reflection.BindingFlags own = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+            string name = currentApp.GetType().Name;
+            foreach (string spec in FirstPages)
+            {
+                int dot = spec.IndexOf('.');
+                if (spec.Substring(0, dot) != name) continue;
+                System.Reflection.FieldInfo field = currentApp.GetType().GetField(spec.Substring(dot + 1), own);
+                object image = field == null ? null : field.GetValue(currentApp);
+                System.Reflection.FieldInfo texField = image == null ? null : image.GetType().GetField("texpack_tex", own);
+                int[] frames = texField == null ? null : texField.GetValue(image) as int[];
+                if (frames == null)
+                {
+                    if (firstLogs++ < 5) Debug.Log("T2D atlas: no image in " + spec);
+                    continue;
+                }
+                var first = new List<int>();
+                foreach (int real in frames)
+                {
+                    int cols, rows, tile = Tiles(real, out cols, out rows);
+                    for (int k = 0; k < (tile < 0 ? 1 : cols * rows); k++)
+                    {
+                        int p = tile < 0 ? real : tile + k;
+                        if (p >= 0 && p < pages.Length && bgQueue.Remove(p)) first.Add(p);
+                        if (p >= 0 && p < pages.Length) firstSet.Add(p);
+                    }
+                }
+                bgQueue.InsertRange(0, first);
+                if (firstLogs++ < 20) Debug.Log("T2D atlas: " + spec + ": " + first.Count + " of its pages first");
+            }
+        }
+
+        static int firstLogs;
+        static bool firstPending;
+        static readonly HashSet<int> firstSet = new HashSet<int>();
 
         // Pages loading or waiting to, for SoundLoads, which starts no clip load meanwhile; Idle each flush they aren't
         // (Probe.Install joins the two).
@@ -655,7 +767,7 @@ namespace T2DCompat
                 if (!covered && (paced || (WarmBigBytes > 0 && PageBytes(p) > WarmBigBytes))) continue;
                 // A page Resources.Load gave is read at its first draw (about 80 ms a MB): only under the cover.
                 if (!covered && pages[p] != null && !viaAsync[p]) continue;
-                if (pages[p] == null && (!covered || WaitFor(p) == null)) continue;
+                if (pages[p] == null && (!covered || !CoverWaits || WaitFor(p) == null)) continue;
                 warmList.RemoveAt(i);
                 if (covered) coverWarmed += PageBytes(p);
                 Drawn(p);
