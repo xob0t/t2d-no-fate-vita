@@ -13,7 +13,7 @@ using Debug = UnityEngine.Debug;
 // and log.prev2.txt): errors and exceptions with their stack traces, a message repeated back to back as one line with
 // its count (a repeat that goes on is written again every 5 s), each line with the seconds since the start. It stops at MaxBytes, so an error every frame cannot fill the
 // card. A thread of its own writes the lines, since a write to the card now and then takes seconds and the main thread
-// would wait for it; Flush writes what is queued from the calling thread. -t2d-log-sync writes on the logging thread.
+// would wait for it; Flush waits (at most 2 s) for it to write what is queued. -t2d-log-sync writes on the logging thread.
 // Desktop players keep Unity's own log.
 // Part of T2DCompat; see Compat2018.cs.
 namespace T2DCompat
@@ -128,9 +128,8 @@ namespace T2DCompat
             }
         }
 
-        // writing: the writer holds a batch it took from pending and hasn't written yet. flushing: a Flush is draining
-        // pending, and the writer takes nothing until it is done. Both under gate.
-        static bool writing, flushing;
+        // writing: the writer holds a batch it took from pending and hasn't written yet. Under gate.
+        static bool writing;
 
         static void WriteLines()
         {
@@ -139,7 +138,7 @@ namespace T2DCompat
             {
                 lock (gate)
                 {
-                    while (pending.Count == 0 || flushing) Monitor.Wait(gate);
+                    while (pending.Count == 0) Monitor.Wait(gate);
                     lines.AddRange(pending);
                     pending.Clear();
                     writing = true;
@@ -166,51 +165,23 @@ namespace T2DCompat
             }
         }
 
-        // Writes what is queued from the calling thread (before a deliberate stop). The writer's batch first, which it
-        // took before these lines were queued: returning before it was written lost it at a quit just after, or wrote
-        // the lines out of order. At most FlushWaitMs in all, the file included: a writer stuck in a card write holds
-        // output, and Flush waited for it with no limit after the wait for its batch, which held up the main thread and
-        // Application.Quit() behind it. Lines it couldn't write go back to the front of pending for the writer.
+        // Before a deliberate stop: waits until the writer has written what is queued, its batch in hand included, so the
+        // lines reach the card in order. At most FlushWaitMs: the writing stays on the writer's thread, and a card write
+        // that takes longer doesn't hold up the main thread and Application.Quit() behind it. Before (Nov 2026) Flush took
+        // the queue and wrote it on the calling thread once it had the file, with no limit on those writes.
         const int FlushWaitMs = 2000;
 
         public static void Flush()
         {
             if (sync || output == null) return;
-            var lines = new List<string>();
             int end = Environment.TickCount + FlushWaitMs;
             lock (gate)
             {
-                flushing = true;
-                while (writing)
+                while (pending.Count > 0 || writing)
                 {
                     int left = end - Environment.TickCount;
-                    if (left <= 0 || !Monitor.Wait(gate, left)) break;
-                }
-                lines.AddRange(pending);
-                pending.Clear();
-            }
-            bool entered = false, done = false;
-            try
-            {
-                entered = Monitor.TryEnter(output, Math.Max(0, end - Environment.TickCount));
-                if (!entered) return;
-                done = true;
-                foreach (string line in lines)
-                    if (!Put(line)) return;
-            }
-            finally
-            {
-                if (entered) Monitor.Exit(output);
-                lock (gate)
-                {
-                    if (!done && lines.Count > 0)
-                    {
-                        lines.AddRange(pending);
-                        pending.Clear();
-                        foreach (string line in lines) pending.Enqueue(line);
-                    }
-                    flushing = false;
-                    Monitor.PulseAll(gate);
+                    if (left <= 0) break;
+                    Monitor.Wait(gate, left);  // the writer pulses gate as it finishes each batch
                 }
             }
         }
