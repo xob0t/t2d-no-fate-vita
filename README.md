@@ -32,7 +32,7 @@ You need Windows 10 or 11 on x64, the game from Steam, and about 10 GB of free d
 
    The VPK is `builds/t2d-2018.2.19f1-vita.vpk`.
 
-It doesn't install Unity or need a Unity license: setup downloads Unity 2018.2.19f1's installers and extracts the files the build reads, Sony's PS Vita SDK 3.570 from archive.org (unless you have one), Rewind at a pinned commit with two .NET SDKs to build and run it, AssetRipper and Mono.Cecil. Git must be installed. A rerun picks up where the last one stopped.
+It doesn't install Unity or need a Unity license: setup downloads Unity 2018.2.19f1's installers and extracts the files the build reads, Sony's PS Vita SDK 3.570 from archive.org (unless you have one), this project's [Rewind fork](https://github.com/xob0t/Rewind-IL2CPP-Decompiler) at a pinned commit with two .NET SDKs to build and run it, AssetRipper and Mono.Cecil. Git must be installed. A rerun picks up where the last one stopped.
 
 - `--game <folder>` reads the game from that folder, if it isn't in Steam's default folder.
 - `--vita-sdk <archive or folder>` uses your own copy of the SDK.
