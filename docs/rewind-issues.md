@@ -28,7 +28,7 @@ The fork's commits (until 2026-11-20 patches in `tools/rewind/patches`, applied 
 The repro checks were run on upstream main and on the patched build, both with the rebuilt 6000.0.60f1 library.
 
 - On upstream main only the controls and issue 1 pass (issue 1 through the library): 14 of 46 checks.
-- With the fork (checked 2026-11-20 at the fork's head, `86258fc`, the same as with patches 0001 to 0033): 36 of 46 checks pass; 1, 3, 7, 8, 9, 11, 16, 17, 18, 21, 29 and 30 in full, and 6 and 10 in part.
+- With the fork (checked 2026-11-20 at the fork's head, `86258fc`, the same as with patches 0001 to 0033): 36 of 46 checks pass; 1, 3, 7, 8, 9, 11, 16, 17, 18, 21, 29 and 30 in full, and 6 and 10 in part. Issue 34's check, added later, fails at `86258fc` and passes at `ac9e2ce` (37 of 47).
 - 2, 13 and 19 fail their checks only on form: the values are right and nothing is marked, but a merged double or struct is still built from its bits.
 - 4, half of 6 and the local variant of the inlined constructors are open.
 - Fixed on the game by the library alone, with or without the patches: 14, the metadata-init part of 1, and three items of 20.
@@ -516,6 +516,18 @@ Three smaller faults went with it: a use just before its check counted as safe t
 With the fix, on the game: the same counts of complete and gap bodies; in Assembly-CSharp one method changes, `PoliceHelicopter.start`; in mscorlib 20 bodies change, and UnityEngine.CoreModule and InControl are unchanged.
 
 Seen in a real game: `PoliceHelicopter.start` chains the helicopter's targets, `targets[i].nextTarget = targets[i + 1]`. Rewind merged `targets[i + 1]` (or null past the end) and typed the merge `HeliTarget`, from the native class test that comes after the store. The fork now types it `object`, and the repair rule `PoliceHelicopterStart` (`rules/Bosses.cs`) casts it to `HeliTarget` at the store, where the native code tests it.
+
+## 34. `new T(args)` put where the constructor call is, though the allocation was used before it (new, found on the console)
+
+Status: fixed by the fork's change 36 (`12166e5`, `REWIND_NO_EARLY_COPIED_OBJECTS` turns it off). Repro `Issue34_PairInLoop` (the second shape).
+
+Rewind turns an allocation and the constructor call on it into `o = new T(args)` at the call, and takes the bare allocation out.
+MSVC can move the allocation's register into the variable a later merge wants, on each arm of a branch, before the call (`mov r15, rax` / `mov r13, rax`, then the call where the arms join): the merge's copies then read `o` before `new` assigns it, the previous loop turn's object or null.
+It can also merge two `new T(...)` into one allocation before a branch and a constructor call on each arm: the first call claimed the allocation, and the other arm's call ran on nothing allocated.
+The fork leaves the allocation raw in both shapes, and runs each constructor on it as a call.
+With the fix, on the game: complete bodies 15,736 to 15,734; in Assembly-CSharp one method changes, `FW3Boss2ndPhase.start`; in mscorlib `Environment.GetStackTrace` and `RuntimeMethodInfo.Invoke` (the second shape).
+
+Seen in a real game: `FW3Boss2ndPhase.start` builds the boss's legs in a loop, left then right, in the first shape. The left leg stayed null, `left.otherLeg = right` threw, `FutureWar3.setupScene(1)` stopped half done after the lift ride (no boss, no HUD, the camera not reset), and from then on every frame threw a `NullReferenceException` while the music played: Future War 3, the story's last level, could not be finished.
 
 ## Not Rewind's
 

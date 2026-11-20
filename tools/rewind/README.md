@@ -53,8 +53,9 @@ Changes made for t2d-no-fate-vita in 2026, one fork commit per change, in order:
 | 33 | A direct call changes only the volatile registers the callee's code writes. |
 | 34 | A class check casts the object only where every path to the use passes the check; a check on a path the CFG no longer has proves nothing. |
 | 35 | A class check casts a call's receiver and arguments, a store and a merge's incoming value only where it holds there; a use before its check is cast only when nothing between can fault or write; a null test's check is kept from the arm taken when the object isn't null; a merged block's check stays before the first node it covers. |
+| 36 | An allocation a merge copied before its constructor call, or that two constructor calls share, stays allocated raw, and each constructor runs on it as a call. |
 
-Changes 34 and 35 come after the fork's repros and docs commits.
+Changes 34 to 36 come after the fork's repros and docs commits.
 Most changes have a `REWIND_NO_*` environment switch that turns them off (2, 3, 17 and 23 have none).
 The fork holds no game code or data.
 
