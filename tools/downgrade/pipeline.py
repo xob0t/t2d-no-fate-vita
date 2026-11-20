@@ -1091,8 +1091,10 @@ def package_vita(build: Path) -> Path:
     vpk = build.with_name(build.name + '.vpk')  # with_suffix would cut the version at its dots
     files = list(vita_app_files(build))
     total = sum(len(source) if isinstance(source, bytes) else source.stat().st_size for _, source in files)
+    # Written beside the last VPK and renamed over it when whole, so a packaging that stops leaves the last one.
+    part = vpk.with_name(vpk.name + '.part')
     with (
-        zipfile.ZipFile(vpk, 'w', zipfile.ZIP_DEFLATED) as archive,
+        zipfile.ZipFile(part, 'w', zipfile.ZIP_DEFLATED) as archive,
         progress.step('Packaging the VPK', total=total, eta=True, count='MB', timed=True) as step,
     ):
         for name, source in files:
@@ -1110,6 +1112,7 @@ def package_vita(build: Path) -> Path:
                 while chunk := src.read(PACKAGE_CHUNK):
                     dest.write(chunk)
                     step.advance(len(chunk))
+    replace_path(part, vpk)
     log(f'Packaged {vpk} ({vpk.stat().st_size / 2**20:.0f} MB)')
     return vpk
 

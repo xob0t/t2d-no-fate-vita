@@ -26,6 +26,7 @@ checks RGBA4444 and mipmaps against an editor build of generated images):
 
 import hashlib
 import math
+import os
 import struct
 from functools import cache
 from pathlib import Path
@@ -196,9 +197,14 @@ def pixels(path, settings, fmt, rgba, mips=1):
     recipe = (CACHE_VERSION, fmt, settings.get('alphaIsTransparency'), mips, srgb, ENCODER_NAME)
     key = hashlib.sha1(path.read_bytes() + repr(recipe).encode())
     cached = CACHE / f'{key.hexdigest()}.bin'
+    height, width = rgba.shape[:2]
+    size = image_size(width, height, fmt, mips)
     if cached.exists():
-        CACHE_USE['cache'] += 1
-        return cached.read_bytes()
+        data = cached.read_bytes()
+        if len(data) == size:
+            CACHE_USE['cache'] += 1
+            return data
+        # cut short (a build stopped while an earlier version wrote it straight to its name): encoded again
     CACHE_USE['encoded'] += 1
     if fmt in COMPRESSED and mips > 1:
         raise NotImplementedError(f'{path.name}: mipmaps of a compressed texture')
@@ -206,9 +212,26 @@ def pixels(path, settings, fmt, rgba, mips=1):
         rgba = dilate(rgba)
     levels = mip_levels(rgba, srgb, mips) if mips > 1 else [rgba]
     data = b''.join(encode_level(level, fmt) for level in levels)
+    if len(data) != size:
+        raise RuntimeError(f'{path.name}: {len(data)} bytes of format {fmt}, {width}x{height}, {mips} mips; expected {size}')
     CACHE.mkdir(parents=True, exist_ok=True)
-    cached.write_bytes(data)
+    # Written beside it and renamed, so the cache never holds a file cut short.
+    part = cached.with_name(f'{cached.name}.{os.getpid()}.part')
+    part.write_bytes(data)
+    os.replace(part, cached)
     return data
+
+
+def image_size(width, height, fmt, mips=1):
+    """The bytes of a texture's data in format fmt: its mip levels, each side halved down to 1."""
+    total = 0
+    for level in range(mips):
+        w, h = max(1, width >> level), max(1, height >> level)
+        if fmt in (DXT1, DXT5):
+            total += ((w + 3) // 4) * ((h + 3) // 4) * (8 if fmt == DXT1 else 16)
+        else:
+            total += w * h * {RGBA32: 4, RGB24: 3, RGBA4444: 2}[fmt]
+    return total
 
 
 def encode_level(rgba, fmt):
