@@ -72,6 +72,7 @@ namespace T2DCompat
         {
             sTex = tex;
             sPage = page;
+            Atlas.SourceFrames = page;
             sUvx = uvx; sUvy = uvy; sUvw = uvw; sUvh = uvh;
             sFrw = frw; sFrh = frh; sOfx = ofx; sOfy = ofy;
             sSfw = sfw; sSfh = sfh;
@@ -281,8 +282,10 @@ namespace T2DCompat
             if (page == -2) return zorder;
             int cols = 1, rows = 1, first = page >= 0 ? Atlas.Tiles(page, out cols, out rows) : -1;
             if (first >= 0) return SubmitTiled(first, cols, rows, material, colored, zorder);
-            Texture tex = page == -1 ? (Texture)sTex : Atlas.Get(page);
-            // A page missing from the build (Atlas logs it once): no draw, rather than one with the material's texture.
+            // A screen draw may skip a page a miss is still loading (Atlas.AsyncMisses); a draw into a BitmapData waits.
+            Texture tex = page == -1 ? (Texture)sTex : tScreen ? Atlas.GetForScreen(page) : Atlas.Get(page);
+            // A page missing from the build (Atlas logs it once), or a miss's still loading: no draw, rather than one
+            // with the material's texture.
             if (page >= 0 && (object)tex == null) return zorder;
             if (!tScreen)
             {

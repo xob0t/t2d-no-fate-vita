@@ -206,7 +206,27 @@ namespace T2DCompat
         // ---- pages (R4, R5) ----------------------------------------------------------------------
 
         // The page, loading it now if it isn't resident.
-        public static Texture2D Get(int page)
+        public static Texture2D Get(int page) { return GetPage(page, false); }
+
+        // The page for a screen draw: as Get, but a page no scene has (a miss) loads with LoadAsync, and the draws of it
+        // are skipped (null) until the load is done (AsyncMisses). Only screen draws: the screen is drawn again every
+        // frame, where a draw into a BitmapData may be made once and kept.
+        public static Texture2D GetForScreen(int page) { return GetPage(page, AsyncMisses); }
+
+        // A miss's page loads with LoadAsync and its screen draws wait for it (true), or it loads at once (false). At
+        // once, its Resources.Load and its first draw, which reads the texels, made one frame of 185 to 210 ms per miss
+        // (Future War 3 and the level select, Nov 2026); LoadAsync reads them on the loading thread, and the sprite
+        // shows a few frames late.
+        public static bool AsyncMisses = true;
+
+        // The frame table row of the image SpriteBatch draws now (BitmapData.texpack_tex, R1's tex[row]), for the
+        // miss log: SpriteBatch.Source sets it.
+        public static int[] SourceFrames;
+
+        static readonly HashSet<int> missLoads = new HashSet<int>();
+
+        // One name per public method: the rewriter finds Atlas.Get by name (CompatMethod).
+        static Texture2D GetPage(int page, bool skipMiss)
         {
             if (Trace.On) Trace.Enter("Atlas.Get");
             Load();
@@ -218,6 +238,14 @@ namespace T2DCompat
                 page = tileFirst[page];
             }
             Texture2D t = pages[page];
+            ResourceRequest missLoad;
+            if (t == null && missLoads.Contains(page) && asyncLoads.TryGetValue(page, out missLoad))
+            {
+                // A miss's LoadAsync: skipped until it is done (Pump completes it), or waited for by a draw that can't skip.
+                if (skipMiss && !missLoad.isDone) return null;
+                Complete(page, missLoad);
+                t = pages[page];
+            }
             if (t == null)
             {
                 // A page no current scene wants, drawn anyway, is wanted until the next Switch, as the scenes' own pages:
@@ -229,7 +257,19 @@ namespace T2DCompat
                 if (t == null)
                 {
                     Miss(page);
-                    t = LoadPage(page);
+                    if (skipMiss && !missing[page])
+                    {
+                        Evict(PageBytes(page));
+                        LoadAsync(page);
+                        if (asyncLoads.ContainsKey(page))
+                        {
+                            missLoads.Add(page);
+                            Note("miss " + PageName(page) + " " + Mb(page) + " async");
+                            return null;
+                        }
+                        t = pages[page];
+                    }
+                    else t = LoadPage(page);
                 }
                 else if (demanded) Miss(page);
             }
@@ -650,6 +690,7 @@ namespace T2DCompat
         static void Complete(int page, ResourceRequest request)
         {
             asyncLoads.Remove(page);
+            missLoads.Remove(page);
             asyncBytes -= PageBytes(page);
             float start = Time.realtimeSinceStartup;
             var t = request.asset as Texture2D;
@@ -1135,7 +1176,7 @@ namespace T2DCompat
             missesByPage[page] = n + 1;
             long id = ((long)sceneLabel.GetHashCode() << 32) | (uint)page;
             if (missLogged.Add(id) || LogAllMisses)
-                Debug.Log(string.Format("T2D atlas: miss, page {0} in {1} ({2} misses in all)", PageName(page), sceneLabel, misses));
+                Debug.Log(string.Format("T2D atlas: miss, page {0} in {1}, image row {2} ({3} misses in all)", PageName(page), sceneLabel, SourceRow(), misses));
             if (sticky[page] || StickyMisses <= 0 || missesByPage[page] < StickyMisses || stickyByMiss >= StickyMissMax) return;
             sticky[page] = true;
             stickyByMiss++;
@@ -1143,6 +1184,16 @@ namespace T2DCompat
         }
 
         static int stickyByMiss;
+
+        // The frame table row (Assets.IMAGE_* value) of the image drawn now, -1 if it isn't one of the table's: the
+        // image the scene data lacks (scene_sets.py's EXTRA_IMAGES; atlas/rows.py names it).
+        static int SourceRow()
+        {
+            if (SourceFrames == null || tex == null) return -1;
+            for (int r = 0; r < tex.Length; r++)
+                if (ReferenceEquals(tex[r], SourceFrames)) return r;
+            return -1;
+        }
 
         // A summary of the misses so far, by page: for the scene data (scene_sets.py) when it is redone.
         public static string MissReport()
