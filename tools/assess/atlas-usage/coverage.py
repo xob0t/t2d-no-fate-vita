@@ -194,6 +194,7 @@ def main():
     ap.add_argument('--scenes', default=os.path.join(REPO, 'tools/downgrade/atlas/scenes.json'))
     ap.add_argument('--out', default=os.path.join(REPO, 'work/coverage'))
     ap.add_argument('--names', nargs='*', default=[], help='images to look up (from miss logs)')
+    ap.add_argument('--later', help='a later scene data: report which of the pairs it adds this check flags')
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
 
@@ -245,6 +246,8 @@ def main():
         if mm:
             defs[mm.group(1)].append(os.path.relpath(fn, a.src).replace('\\', '/'))
     dups = {c: fs for c, fs in defs.items() if len(fs) > 1 and any(ar.GAME_NS in f for f in fs)}
+    # The analysis keys classes by simple name: a game class it read from another namespace's file is shadowed.
+    shadowed = {c: C[c]['file'] for c in dups if c in C and ar.GAME_NS not in C[c]['file']}
 
     # -- 3. sites
     fields_of, field_names = int_fields(classes)
@@ -344,7 +347,7 @@ def main():
                         or tc in stops.get(nm, ()):
                     continue
                 seen.add((tc, tkey))
-                if scene_cls(tc):
+                if scene_cls(tc) and tc not in hubs:
                     body = classes[tc]['methods'][tkey].body
                     for f, n in re.findall(r'(?<![\w.])(\w+) = AssetsEmbed\.loadImage\(Assets\.(IMAGE_\w+)\)', body):
                         if n in imgc and re.search(r'\.%s\b(?!\s*=[^=])' % f, text):
@@ -378,6 +381,12 @@ def main():
                         f = build_scenes.family(images[i]['name'])
                         for j in fam.get(f, {i}):
                             found[j].add('arith %s.%s' % (s['cls'], s['meth']))
+        # A numbered family (IMAGE_X_0, _1, ...; debris) the scene has part of: the game picks its members by
+        # arithmetic on the first one's id.
+        for i in list(have[k]):
+            f = build_scenes.family(images[i]['name'])
+            for j in fam.get(f, ()):
+                found[j].add('family %s' % f[6:])
         lang_ok = {i for i in found if not any(images[i]['name'].endswith('_' + l) for l in build_scenes.LANGS)}
         suspects[k] = {i: found[i] for i in lang_ok if i not in have[k]}
 
@@ -458,7 +467,35 @@ def main():
         md.append('- %s: %s' % (f, '; '.join('%s %s' % (c, sorted(v)) for c, v in sorted(field_vals[f].items()))))
     md += ['', '## Class names defined twice', '']
     for c, fs in sorted(dups.items()):
-        md.append('- %s: %s' % (c, ', '.join(fs)))
+        md.append('- %s: %s%s' % (c, ', '.join(fs), ('; SHADOWED: the analysis read %s' % shadowed[c]) if c in shadowed else ''))
+    if a.later:
+        # Pairs (image, scene) a later scene data adds, and whether this check flags them on the earlier one.
+        lt = json.load(open(a.later))
+        lnames = [s['name'] for s in lt['scenes']]
+        added = collections.defaultdict(set)
+        for n, v in lt['images'].items():
+            if n not in imgc:
+                continue
+            for k2 in (range(len(lnames)) if v == '*' else v):
+                k = scene_names.index(lnames[k2]) if lnames[k2] in scene_names else None
+                if k is not None and imgc[n] not in have[k]:
+                    added[n].add(k)
+        caught, missed = collections.defaultdict(set), collections.defaultdict(set)
+        for n, ks in added.items():
+            for k in ks:
+                i = imgc[n]
+                ok = i in suspects[k] or i in no_scene or i in table_only
+                (caught if ok else missed)[n].add(scene_names[k])
+        npairs = sum(len(v) for v in added.values())
+        ncaught = sum(len(v) for v in caught.values())
+        md += ['', '## Against %s' % os.path.relpath(a.later, REPO), '',
+               '%d (image, scene) pairs it adds, %d images; flagged here: %d pairs, %d images.' % (
+                   npairs, len(added), ncaught, len(caught)), '', '### Not flagged', '']
+        for n in sorted(missed):
+            md.append('- %s: %s' % (n, ', '.join(sorted(missed[n]))[:300]))
+        print('against %s: %d of %d added pairs flagged (%d of %d images); not flagged: %s' % (
+            os.path.relpath(a.later, REPO), ncaught, npairs, len(caught), len(added),
+            ', '.join(n[6:] for n in sorted(missed))[:600]))
     if a.names:
         md += ['', '## Names asked for', '']
         for n in a.names:
@@ -470,14 +507,14 @@ def main():
     json.dump(dict(suspects=js_sus, no_scene_reached={name_of.get(i, str(i)): r for i, r in no_scene_reach.items()},
                    no_scene_dead={name_of.get(i, str(i)): r for i, r in no_scene_dead.items()},
                    table_only=[name_of.get(i, str(i)) for i in table_only],
-                   unreferenced=len(unreferenced), sites=sites, duplicates=dups),
+                   unreferenced=len(unreferenced), sites=sites, duplicates=dups, shadowed=shadowed),
               open(os.path.join(a.out, 'coverage.json'), 'w'), indent=1)
     tot = sum(len(v) for v in suspects.values())
     print('suspects: %d (scene, image) pairs in %d scenes; in no scene: %d named by code (%d reached, %d not), '
           '%d only by the sprite table, %d by nothing; unresolved sites: %d (%s); duplicate classes: %s' % (
               tot, sum(1 for v in suspects.values() if v), len(no_scene), len(no_scene_reach), len(no_scene_dead),
               len(table_only), len(unreferenced), len(sites), ', '.join('%s %d' % kv for kv in kinds.most_common()),
-              ', '.join(sorted(dups))))
+              ', '.join(c + (' (SHADOWED by %s)' % shadowed[c] if c in shadowed else '') for c in sorted(dups))))
     for n in a.names:
         i = imgc.get(n)
         where = [scene_names[k] for k in range(n_sc) if i in suspects[k]]
