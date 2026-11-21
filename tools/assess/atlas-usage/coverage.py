@@ -219,6 +219,7 @@ def main():
     in_any = set().union(*have.values())
     usage_index = {s[0]: k for k, s in enumerate(computed)}
     scene_roots = {s[0]: set(s[2]) for s in computed}
+    scene_kind = {s[0]: s[1] for s in computed}
     scene_dirs = {'scripts', 'cutscenes', 'apps'}
 
     def scene_cls(c):
@@ -333,7 +334,9 @@ def main():
         # helper class the analysis didn't reach: the whole class. Into another scene's class (a menu that makes a
         # level script to show it): only the BitmapData fields it loads that this scene's code reads (preview).
         whole = ('Game', 'Sprites', 'Transition')
-        start = [(c, key) for c in cl if c not in hubs or c in whole or c in roots
+        # Game's own loop (update, pause, ...) runs only in the levels; elsewhere only what the scene's code calls.
+        loop = whole if scene_kind.get(nm) == 'level' else ('Sprites', 'Transition')
+        start = [(c, key) for c in cl if c not in hubs or c in loop or c in roots
                  for key in classes.get(c, {}).get('methods', {})
                  if (c, key) not in build_scenes.HUB_METHODS_EXCLUDED and (c, key) not in NEXT_APP]
         text = '\n'.join(classes[c]['text'] for c in cl if c in classes and (c not in hubs or c in roots))
@@ -341,7 +344,7 @@ def main():
         while stack:
             c, key = stack.pop()
             for tc, tkey in callees(c, key):
-                if (tc, tkey) in seen or (tc in cl and (tc not in hubs or tc in whole or tc in roots)):
+                if (tc, tkey) in seen or (tc in cl and (tc not in hubs or tc in loop or tc in roots)):
                     continue
                 if (tc, tkey) in build_scenes.HUB_METHODS_EXCLUDED or (tc, tkey) in NEXT_APP or tc in TABLES \
                         or tc in stops.get(nm, ()):
