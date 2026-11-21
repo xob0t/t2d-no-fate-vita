@@ -7,8 +7,8 @@ The game ships only as native code (IL2CPP), so its code is first recovered with
 **Where it stands.** Playtested by hand on a PS Vita:
 
 - The game works from start to finish: all 19 levels, story and arcade modes, saves, menus and achievements.
-- 60 fps everywhere, with no freezes on loads.
-- Left: a rare single slow frame, and a briefing skipped early waits a few seconds behind its fade.
+- 60 fps everywhere. Levels and menus load their images ahead of time, so loads don't freeze and play doesn't stutter.
+- Left: a slow frame as a few cutscenes and briefings start, and a briefing skipped early waits a few seconds behind its fade.
 
 More in [docs/build.md](docs/build.md#where-it-stands).
 

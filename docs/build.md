@@ -198,10 +198,12 @@ The list is `BUILD_SWITCHES` in `tools/downgrade/common.py`:
 
 ## Where it stands
 
-As of 2026-11-20 on the Steam release, `uv run build.py` makes a VPK that boots and plays on the console ([On the console](#on-the-console)), with Rewind from the fork at `39afe89`.
+As of 2026-11-21 on the Steam release, `uv run build.py` makes a VPK that boots and plays on the console ([On the console](#on-the-console)), with Rewind from the fork at `39afe89`.
 The game has been playtested by hand on the console: it plays at about 60 fps, all 19 levels load and play, a level's end saves the story's progress, and story mode, arcade mode, the menus and the achievements work.
 The briefings, the controls tutorials, the restarts and the attract demos no longer freeze ([textures.md](textures.md#story-mode-and-restarts), [Fades that wait](textures.md#fades-that-wait)).
-Left: an occasional single frame of about 200 ms when a level draws an image its scene doesn't hold, and a briefing skipped early that waits a few seconds behind the fade while the level loads.
+Loads don't freeze and play doesn't stutter: the levels and menus load the images they draw ahead of time, from scene data a static check covers ([textures.md](textures.md#what-is-untested)); an image a scene still misses loads in the background and shows a few frames late; and the garbage collector runs while a fade covers the screen ([platform.md](platform.md#garbage-collection)).
+A playtest on 2026-11-21 (Future War 3, then story mode from Desert Town's intro to the Factory, about 13 minutes) had 3 misses, and in play no frame over 110 ms after a level's first.
+Left: a frame of 0.4 to 0.8 s as a few cutscenes start (Desert Town's intro and outro), about 0.5 s on a briefing as it loads the next level ahead, and a briefing skipped early that waits a few seconds behind the fade while the level loads.
 The 3 gap methods left still throw when they reach a marker, all on paths the port doesn't take.
 
 | Stage | Time | Result |
