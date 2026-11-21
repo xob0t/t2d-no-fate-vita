@@ -52,6 +52,10 @@ EXTRA_IMAGES.update({n: 'all' for n in ('IMAGE_DOT', 'IMAGE_DOT_LARGE', 'IMAGE_H
 # one set, the 19 previews share one page, where beside their levels' frames they took 13 pages (26 MB) per menu.
 PREVIEW_SCENES = ['menu LevelSelect', 'menu EndScreen', 'menu MainMenu']
 PREVIEW_PREFIX = 'IMAGE_PREVIEW_'
+# The same for each level's portrait (Script.briefingPortrait): only the briefing draws it (and two mode menus use
+# some as buttons); the analysis gives it to its level too, from the script's constructor. Beside its level's frames
+# each took a page of its own in the briefing, 4 pages (8 MB) more there; in the menus only, they share one.
+MENU_ONLY_FIELDS = ['briefingPortrait']
 
 
 def level_ids(name):
@@ -68,7 +72,7 @@ def level_ids(name):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--usage', required=True, help='work/atlas-usage (scenes.json, maps.json)')
+    ap.add_argument('--usage', required=True, help='work/atlas-usage (scenes.json, maps.json, class_refs.json)')
     ap.add_argument('--frames', required=True, help="frametable.py's output, for IMAGE_* names")
     ap.add_argument('--out', required=True)
     a = ap.parse_args()
@@ -100,6 +104,10 @@ def main():
     for n in consts:
         if n.startswith(PREVIEW_PREFIX):
             use[n] = sorted(index[w] for w in PREVIEW_SCENES)
+    refs = json.load(open(a.usage + '/class_refs.json'))['classes']
+    for i in {i for v in refs.values() for f in MENU_ONLY_FIELDS for i in v.get('bitmap_fields', {}).get(f, ())}:
+        n = name_of[i]
+        use[n] = [k for k in use.get(n, []) if k not in levels]
     every = [n for n, v in use.items() if len(v) == len(scenes)]
     data = {
         'comment': 'Which images each scene draws (by Assets.IMAGE_* name) and the runtime keys that enter it. '
