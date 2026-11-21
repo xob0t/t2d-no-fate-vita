@@ -10,6 +10,7 @@ Prose here is one sentence per line, so a diff shows only the sentences that cha
 The pipeline runs end to end, and on the console every level loads and plays from its briefing; 3 methods still have Rewind's gaps, on paths the port doesn't take. [Where it stands](#where-it-stands) has the details and [Levels](#levels) the level table.
 
 You need Windows 10 or 11 on x64, Git, and the game from Steam.
+The repository's folder needs a path of at most 72 characters, such as `C:\t2d\t2d-no-fate-vita` (see [When something fails](#when-something-fails)).
 With [uv](https://docs.astral.sh/uv/) installed, the short version is:
 
 ```powershell
@@ -343,12 +344,17 @@ None of the levels threw an exception in its minute; the runs before `b3s0` are 
 `build.py` stops at the first failure and says what failed.
 Fix it and run `build.py` again: it picks up where it stopped.
 
+- "This folder's path is ... characters long": `build.py` stops before setup when the repository's folder is deeper than 72 characters, and the doctor lists it as `Folder path`.
+  Unity 2018.2's `il2cpp.exe` is a .NET Framework program held to Windows' 260-character path limit, whatever Windows' long-path setting, and the longest header it reads is 186 characters below the folder.
+  From a deeper folder it died 20 minutes into a build with `PathTooLongException` ("The specified output path is too long to write generated files" in `work/builder/il2cpp/il2cpp.log`) behind a "has stopped working" dialog.
+  Move the whole folder to a short path such as `C:\t2d` and run `build.py` again there.
+- The pipeline turns Windows' crash dialogs off for the tools it starts (`SetErrorMode`, which they inherit; `common.no_crash_dialogs`), so a tool that crashes exits rather than waiting behind "has stopped working", and its error is in its log and at the end of the output.
 - Setup: a download whose hash doesn't match is deleted, and setup stops; run it again. "To do" lines at the end are steps setup couldn't take, such as an offer you declined.
 - The game: "another release than the rules were written for" means your `GameAssembly.dll` or `global-metadata.dat` differs from Steam build 24040403's; have Steam verify the game's files.
 - `recover`: Rewind's log is `artifacts/downgrade/rewind.log`.
 - `rip`: "AssetRipper did not start" or "AssetRipper export produced no project": check `tools/external/assetripper-2.0.0` and `artifacts/downgrade/assetripper.log`.
 - `code` and `project`: the rewriter's log is `artifacts/downgrade/rewrite-2018.2.19f1-vita.log`, its summary `artifacts/downgrade/code-report.txt`. "expected at least ... The export changed or the rule no longer matches it" means a rule matched less than on the export it was written for, usually another release of the game.
-- `build`: "The code stage left references that don't resolve" means a rewriter rule no longer covers what Rewind wrote (`artifacts/downgrade/code-report.txt` lists them). Otherwise each step names what it is on, and a failure prints the step and the file; UnityLinker's log is `work/builder/il2cpp/unitylinker.log`.
+- `build`: "The code stage left references that don't resolve" means a rewriter rule no longer covers what Rewind wrote (`artifacts/downgrade/code-report.txt` lists them). Otherwise each step names what it is on, and a failure prints the step and the file; UnityLinker's log is `work/builder/il2cpp/unitylinker.log`, IL2CPP's `work/builder/il2cpp/il2cpp.log`.
 - Locks: "Held by another run" means another pipeline holds a build lock; `uv run tools/downgrade/lock.py status` shows who.
 
 ## Time and disk space
