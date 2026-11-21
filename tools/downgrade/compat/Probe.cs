@@ -25,6 +25,8 @@ using UnityEngine.SceneManagement;
 //                                    of the probe's, every 250 ms while it lasts: the free memory and, in a T2D_TRACE=1
 //                                    build, the game methods the main thread entered last and how many since the frame
 //                                    began; then how long the frame took
+//   -t2d-allocs <s>                  in a T2D_TRACE=1 build, every s seconds a T2D_ALLOCS line: the managed heap's
+//                                    growth, KB a second, and the methods it was charged to most (Trace.cs)
 //   -t2d-peek <path>[,<path>...]     static fields by reflection, Namespace.Type.field, then .field or [index] (into
 //                                    an array or a haxe Array's __a) as often as wanted; T2D_PEEK lines on the first
 //                                    frame and whenever a value changes
@@ -63,6 +65,8 @@ namespace T2DCompat
         }
 
         static Probe probe;
+        static float allocsEvery;
+        double lastAllocs;
         static float heartbeat, quitAfter = -1f, shotAt = -1f, shotsEvery = -1f, shotsAfter;
         static string shotPath, shotsPrefix;
         static bool shotTaken;
@@ -87,6 +91,8 @@ namespace T2DCompat
             shotsPrefix = ShotName("-t2d-shots", Flags.Word("-t2d-shots", 2));
             shotsAfter = Flags.Number("-t2d-shots", 3, 0f);
             stallMs = (int)Flags.Number("-t2d-stalls", 1, 1000f);
+            allocsEvery = Flags.Number("-t2d-allocs", 1, 0f);
+            Trace.Allocs = allocsEvery > 0f;
             string peek = Flags.Value("-t2d-peek");
             if (peek != null) peeks = peek.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
             string set = Flags.Value("-t2d-set");
@@ -447,6 +453,11 @@ namespace T2DCompat
                 maxSprites = Math.Max(maxSprites, SpriteBatch.LastSprites);
                 maxRuns = Math.Max(maxRuns, SpriteBatch.LastRuns);
                 if (now - lastBeat >= heartbeat) Beat(now);
+            }
+            if (allocsEvery > 0f && now - lastAllocs >= allocsEvery)
+            {
+                if (lastAllocs > 0 && Trace.On) Debug.Log("T2D_ALLOCS t=" + now.ToString("F1", Inv) + " " + Trace.AllocReport(now - lastAllocs, 12));
+                lastAllocs = now;
             }
             if (quitAfter > 0f && now >= quitAfter)
             {

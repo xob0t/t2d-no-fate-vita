@@ -31,6 +31,7 @@ namespace T2DCompat
         {
             On = true;
             Ring r = ring ?? (ring = new Ring());
+            if (Allocs && r == main) Charge(method);
             r.Names[r.Next] = method;
             r.Next = (r.Next + 1) & (Size - 1);
             r.Count++;
@@ -58,6 +59,49 @@ namespace T2DCompat
         public static long MainCount
         {
             get { Ring r = main; return r == null ? 0 : r.Count; }
+        }
+
+        // The probe's -t2d-allocs: on the main thread, each growth of the managed heap is charged to the method entered
+        // last before it. The heap grows a block (4 KB) at a time, whichever allocation takes it, so a method's share
+        // over many frames is about what it allocates. Probe.cs logs the top of the list (AllocReport).
+        public static bool Allocs;
+
+        static readonly System.Collections.Generic.Dictionary<string, long[]> allocBy =
+            new System.Collections.Generic.Dictionary<string, long[]>();
+        static long lastUsed = -1;
+        static string lastMethod;
+
+        static void Charge(string method)
+        {
+            long used = System.GC.GetTotalMemory(false);
+            if (lastMethod != null && lastUsed >= 0 && used > lastUsed)
+            {
+                long[] sum;
+                if (!allocBy.TryGetValue(lastMethod, out sum)) allocBy[lastMethod] = sum = new long[1];
+                sum[0] += used - lastUsed;
+            }
+            lastUsed = used;
+            lastMethod = method;
+        }
+
+        // The methods charged most since the last report, in KB a second over the seconds given, and clears the list.
+        public static string AllocReport(double seconds, int top)
+        {
+            var list = new System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string, long>>();
+            long total = 0;
+            foreach (var e in allocBy)
+            {
+                list.Add(new System.Collections.Generic.KeyValuePair<string, long>(e.Key, e.Value[0]));
+                total += e.Value[0];
+                e.Value[0] = 0;
+            }
+            list.Sort((a, b) => b.Value.CompareTo(a.Value));
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            var text = new System.Text.StringBuilder();
+            text.Append((total / 1024.0 / seconds).ToString("F1", inv)).Append(" KB/s:");
+            for (int i = 0; i < list.Count && i < top && list[i].Value > 0; i++)
+                text.Append(' ').Append(list[i].Key).Append('=').Append((list[i].Value / 1024.0 / seconds).ToString("F1", inv));
+            return text.ToString();
         }
 
         static string Lines(Ring r, int count)
