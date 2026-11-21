@@ -25,7 +25,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / 'tools' / 'downgrade'))
 import progress  # noqa: E402
-from common import TARGET, WORK, default_game, registry_env  # noqa: E402
+from common import TARGET, WORK, default_game, registry_env, root_too_long  # noqa: E402
 
 PIPELINE = ROOT / 'tools' / 'downgrade' / 'pipeline.py'
 LOCK = ROOT / 'tools' / 'downgrade' / 'lock.py'
@@ -200,6 +200,9 @@ def main():
     parser.add_argument('--dry-run', action='store_true', help='list the setup command and the stages, run nothing')
     parser.add_argument('--locked', action='store_true', help=argparse.SUPPRESS)  # build.py under lock.py run
     args = parser.parse_args()
+    # First, before setup's downloads: from a deeper folder the build fails at IL2CPP, 20 minutes in.
+    if problem := root_too_long():
+        progress.fail(f'build.py: {problem}')
     setup = [sys.executable, ROOT / 'tools' / 'setup.py', '--then-build']
     setup += ['--game', args.game] if args.game else []
     setup += ['--vita-sdk', args.vita_sdk] if args.vita_sdk else []

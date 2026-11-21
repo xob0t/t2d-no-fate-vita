@@ -29,6 +29,7 @@ from common import (
     EXTERNAL,
     GAME_EXE,
     GAME_NAME,
+    MAX_ROOT,
     REWIND_COMMIT,
     REWIND_EXE,
     REWIND_SIGNATURES,
@@ -43,6 +44,7 @@ from common import (
     editor_data,
     env,
     file_hash,
+    root_too_long,
 )
 from rich.text import Text
 
@@ -588,8 +590,19 @@ def check_space():
     )
 
 
+def check_folder():
+    """The repository's folder is short enough for IL2CPP (common.MAX_ROOT)."""
+    return Check(
+        'Folder path',
+        not root_too_long(),
+        f"{len(str(ROOT))} characters; IL2CPP's files need it at {MAX_ROOT} or fewer",
+        r'move the folder to a short path such as C:\t2d',
+    )
+
+
 def checks_for(game: Path):
     return [
+        check_folder(),
         check_python(),
         check_csc(),
         check_git(),
