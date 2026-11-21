@@ -202,7 +202,7 @@ def main():
     T = os.path.join(a.src, 'com/bitmapbureau/terminator')
     imgc, arr_images, res_fields, text_assets = ar.asset_tables(classes, T)
     name_of = {v: k for k, v in imgc.items()}
-    target_method = ar.param_flow(classes)
+    target_method, _ = ar.param_flow(classes)
     cr = json.load(open(os.path.join(a.usage, 'class_refs.json')))
     C = cr['classes']
     sprite_img = {int(k): v for k, v in cr['sprite_img'].items()}

@@ -61,12 +61,17 @@ class Method:
     def __init__(self, cls, name, params, body, base_args):
         self.cls, self.name, self.params, self.body, self.base_args = cls, name, params, body, base_args
         self.img_params = set()
+        self.fields = set()
 
 
 def load_classes(src_root):
     classes = {}
     for fn in glob.glob(os.path.join(src_root, 'com', '**', '*.cs'), recursive=True):
         text = open(fn, encoding='utf-8').read()
+        # Rewind names a class by its namespace where the simple name is taken twice (new com.bitmapbureau.terminator.
+        # sprites.enemies.EnemyCorpse(...), Sarah's corpses of the guards she grabs): the patterns below read simple
+        # names, so the game's namespace goes. Other namespaces stay, so they never pass for a game class.
+        text = QUALIFIED.sub('', text)
         m = CLASS.search(text)
         if not m:
             continue
@@ -119,15 +124,47 @@ def load_classes(src_root):
                     o.params = o.params if len(o.params) >= len(m.params) else m.params
             old['text'] += '\n' + text
             old['base'] = old['base'] or base
+    int_fields(classes)
     return classes
 
 
 GAME_NS = 'com/bitmapbureau/terminator/'
+QUALIFIED = re.compile(r'(?<![\w.])com\.bitmapbureau\.terminator\.(?:[a-z]\w*\.)*(?=[A-Z])')
+INT_FIELD = re.compile(r'^\t(?:public|private|internal|protected)(?: static)? int (\w+);', re.M)
+INT_FIELDS = set()      # every int field a game class declares (load_classes fills it)
+# Not followed as image fields: the current image (changeImage's own context) and constants (Assets.IMAGE_*, which
+# text_assets reads by name).
+FIELD_SKIP = re.compile(r'^(?:image|[A-Z][A-Z0-9_]*)$')
 
 
-def resolve(expr, m, depth=0):
-    """-> (set of int literals, set of param names, dynamic flag)"""
+def int_fields(classes):
+    # Method.fields: the int fields of its class and its bases, for resolve's field flow.
+    # Only a sprite's fields: a field of Game or a menu (levelNumber, cursorPos) holds no sprite id.
+    own = {c: set(INT_FIELD.findall(cd['text'])) if GAME_NS in cd['file'] and derives_from(classes, c, 'GameObject')
+           else set() for c, cd in classes.items()}
+    for c, cd in classes.items():
+        fs, k, seen = set(), c, set()
+        while k in classes and k not in seen:
+            seen.add(k)
+            fs |= own[k]
+            k = classes[k]['base']
+        for m in cd['methods'].values():
+            m.fields = fs
+        INT_FIELDS.update(own[c])
+
+
+def cmp_adjacent(s, start, end):
+    return CMP_B.search(s[:start]) or CMP_A.search(s[end:])
+
+
+def resolve(expr, m, depth=0, x=None):
+    """-> (set of int literals, set of param names, dynamic flag). With x (dict of sets 'fields' and 'bases'), also
+    collects the int fields the value is read from (field flow) and the literals added to (arithmetic bases)."""
     ints, params, dyn = set(), set(), False
+    km = re.search(r'\)\s*\*\s*(\d+)\s*\+\s*(\d+)\s*$', expr)    # (flag ^ 1) * M + K
+    if km:
+        k = int(km.group(2))
+        return {k, k + int(km.group(1))}, set(), True
     km = re.search(r'\)\s*\+\s*(\d+)\s*$', expr)     # (flag ^ 1) + K  /  (cond ? 1 : 0) + K
     if km:
         k = int(km.group(1))
@@ -139,25 +176,40 @@ def resolve(expr, m, depth=0):
         before, after = expr2[:im.start()], expr2[im.end():]
         if ARITH.search(before) or ARITH.search(after):
             dyn = True
+            if x is not None and int(im.group(1)) > 8:     # not the increments (k + 1)
+                x['bases'].add(int(im.group(1)))
             continue
         if CMP_B.search(before) or CMP_A.search(after):
             continue          # compared against, not drawn
         ints.add(int(im.group(1)))
-    for ident in set(re.findall(r'(?<![\w.])([A-Za-z_]\w*)(?![\w(])', expr2)):
-        if ident in ('null', 'true', 'false', 'this', 'image', 'num', 'new', 'int'):
+    if x is not None:         # another object's or this one's field: x.f, this.f, base.f
+        for fm in re.finditer(r'(?<![\w])(?:this|base|[A-Za-z_]\w*)\.(\w+)(?![\w(.\[])', expr2):
+            if fm.group(1) in INT_FIELDS and not FIELD_SKIP.match(fm.group(1)) and not cmp_adjacent(expr2, *fm.span()):
+                x['fields'].add(fm.group(1))
+    for idm in re.finditer(r'(?<![\w.])([A-Za-z_]\w*)(?![\w(])', expr2):
+        ident = idm.group(1)
+        if ident in ('null', 'true', 'false', 'this', 'image', 'new', 'int'):
             continue
         if ident in m.params:
             params.add(ident)
             continue
-        if depth < 2:
+        if depth < 3:
+            found = False
             for am in re.finditer(r'(?<![\w.])%s = ([^;\n]+);' % re.escape(ident), m.body):
                 rhs = am.group(1)
+                found = True
                 if 'loadImage' in rhs:
                     continue
-                a, b, c = resolve(rhs, m, depth + 1)
-                ints |= a
-                params |= b
-                dyn |= c
+                a, b, c = resolve(rhs, m, depth + 1, x)
+                if depth < 2:     # the third local back only for its fields (num3 = num = firstDebris); its
+                    ints |= a     # literals are too often counts and limits
+                    params |= b
+                    dyn |= c
+                else:
+                    dyn = True
+            if not found and x is not None and ident in m.fields and not FIELD_SKIP.match(ident) \
+                    and not cmp_adjacent(expr2, *idm.span()):
+                x['fields'].add(ident)
         else:
             dyn = True
     ints.discard(-1)
@@ -196,6 +248,10 @@ def call_sites(body, classes, own=None):
             yield c, '.ctor', split_args(call_args(body, mm.end() - 1)[0])
     # inlined constructors: ((Base)v)..ctor(args)  or  v..ctor(args)
     decl = {mm.group(2): mm.group(1) for mm in re.finditer(r'(\w+) (\w+) = \(\w+\)FormatterServices\.GetUninitializedObject', body)}
+    # and through a local it is copied to (grenade2 = grenade3; grenade2..ctor(this, num5, ...): Player.useSecondary)
+    for mm in re.finditer(r'(?<![\w.])(\w+) = (\w+);', body):
+        if mm.group(2) in decl and mm.group(1) not in decl:
+            decl[mm.group(1)] = decl[mm.group(2)]
     for mm in re.finditer(r'(?:\(\((\w+)\)(\w+)\)|(\w+))\.\.ctor\(', body):
         c = mm.group(1) or decl.get(mm.group(3))
         if c in classes:
@@ -254,8 +310,58 @@ def asset_tables(classes, T):
     return imgc, arr_images, res_fields, text_assets
 
 
+def derives_from(classes, c, base):
+    seen = set()
+    while c in classes and c not in seen:
+        if c == base:
+            return True
+        seen.add(c)
+        c = classes[c]['base']
+    return False
+
+
+def method_values(m, classes, target_method, img_fields):
+    """Every image value of a method: its image contexts, the arguments it passes at image parameters and what it
+    assigns to an image field (a field some image site reads: bulletType, hitSpark, textImage, firstDebris, ...).
+    -> (ints, params, x): x['fields'] the fields its values are read from, x['bases'] the literals added to at a
+    sprite site (base + k: build_scenes brings the base's numbered family)."""
+    ints, params = set(), set()
+    x = dict(fields=set(), bases=set())
+    for e in image_exprs(m.body):
+        a, b, _ = resolve(e, m, x=x)
+        ints |= a
+        params |= b
+    sites = list(call_sites(m.body, classes, m.cls))
+    if m.base_args is not None:
+        sites.append((classes[m.cls]['base'], '.ctor', m.base_args))
+    for tc, key, args in sites:
+        tm = target_method(tc, key)
+        if tm is None:
+            continue
+        sprite = derives_from(classes, tm.cls, 'GameObject')
+        for p in tm.img_params:
+            k = tm.params.index(p)
+            if k < len(args):
+                xx = x if sprite else dict(fields=set(), bases=set())   # a BitmapData: no fields, no bases
+                a, b, _ = resolve(args[k], m, x=xx)
+                ints |= a
+                params |= b
+    if img_fields:
+        pat = r'(?<![\w.])(?:(?:this|base|[A-Za-z_][\w.]*)\.)?(%s) = (?!=)([^;\n]+);' % '|'.join(sorted(img_fields))
+        for am in re.finditer(pat, m.body):
+            rhs = am.group(2)
+            if 'new ' in rhs or 'loadImage' in rhs:
+                continue
+            a, b, _ = resolve(rhs, m, x=x)
+            ints |= a
+            params |= b
+    x['fields'].discard('image')
+    return ints, params, x
+
+
 def param_flow(classes):
-    """Marks each method's image parameters (Method.img_params), to a fixpoint; returns target_method(class, key)."""
+    """Marks each method's image parameters (Method.img_params) and the image fields, to a fixpoint.
+    -> (target_method(class, key), image field names)"""
     def target_method(c, key):
         while c in classes:
             if key in classes[c]['methods']:
@@ -263,28 +369,19 @@ def param_flow(classes):
             c = classes[c]['base']
         return None
 
+    img_fields = set()
     changed = True
     while changed:
         changed = False
         for c, cd in classes.items():
             for m in cd['methods'].values():
-                before = set(m.img_params)
-                for e in image_exprs(m.body):
-                    m.img_params |= resolve(e, m)[1]
-                sites = list(call_sites(m.body, classes, c))
-                if m.base_args is not None:
-                    sites.append((cd['base'], '.ctor', m.base_args))
-                for tc, key, args in sites:
-                    tm = target_method(tc, key)
-                    if tm is None:
-                        continue
-                    for p in tm.img_params:
-                        k = tm.params.index(p)
-                        if k < len(args):
-                            m.img_params |= resolve(args[k], m)[1]
-                if m.img_params != before:
+                before, nf = set(m.img_params), len(img_fields)
+                _, params, x = method_values(m, classes, target_method, img_fields)
+                m.img_params |= params
+                img_fields |= x['fields']
+                if m.img_params != before or len(img_fields) != nf:
                     changed = True
-    return target_method
+    return target_method, img_fields
 
 
 def main():
@@ -308,7 +405,7 @@ def main():
             sprite_img[sid] = sorted({imgc[n] for n in names})
     spc = static_ints(sp, '[A-Z]')
 
-    target_method = param_flow(classes)
+    target_method, img_fields = param_flow(classes)
 
     # per-class references
     out = {}
@@ -316,27 +413,17 @@ def main():
         sprites, dyn_sites, cls_refs = set(), [], set()
         by_method = {}
         for m in cd['methods'].values():
-            ms = set()
             for e in image_exprs(m.body):
                 ints, _, dyn = resolve(e, m)
-                ms |= ints
                 if dyn and not ints:
                     dyn_sites.append('%s: %s' % (m.name, e[:60]))
-            sites = list(call_sites(m.body, classes, c))
-            if m.base_args is not None:
-                sites.append((cd['base'], '.ctor', m.base_args))
-            for tc, key, args in sites:
-                tm = target_method(tc, key)
-                if tm is None:
-                    continue
-                for p in tm.img_params:
-                    k = tm.params.index(p)
-                    if k < len(args):
-                        ms |= resolve(args[k], m)[0]
+            ms, _, x = method_values(m, classes, target_method, img_fields)
             ma = text_assets(m.body) if c != 'Res' else set()
             sprites |= ms
-            if ms or ma:
-                by_method[m.name] = dict(sprite_ids=sorted(s for s in ms if 0 < s < 726), assets_images=sorted(ma))
+            bases = sorted(b for b in x['bases'] if 0 < b < 726)
+            if ms or ma or bases:
+                by_method[m.name] = dict(sprite_ids=sorted(s for s in ms if 0 < s < 726), assets_images=sorted(ma),
+                                         arith_bases=bases)
         text = cd['text']
         for mm in re.finditer(r'(?<![\w])new (\w+)\(|typeof\((\w+)\)|(?<![\w.])(\w+)\.\w+', text):
             n = mm.group(1) or mm.group(2) or mm.group(3)
@@ -351,6 +438,22 @@ def main():
                       assets_images=sorted(direct), dynamic=dyn_sites[:20], refs=sorted(cls_refs),
                       by_method=by_method,
                       img_params={k: sorted(m.img_params) for k, m in cd['methods'].items() if m.img_params})
+    # BitmapData fields a class loads (preview = AssetsEmbed.loadImage(Assets.IMAGE_PREVIEW_...)) and the ones it
+    # reads of other objects (Game.script.preview): a menu draws the fields of the level script it makes. Only a class
+    # that makes level scripts (Game.loadScriptByLevelID: the level select, the briefing) reads any level's; another
+    # reads the current level's (CyberdyneHQOutro: Game.script.background0), whose pages its map's hook loads.
+    for c, cd in classes.items():
+        bf = collections.defaultdict(set)
+        for mm in re.finditer(r'(?<![\w.])(\w+) = AssetsEmbed\.loadImage\(Assets\.(IMAGE_\w+)\);', cd['text']):
+            if mm.group(2) in imgc:
+                bf[mm.group(1)].add(imgc[mm.group(2)])
+        out[c]['bitmap_fields'] = {f: sorted(v) for f, v in bf.items()}
+    bnames = {f for v in out.values() for f in v['bitmap_fields']}
+    for c, cd in classes.items():
+        makes = 'loadScriptByLevelID(' in cd['text']
+        out[c]['field_reads'] = sorted({mm.group(1) for mm in re.finditer(r'(?<=\w)\.(\w+)\b(?!\s*=[^=])', cd['text'])
+                                        if mm.group(1) in bnames} if makes else ())
+    print('image fields:', ' '.join(sorted(img_fields)))
 
     # map object name id -> (classes, sprite ids) via Sprites.addFromJSON
     code, labels = compile_tree(parse(method_lines(sp, r'public unsafe static void addFromJSON\(')))

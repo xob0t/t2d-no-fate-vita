@@ -47,11 +47,19 @@ DEMOS = [
                                                           'IMAGE_PORTRAIT_T800']),
 ]
 BASES = {'Script', 'Cutscene', 'CompoundScene', 'App'}
+LEVEL_SCRIPTS = {r for _, roots, _ in LEVELS for r in roots}
 HUBS = {'Game', 'Sprites', 'Transition', 'Main', 'MainMenu', 'Database', 'GameMap', 'AssetsEmbed', 'Assets',
         'AssetsPack', 'AssetsStaticMap', 'UnityMain', 'Res'}
 GAMEPLAY_GLOBAL = ['HUD', 'HospitalHUD', 'Script', 'GameObject', 'Fonts', 'Message', 'OpaqueLayer', 'DialogBox', 'Prompt']
-ALL_GLOBAL = ['Fonts', 'App', 'Menu', 'TextButton', 'Text', 'TitleText', 'BmpFont', 'EngageLayer']
+# Achievements: Main.draw draws its panel (an achievement's bar) in every App, and achievements unlock in menus too.
+ALL_GLOBAL = ['Fonts', 'App', 'Menu', 'TextButton', 'Text', 'TitleText', 'BmpFont', 'EngageLayer', 'Achievements']
 HUB_METHODS_EXCLUDED = {('Sprites', 'addFromJSON'), ('Sprites', 'loadFromID')}
+# Methods of a hub that run in every scene: Main.draw draws the saving icon (IMAGE_DATA_CD).
+ALL_HUB_METHODS = [('Main', 'draw')]
+# A menu that shows the game's objects: the Database (its enemy viewer) makes each enemy (Database.start) and calls
+# these methods of it, virtual, so each class's own; it never adds them to the game, so nothing else of theirs runs.
+# The analysis stops at Database, a hub: its scene had only its background.
+VIEWERS = {'Database': ('.ctor', 'changeState', 'databaseUpdate', 'draw')}
 # Methods of a hub that the analysis doesn't follow, called from every level: the pause menu's audio options
 # (Game.pause -> MainMenu.addAudioOptions, its sliders).
 GAMEPLAY_HUB_METHODS = [('MainMenu', 'addAudioOptions')]
@@ -110,11 +118,39 @@ def compute(W, lang='LATIN'):
                 out.update(mv['assets_images'])
                 for s in mv['sprite_ids']:
                     out.update(sprite_img.get(s, []))
-            return out
+            return out | base_families(c)
         out.update(v['assets_images'])
         for s in v['sprite_ids']:
             out.update(sprite_img.get(s, []))
+        return out | base_families(c)
+
+    def base_families(c, methods=None):
+        # A literal an image id is computed from (num + 145: one of IMAGE_ROBOTDEBRIS_0..8): its numbered family.
+        out = set()
+        for meth, mv in C[c].get('by_method', {}).items():
+            if methods is not None and meth not in methods or (c, meth) in HUB_METHODS_EXCLUDED:
+                continue
+            for b in mv.get('arith_bases', ()):
+                out.update(i for i in sprite_img.get(b, []) if family(images[i]['name']))
         return out
+
+    def method_images(c, methods):
+        out = set()
+        for meth, mv in C[c].get('by_method', {}).items():
+            if meth in methods:
+                out.update(mv['assets_images'])
+                for s in mv['sprite_ids']:
+                    out.update(sprite_img.get(s, []))
+        return out | base_families(c, methods)
+
+    def derives(c, base):
+        seen = set()
+        while c in C and c not in seen:
+            if c == base:
+                return True
+            seen.add(c)
+            c = C[c]['base']
+        return False
 
     def closure(roots, stop=()):
         seen, stack = set(), [r for r in roots if r in C]
@@ -152,8 +188,25 @@ def compute(W, lang='LATIN'):
             ims.update(mv.get('assets_images', ()))
             for sid in mv.get('sprite_ids', ()):
                 ims.update(sprite_img.get(sid, []))
+        for c, meth in ALL_HUB_METHODS:
+            ims |= method_images(c, {meth})
         for c in cl:
             ims |= class_images(c, roots)
+        for r in roots:
+            for c in C.get(r, {}).get('refs', ()) if r in VIEWERS else ():
+                k = c
+                while k in C and k != 'GameObject' and derives(c, 'GameObject'):
+                    ims |= method_images(k, VIEWERS[r])
+                    k = C[k]['base']
+        # BitmapData fields of a level script this scene's code reads (MissionBriefing: Game.script.briefingPortrait;
+        # the level select: script.preview): the menu makes the level's script to show it.
+        reads = {f for c in cl if c not in HUBS or c in roots for f in C[c].get('field_reads', ())}
+        if not gameplay:
+            for c in C:
+                if (c in LEVEL_SCRIPTS or is_scene_class(c) and C[c]['base'] == 'Script') and c not in cl:
+                    for f, v in C[c].get('bitmap_fields', {}).items():
+                        if f in reads:
+                            ims.update(v)
         objclasses = set()
         for mp in map_names:
             for o in maps[mp]['objects']:
