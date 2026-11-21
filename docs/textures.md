@@ -33,26 +33,27 @@ The budget is about 240 MB, 160 MB of main memory and 80 MB of CDRAM.
 | Scene | pages | of them oversize | MB |
 | --- | --- | --- | --- |
 | L00/16 Future War 1 | 22 | 2 | 80 |
-| L01 Biker Bar | 14 | 2 | 28 |
+| L01 Biker Bar | 16 | 2 | 32 |
 | L02 Truck Chase | 18 | 2 | 40 |
-| L03 Hospital | 21 | 1 | 56 |
-| L04/17 Future War 2 | 23 | 1 | 76 |
-| L05-07 Cyberdyne HQ | 22 | 1 | 74 |
+| L03 Hospital | 22 | 1 | 58 |
+| L04/17 Future War 2 | 24 | 1 | 78 |
+| L05-07 Cyberdyne HQ | 21 | 1 | 72 |
 | L08 Freeway Chase | 21 | 1 | 56 |
 | L08 with Tanker Chase | | | 72 |
-| L09 Steel Mill | 25 | 1 | 80 |
+| L09 Steel Mill | 24 | 1 | 78 |
 | L10/18 Future War 3 | 24 | 1 | 78 |
-| L11 Desert Town | 19 | 2 | 40 |
+| L11 Desert Town | 17 | 2 | 36 |
 | L12 Cyberdyne Factory | 22 | 3 | 110 |
-| L13 Cyberdyne Research | 23 | 1 | 76 |
+| L13 Cyberdyne Research | 24 | 1 | 78 |
 | L14 Police Station | 20 | 1 | 46 |
 | L15 Future War 4 | 23 | 2 | 82 |
 | L48 Infinite mode | 26 | 1 | 52 |
-| Controls tutorial | 15 | 1 | 30 |
+| Controls tutorial | 16 | 1 | 32 |
 | Demo, all four demos (merged, before Nov 2026) | 37 | 6 | 190 |
-| Demo map 9 (John), 10 (Sarah), 11 (T-1000), 12 (T-800) | 20 to 24 | 1 to 3 | 46, 114, 62, 70 |
+| Demo map 9 (John), 10 (Sarah), 11 (T-1000), 12 (T-800) | 19 to 26 | 1 to 3 | 48, 118, 60, 68 |
 | Cutscene ArcadeEnding | 49 | 1 | 100 |
-| Other cutscenes and menus | 5 to 21 | 0 or 1 | 10 to 42 |
+| Menu Database (the enemy viewer) | 42 | 0 | 84 |
+| Other cutscenes and menus | 5 to 17 | 0 or 1 | 10 to 34 |
 
 The worst level is the Cyberdyne Factory at 110 MB.
 72 MB of that are its three oversize layers, and CYBERDYNEFACTORY_FG_A alone is 3497×3131 and needs a 4096×4096 texture.
@@ -369,6 +370,13 @@ The PNG pages run on the console in every level played so far ([build.md](build.
   - `build_scenes.py`: a numbered image (`IMAGE_X_0`, `IMAGE_X_1`, ...) or a debris piece brings its whole family, which the game picks by arithmetic on the first one's id; a weapon pickup on a map brings its bullets and hit sparks (`OBJECT_IMAGES`); every level gets the pause menu's audio sliders (`MainMenu.addAudioOptions`, `GAMEPLAY_HUB_METHODS`).
   - `scene_sets.py`: the 19 level previews (`IMAGE_PREVIEW_*`) belong to the three menus that draw them, the level select, the end screen and the main menu, on one page; the analysis had them in their levels only.
   On the console, the level select scrolled through all 19 levels and back (`work/runs/stutter7/lsel.sh`): with the scene data before, the same 13 misses as the playtest, 208 to 223 ms each with `AsyncMisses=false` (`s7-old-sync`) and none over 100 ms with it (worst 45 ms, `s7-old-async`); with the new data, no miss and a worst frame of 42 ms (`s7-lsel`). Every page the playtest missed in Future War 3 holds an image round 5 adds there (the sliders, the HK tank's turret and destroyed hull, the cargo elevator and lift, the tunnel platforms, the pickups' shots).
+  Round 6 (Nov 2026) checked the scene data without the console: `tools/assess/atlas-usage/coverage.py` lists, per scene, the images the code running there can draw that its set lacks, every image site the analysis can't resolve, and the images in no scene ([its README](../tools/assess/atlas-usage/README.md#the-coverage-check)). On the analysis before round 5 it flags 491 of the 498 (image, scene) pairs round 5 added; the other 7 come through the shadowed Platform class, which it reports. It found these classes, now in the analysis:
+  - Fields: an image id read from a field (`Projectile.hitSpark`, `bulletType`, `FactoryBoss.textImage`, `Furniture.firstDebris`) was dropped. Field flow follows a sprite class's int fields to every value assigned to them: the Factory boss's six text images, the Biker Bar's chair and table debris (17 images), the infiltrators' and Sarah's shotgun shot, the T-800 demo's minigun shot, every weapon's shot and hit spark in every level where a player shoots (0.05 MB).
+  - Arithmetic: `num + 145` resolved to nothing. A literal an id is computed from brings its numbered family: the robot debris of Future War 3's boss and of the Factory's rejects (Factory, Research, Sarah's demo); `(x ^ 1) * 2 + 513` is 513 or 515 (Infinite mode's hockey-mask bandit).
+  - Names: Rewind names a class by its namespace where the simple name is taken twice (`new com.bitmapbureau.terminator.sprites.enemies.EnemyCorpse(...)`), and an inlined constructor can go through a copy (`grenade2 = grenade3; grenade2..ctor(...)`): Sarah's grabbed guards' corpses, the pipebomb.
+  - Hubs: Main.draw draws the saving icon (`IMAGE_DATA_CD`) and the achievement bar in every App; the Database menu, a hub the closure never followed even as its own root, shows every enemy (`VIEWERS`: constructor, `changeState`, `databaseUpdate`, `draw`), 40 to 84 MB; the level scripts' `briefingPortrait`, which only the briefing draws, belongs to the briefing alone, as the previews belong to the level lists (`MENU_ONLY_FIELDS`).
+  - The demos get the levels' extras (the bullet hit spark).
+  The check still can't resolve 50 sites (22 other objects' members, 19 fields it reports but doesn't follow outside sprites, 17 sums whose literal isn't a sprite family, ...) and 18 sprites only the sprite table names (magazines, explosion variants, the HK bomber's engine fires, overlays no map object brings): those may still miss. 53 images are in no scene and named by nothing, and 4 more only by CompoundScene, which no class derives from: dead.
 - Tanker Chase has no hook of its own; level 8 loads Freeway Chase's and Tanker Chase's pages together, 72 MB.
 - `imageclassname` row 57 is 1 where IMAGE_TROPHY_ARRAY_21 should be, so `loadImage(57)` returns null in the original too. Its frames go to the unreached pages.
 - The repacker reads one release of the game. Another release with other frames would need its own `scenes.json` check; unknown image names are reported, not fatal.

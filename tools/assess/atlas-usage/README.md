@@ -44,3 +44,25 @@ The addresses in steps 1 and 4 are for the Steam build analysed here (`GameAssem
 - `analyze_refs.py`: per class, the `Assets.IMAGE_*`/`IMAGE_ARRAY_*`/`Res.*` images and the sprite ids it can draw (image contexts plus a parameter-flow fixpoint over constructors and methods), and the classes it references.
 - `build_scenes.py`: closure per scene from its root classes and maps, plus a global set; stops at hub classes and at other scenes.
 - `memory_model.py`, `all_resident.py`, `cluster_atlas.py`: memory estimates (skyline packer, 1 px padding, power-of-two textures).
+- `coverage.py`: a static check of the scene data, below.
+
+## The coverage check
+
+Every image a scene draws that its scene set lacks is an atlas miss on the console, a frame of about 200 ms.
+`coverage.py` looks for them without the console, from Rewind's C#, the analysis and a packing's `frames.bytes`:
+
+```sh
+python -I tools/assess/atlas-usage/coverage.py --src $SRC --usage $OUT --frames work/atlas/atlas/frames.bytes \
+    [--scenes tools/downgrade/atlas/scenes.json] [--later <a later scenes.json>] [--names IMAGE_X ...]
+```
+
+It writes `work/coverage/coverage.md` and `coverage.json`:
+
+- Suspects per scene, with the pages their frames are on now and the MB those pages and the frames themselves take. It finds them independently of `build_scenes.py`'s closure: hub methods followed one by one from the scene's own code (Game's loop only in the levels), BitmapData fields of the level scripts a menu makes, field flow (an image read from a field gets every value assigned to it), arithmetic on an image id (the base's numbered family), and partial numbered families.
+- Images in no scene: those code names (reached by a scene's code or not), those only the sprite table (`Sprites.loadFromID`) names, which code reaches by arithmetic, a field or not at all, and those nothing names.
+- Every image site the analysis can't resolve, by kind: arithmetic, fields, other objects' members, method results, array elements, native code, delegates, classes named by namespace.
+- Class names defined twice, and whether the analysis read another namespace's file for a game class (shadowed).
+- With `--later`, which of the (image, scene) pairs a later scene data adds it flags: on the analysis before round 5 (771f2af^) it flags 491 of the 498 pairs round 5 added, all but the HK tank's six images and one of its shots in Future War 3, which come through the shadowed Platform class it reports.
+
+Its suspects are broader than what a scene draws: they are where to look, not data to add.
+On the analysis of round 6 (Nov 2026) the rest are the Database viewer's enemies' shots and debris (the viewer calls only their constructor, `changeState`, `databaseUpdate` and `draw`) and four literals summed to an id that aren't sprites.
