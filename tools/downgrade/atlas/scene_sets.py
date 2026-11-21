@@ -23,7 +23,7 @@ EXTRA_KEYS = {'Tanker Chase': ['level:8'], 'Controls tutorial': ['app:LevelContr
 LEVEL_APPS = ['Game']
 
 # Draws the static analysis can't follow (an image id from arithmetic or a table), found on the console from the
-# atlas's miss log with the image of each miss: image -> the scenes that draw it ('levels': every level scene and the
+# atlas's miss log with the image of each miss: image -> the scenes that draw it ('levels': every level scene, the demos and the
 # controls tutorial; 'all': every scene). Each was a 190 to 250 ms frame in play, the page's synchronous load and
 # first draw.
 EXTRA_IMAGES = {
@@ -90,7 +90,8 @@ def main():
         for i in s['images']:
             use.setdefault(name_of[i], []).append(k)
     index = {s['name']: k for k, s in enumerate(out_scenes)}
-    levels = [k for k, s in enumerate(out_scenes) if re.match(r'L\d', s['name']) or s['name'] in EXTRA_KEYS]
+    # The attract demos play levels too (Demo map N).
+    levels = [k for k, s in enumerate(out_scenes) if re.match(r'L\d|Demo map ', s['name']) or s['name'] in EXTRA_KEYS]
     for n, where in EXTRA_IMAGES.items():
         if n not in consts:
             continue  # a release without that image
