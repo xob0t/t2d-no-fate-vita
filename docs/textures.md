@@ -36,28 +36,28 @@ The budget is about 240 MB, 160 MB of main memory and 80 MB of CDRAM.
 | L01 Biker Bar | 14 | 2 | 28 |
 | L02 Truck Chase | 18 | 2 | 40 |
 | L03 Hospital | 21 | 1 | 56 |
-| L04/17 Future War 2 | 22 | 1 | 74 |
-| L05-07 Cyberdyne HQ | 23 | 1 | 76 |
+| L04/17 Future War 2 | 23 | 1 | 76 |
+| L05-07 Cyberdyne HQ | 22 | 1 | 74 |
 | L08 Freeway Chase | 21 | 1 | 56 |
 | L08 with Tanker Chase | | | 72 |
 | L09 Steel Mill | 25 | 1 | 80 |
-| L10/18 Future War 3 | 22 | 1 | 74 |
+| L10/18 Future War 3 | 24 | 1 | 78 |
 | L11 Desert Town | 19 | 2 | 40 |
-| L12 Cyberdyne Factory | 21 | 3 | 108 |
+| L12 Cyberdyne Factory | 22 | 3 | 110 |
 | L13 Cyberdyne Research | 23 | 1 | 76 |
 | L14 Police Station | 20 | 1 | 46 |
 | L15 Future War 4 | 23 | 2 | 82 |
-| L48 Infinite mode | 25 | 1 | 50 |
-| Controls tutorial | 14 | 1 | 28 |
+| L48 Infinite mode | 26 | 1 | 52 |
+| Controls tutorial | 15 | 1 | 30 |
 | Demo, all four demos (merged, before Nov 2026) | 37 | 6 | 190 |
 | Demo map 9 (John), 10 (Sarah), 11 (T-1000), 12 (T-800) | 20 to 24 | 1 to 3 | 46, 114, 62, 70 |
 | Cutscene ArcadeEnding | 49 | 1 | 100 |
 | Other cutscenes and menus | 5 to 21 | 0 or 1 | 10 to 42 |
 
-The worst level is the Cyberdyne Factory at 108 MB.
+The worst level is the Cyberdyne Factory at 110 MB.
 72 MB of that are its three oversize layers, and CYBERDYNEFACTORY_FG_A alone is 3497×3131 and needs a 4096×4096 texture.
 The report estimated 106 MB for this scheme, with a 1-pixel border instead of 2.
-All 106 pages together are 512 MB, which is the size of the data on the memory card.
+All 107 pages together are 514 MB, which is the size of the data on the memory card.
 The page fill is 68%.
 
 The merged Demo row was an upper bound: the analysis merged the four attract demos into one scene, and at 190 MB it fit with little room for anything else.
@@ -183,7 +183,7 @@ The slow-frame log (below) and a `T2D_TRACE` run found three causes:
 
 What does it now, each a field that the probe's `-t2d-set` can turn off for a comparison run (`*:T2DCompat.Atlas.<field>=...`):
 
-- Tiles (the build step): a page larger than 1024 goes to the project as 1024x1024 tiles, `pNNN_K.png`, K row by row from the bottom, with the page's import settings (`atlas/step.py`; `tiles.bytes` holds the tile size; `T2D_ATLAS_PAGES=raw` has none). 22 pages make 190 tiles. Atlas.cs numbers the tiles after the 106 pages, and a scene wants a big page's tiles instead of the page; `PageCount` stays 106. `SpriteBatch.SubmitTiled` cuts a big page's quad along the tiles' edges, one quad per tile it covers; the quad is a parallelogram, so a point's place follows its UV linearly. A flipped frame's UVs (uv - 1) move back into [0, 1] first, and tiles clamp instead of wrapping. `atlas/check/tilecheck.py` drew every frame of the 22 pages that way, from the tile files themselves, in all four flips, at 1:1 and 1.37x: 0 pixels differ at 1:1 and 0.016% at 1.37x, at texel edges where the float rounding falls either way.
+- Tiles (the build step): a page larger than 1024 goes to the project as 1024x1024 tiles, `pNNN_K.png`, K row by row from the bottom, with the page's import settings (`atlas/step.py`; `tiles.bytes` holds the tile size; `T2D_ATLAS_PAGES=raw` has none). 22 pages make 190 tiles. Atlas.cs numbers the tiles after the 107 pages, and a scene wants a big page's tiles instead of the page; `PageCount` stays 107. `SpriteBatch.SubmitTiled` cuts a big page's quad along the tiles' edges, one quad per tile it covers; the quad is a parallelogram, so a point's place follows its UV linearly. A flipped frame's UVs (uv - 1) move back into [0, 1] first, and tiles clamp instead of wrapping. `atlas/check/tilecheck.py` drew every frame of the 22 pages that way, from the tile files themselves, in all four flips, at 1:1 and 1.37x: 0 pixels differ at 1:1 and 0.016% at 1.37x, at texel edges where the float rounding falls either way.
 - `Ahead`: an App always followed by the same one (`AheadApps`: BBSplash, ReefLogo, Attract, MainMenu, then MissionBriefing) loads and warms the next one's pages from `AheadDelayMs` (1 s) after its own start, so the next App's Enter finds them drawn (`-1 +0 pages, 0.0 not drawn yet`). The log names the next scene by number (`ahead scene 19`): drive.py's `until` reads the whole log for an App's name.
 - `AsyncSwitch`: a Switch loads the scenes' own pages with `LoadAsync` too, and `Get` waits for one still loading (`WaitFor`), except the first Switch, the splash's at boot: there its pages integrated in one 0.7 to 2 s frame while the clips loaded.
 - `PrefetchInFlight` (2) and `PrefetchDelayMs` (0.5 s): the prefetch's and the next App's loads wait in a queue, smallest first, and start a few at a time, so a synchronous load on the main thread (the briefing's music) waits behind few.
@@ -348,7 +348,7 @@ The sprite renderer's R8 is one: it replaces `unityDraw` and `unityDrawClippedWi
 With this wiring, `uv run tools/downgrade/pipeline.py project` runs through in 43 to 52 seconds.
 The rewriter's log shows `atlas: AtlasTables=6 AtlasSplash=3 AtlasPackLoads=1 AtlasDraws=4 AtlasSceneHooks=5`; with the sprite renderer's rules in the pipeline, `AtlasDraws=0`.
 Its problem count stays at 245, none of them in a method the rules change.
-The project gets `Assets/Resources/atlas` with 106 pages, the two tables and their metas, and no `texturepack` folder.
+The project gets `Assets/Resources/atlas` with 107 pages, the two tables and their metas, and no `texturepack` folder.
 The pages are PNGs; `T2D_ATLAS_PAGES=raw` makes them raw `.bytes` TextAssets instead.
 
 ## What is untested
