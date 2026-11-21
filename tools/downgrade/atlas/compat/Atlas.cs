@@ -344,6 +344,7 @@ namespace T2DCompat
             currentApp = app;
             if (AppEntered != null) AppEntered(app.GetType().Name);
             Enter("app:" + app.GetType().Name);
+            Gc.AtEnter(app.GetType().Name);
         }
 
         // Each App the game enters, by class name, before its start() (the probe's -t2d-set).

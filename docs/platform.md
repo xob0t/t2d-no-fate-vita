@@ -206,6 +206,19 @@ Its `Now` and `UtcNow` (the PS Vita's file clock) are there for the rewriter's c
 `compat/Sounds.cs`: `Sound.createSoundFromFile` becomes `Resources.Load<AudioClip>(name)` wrapped in the game's own `Sound(AudioClip)` with its `clipname`, as the method did for every sound the release ships.
 The loose WAV files are left out with the `UnityWebRequest` code.
 
+### Garbage collection
+
+Unity 2018.2's IL2CPP collects with Boehm's collector and has no incremental mode, so a collection stops the game for its whole mark: 104 to 157 ms with the game's 21 MB heap on the console.
+Boehm collects once the bytes allocated since the last collection pass the live heap's scan size over its free-space divisor, 3 by default, about 4 MB here.
+Most of the game allocates 13 to 45 KB a second (a collection every few minutes), but Future War 3 rains: `Script.addRain` makes a new `Rain` for every drop, 100 to 130 KB a second (`-t2d-allocs`, run `s7-alloc`), so that level stopped every 28 to 30 s.
+`compat/Gc.cs` moves the collections out of play:
+
+- `Divisor` (1): at the first App's Enter, `GC_set_free_space_divisor(1)`, from the player's `bdwgc.a` through `DllImport("__Internal")`, so a collection waits for about three times as much allocation. The heap grows by as much: in Future War 3 to 50 MB, against 25 before, and main memory free in the level from 183 to 157 MB.
+- `CollectAtEnter` (on) and `CollectMinBytes` (1 MB): an App's Enter (`Atlas.EnterApp`, while the fade covers the screen) collects when the heap has grown that much since the last such collection, so a level starts with the count at zero. It takes about 115 ms of the covered screen.
+
+In Future War 3, scripted for about 6 minutes (`-t2d-heartbeat 1 -t2d-stalls 100`, `work/runs/stutter7/fw3.sh`): before, 11 collections in the level, one every 28 to 30 s, each a frame of 104 to 157 ms (`base1`); after, one at the level's Enter and one 212 s into the level, a 138 ms frame (`s7-fw3b`).
+The probe's `-t2d-set *:T2DCompat.Gc.Divisor=0` and `...Gc.CollectAtEnter=false` turn them off.
+
 ### Flags
 
 `compat/Flags.cs` reads the `-t2d-*` flags from a Windows player's command line, and on the PS Vita from the first line of `ux0:data/T2DNoFate/args.txt`.
