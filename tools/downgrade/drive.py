@@ -8,7 +8,7 @@ Sets the probe flags, launches, plays a scripted sequence of waits and button pr
 
     drive.py boot1 "-t2d-heartbeat 5 -t2d-shots 10 shot 5" "wait 40" --sync
 
-steps: ';'-separated: `wait <s>`, `press <button> [ms]` (pressed, then released), `until <regex> <timeout s>` (polls
+steps: ';'-separated: `wait <s>`, `press <button>[+<button>...] [ms]` (pressed together, then released), `until <regex> <timeout s>` (polls
 the log). There is no step that leaves a button held.
 
 Safety, as on butcher-vita's: the flags are one launch's (the player renames args.txt as it reads it, and the session
@@ -117,10 +117,10 @@ def fetch_shots(flags, out: Path):
 
 
 def release(button):
-    """Release a button, tried three times; whether vita.py did it."""
+    """Release a button (or a chord, a+b), tried three times; whether vita.py did it."""
     for _ in range(3):
         try:
-            vita('do', f'release {button}', quiet=True)
+            vita('do', '; '.join(f'release {b}' for b in reversed(button.split('+'))), quiet=True)
         except Failed as error:
             last = error
             time.sleep(1)
@@ -220,7 +220,10 @@ def session(tag, flags, steps):
             elif word == 'press':
                 hold = rest[1] if len(rest) > 1 else '150'
                 held = rest[0]
-                vita('do', f'press {held}; wait {hold}ms; release {held}', quiet=True)
+                # A chord (right+cross: Future War 3 needs right held while jumping) presses and releases each.
+                buttons = held.split('+')
+                vita('do', '; '.join([f'press {b}' for b in buttons] + [f'wait {hold}ms'] +
+                                     [f'release {b}' for b in reversed(buttons)]), quiet=True)
                 held = None
                 print(f'{time.time() - started:6.1f} press {rest[0]}', flush=True)
             elif word == 'until':

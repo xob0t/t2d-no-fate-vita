@@ -92,4 +92,4 @@ The heartbeat line ends with the atlas's resident pages, their megabytes, those 
 
 An exception in the log has no stack on a retail console. Build with `T2D_TRACE=1` ([build.md](build.md#build-switches)) and each error gets the game methods entered last instead.
 
-Driving the game: `press start` skips the intro cutscenes and the mission briefing; Cross chooses in menus; in a level the d-pad moves, Cross jumps, Square shoots. A `drive.py` `until` takes a regular expression without spaces.
+Driving the game: `press start` skips the intro cutscenes and the mission briefing; Cross chooses in menus; in a level the d-pad moves, Cross jumps, Square shoots. `press right+cross 1500` presses buttons together and releases them all; Future War 3 needs right held while jumping, or the player gets stuck. A `drive.py` `until` takes a regular expression without spaces.
