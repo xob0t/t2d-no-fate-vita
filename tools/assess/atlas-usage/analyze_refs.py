@@ -206,14 +206,8 @@ def call_sites(body, classes, own=None):
             yield c, meth, split_args(call_args(body, mm.end() - 1)[0])
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--src', required=True)
-    ap.add_argument('--work', required=True, help='dir with images.json, maps.json, native_addfromjson_*.json')
-    a = ap.parse_args()
-    root = a.src
-    T = os.path.join(root, 'com/bitmapbureau/terminator')
-    classes = load_classes(root)
+def asset_tables(classes, T):
+    """-> (Assets.IMAGE_* name -> id, IMAGE_ARRAY_* name -> ids, Res field -> ids, text_assets(text) -> ids)."""
     assets = open(os.path.join(T, 'Assets.cs'), encoding='utf-8').read()
     imgc = static_ints(assets, 'IMAGE_')
     arrc = {k: v for k, v in imgc.items() if k.startswith('IMAGE_ARRAY_')}
@@ -257,18 +251,11 @@ def main():
             out.update(res_fields.get(mm.group(1), ()))
         return out
 
-    # sprite id -> image id via Sprites.loadFromID
-    sp = classes['Sprites']['text']
-    code, labels = compile_tree(parse(method_lines(sp, r'public static void loadFromID\(int _id, int _tileset\)')))
-    sprite_img = {}
-    for sid in range(1, 726):
-        ex = run(code, labels, {'num4': sid}, pinned={'num4'})
-        names = [mm.group(1) for e in ex for mm in re.finditer(r'Assets\.(IMAGE_\w+)', e)]
-        if names:
-            sprite_img[sid] = sorted({imgc[n] for n in names})
-    spc = static_ints(sp, '[A-Z]')
+    return imgc, arr_images, res_fields, text_assets
 
-    # parameter flow fixpoint
+
+def param_flow(classes):
+    """Marks each method's image parameters (Method.img_params), to a fixpoint; returns target_method(class, key)."""
     def target_method(c, key):
         while c in classes:
             if key in classes[c]['methods']:
@@ -297,6 +284,31 @@ def main():
                             m.img_params |= resolve(args[k], m)[1]
                 if m.img_params != before:
                     changed = True
+    return target_method
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--src', required=True)
+    ap.add_argument('--work', required=True, help='dir with images.json, maps.json, native_addfromjson_*.json')
+    a = ap.parse_args()
+    root = a.src
+    T = os.path.join(root, 'com/bitmapbureau/terminator')
+    classes = load_classes(root)
+    imgc, arr_images, res_fields, text_assets = asset_tables(classes, T)
+
+    # sprite id -> image id via Sprites.loadFromID
+    sp = classes['Sprites']['text']
+    code, labels = compile_tree(parse(method_lines(sp, r'public static void loadFromID\(int _id, int _tileset\)')))
+    sprite_img = {}
+    for sid in range(1, 726):
+        ex = run(code, labels, {'num4': sid}, pinned={'num4'})
+        names = [mm.group(1) for e in ex for mm in re.finditer(r'Assets\.(IMAGE_\w+)', e)]
+        if names:
+            sprite_img[sid] = sorted({imgc[n] for n in names})
+    spc = static_ints(sp, '[A-Z]')
+
+    target_method = param_flow(classes)
 
     # per-class references
     out = {}

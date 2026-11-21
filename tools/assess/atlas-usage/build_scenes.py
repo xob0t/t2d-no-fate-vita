@@ -76,16 +76,14 @@ def family(name):
     return m.group(1) if m else None
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--work', required=True)
-    ap.add_argument('--lang', default='LATIN', help='LATIN or one of CNS CNT JP KR: font set kept resident')
-    a = ap.parse_args()
-    W = a.work
+def compute(W, lang='LATIN'):
+    """-> (images, [(scene, kind, roots, maps, image ids, classes of its closure, those and its map objects')])"""
+    class a:
+        pass
+    a.lang = lang
     images = json.load(open(os.path.join(W, 'images.json')))['images']
     cr = json.load(open(os.path.join(W, 'class_refs.json')))
     maps = json.load(open(os.path.join(W, 'maps.json')))['maps']
-    alpha = json.load(open(os.path.join(W, 'rect_alpha.json')))
     C = cr['classes']
     sprite_img = {int(k): v for k, v in cr['sprite_img'].items()}
     objs = {int(k): v for k, v in cr['objects'].items()}
@@ -165,7 +163,8 @@ def main():
                 objclasses.update(ob['classes'])
                 for s in ob['sprite_ids']:
                     ims.update(sprite_img.get(s, []))
-        for c in closure(sorted(objclasses)) - cl:
+        objcl = closure(sorted(objclasses)) - cl
+        for c in objcl:
             ims |= class_images(c)
         for mp in map_names:
             for o in maps[mp]['objects']:
@@ -174,7 +173,7 @@ def main():
         for i in list(ims):
             ims |= families.get(family(images[i]['name']), set())
         ims = {i for i in ims if font_ok(images[i]) and images[i]['name'] not in drop}
-        return ims, cl
+        return ims, cl, cl | objcl
 
     scenes = []
     for name, roots, mps in LEVELS:
@@ -190,6 +189,19 @@ def main():
         if f == 'apps' and c not in BASES and c != 'LevelControls':
             scenes.append(('menu ' + c, 'menu', [c], [], False, (), ()))
 
+    return images, [(name, kind, roots, mps, *scene_images(roots, mps, gameplay, stop, drop))
+                    for name, kind, roots, mps, gameplay, stop, drop in scenes]
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--work', required=True)
+    ap.add_argument('--lang', default='LATIN', help='LATIN or one of CNS CNT JP KR: font set kept resident')
+    a = ap.parse_args()
+    W = a.work
+    images, computed = compute(W, a.lang)
+    alpha = json.load(open(os.path.join(W, 'rect_alpha.json')))
+
     # rect bookkeeping
     def rects_of(ims):
         rs = set()
@@ -199,8 +211,7 @@ def main():
         return rs
 
     out = []
-    for name, kind, roots, mps, gameplay, stop, drop in scenes:
-        ims, cl = scene_images(roots, mps, gameplay, stop, drop)
+    for name, kind, roots, mps, ims, cl, _ in computed:
         rs = rects_of(ims)
         packs = sorted({r[0] for r in rs})
         per_pack_area = collections.Counter()
