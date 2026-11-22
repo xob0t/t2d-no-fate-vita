@@ -24,8 +24,8 @@ You need Windows 10 or 11 on x64, the game from Steam, Git, about 10 GB of free 
    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
    ```
 
-2. Download [t2d-no-fate-vita.zip](https://github.com/xob0t/t2d-no-fate-vita/releases/latest/download/t2d-no-fate-vita.zip), right-click it, choose **Extract All** and change the folder to `C:\t2d` (or clone this repository there).
-   Keep the path short. Unity's IL2CPP can't open its own files from a folder whose path is longer than 72 characters, and a folder on a OneDrive desktop can be that deep. The build checks this before it starts.
+2. Download [t2d-no-fate-vita.zip](https://github.com/xob0t/t2d-no-fate-vita/releases/latest/download/t2d-no-fate-vita.zip), right-click it, choose **Extract All** and set the folder to `C:\t2d`. You can also clone this repository there.
+   Unity's IL2CPP crashes if the folder's path is longer than 72 characters, and `C:\t2d` keeps it well under. If the path is too long, the build says so and stops before it starts.
 
 3. Open the `t2d-no-fate-vita` folder in `C:\t2d`, right-click in it, choose **Open in Terminal** (on Windows 10: Shift + right-click, **Open PowerShell window here**), and run:
 
